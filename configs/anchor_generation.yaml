@@ -1,0 +1,60 @@
+ontology:
+  knowledge_path: data/anchor_seed/knowledge_ontology.json
+  language_path: data/anchor_seed/language_ontology.json
+  capability_path: data/anchor_seed/capability_ontology.json
+  conversation_path: data/anchor_seed/conversation_ontology.json
+  safety_path: data/anchor_seed/safety_ontology.json
+  knowledge_root: null
+  language_root: null
+  capability_root: null
+  conversation_root: null
+  safety_root: null
+
+generation:
+  output_path: anchor_bank/default/anchor_prompts.jsonl
+  count: 1000
+  seed: 42
+  require_exact_count: false
+  input_generator_model: unspecified_input_generator_model
+  target_model: unspecified_target_model
+  languages:
+    - English
+    - 简体中文
+    - bilingual_zh_en
+  task_types:
+    - qa
+    - explanation
+    - reasoning
+    - math_solving
+    - coding
+    - debugging
+    - summarization
+    - extraction
+    - rewriting
+    - translation
+    - planning
+    - comparison
+    - critique
+    - creative_writing
+    - tool_use
+    - refusal_safety
+  language_features_per_prompt: 2
+
+target:
+  model_path: ${MODEL_PATH}
+  output_path: anchor_bank/default/anchor_target_answers.jsonl
+  torch_dtype: bfloat16
+  max_new_tokens: 512
+  max_prompt_length: 2048
+  temperature: 0.7
+  top_p: 0.95
+
+filter:
+  output_path: anchor_bank/default/anchor_filtered.jsonl
+  min_answer_chars: 8
+  max_answer_chars: null
+
+split:
+  train_output_path: anchor_bank/default/anchor_train.jsonl
+  eval_output_path: anchor_bank/default/anchor_eval.jsonl
+  eval_ratio: 0.1
