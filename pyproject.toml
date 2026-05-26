@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anchor-replay-distillation"
+version = "0.1.0"
+description = "Two-hop Anchor Replay Distillation data generation and ARD-SFT utilities."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Godthrone" }]
+dependencies = [
+  "pyyaml>=6.0.0",
+  "torch>=2.5.0",
+]
+
+[project.optional-dependencies]
+train = [
+  "accelerate>=1.10.0",
+  "peft>=0.17.0",
+  "transformers>=4.53.0",
+]
+dev = [
+  "mypy>=1.11.0",
+  "pytest>=8.0.0",
+  "ruff>=0.6.0",
+]
+
+[project.scripts]
+ard = "ard.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ard = ["py.typed"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["ard"]
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = ["--basetemp=.pytest_tmp"]

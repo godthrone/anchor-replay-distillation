@@ -1,0 +1,43 @@
+{
+  "style": [
+    "concise",
+    "step-by-step",
+    "professional",
+    "plain language",
+    "teaching",
+    "formal",
+    "casual"
+  ],
+  "format": [
+    "paragraph",
+    "bullets",
+    "table",
+    "JSON",
+    "code block",
+    "markdown report"
+  ],
+  "difficulty": [
+    "basic",
+    "intermediate",
+    "advanced",
+    "ambiguous",
+    "edge_case"
+  ],
+  "context_length": [
+    "short",
+    "medium",
+    "long_context"
+  ],
+  "noise": [
+    "clean",
+    "irrelevant_details",
+    "missing_info",
+    "conflicting_constraints"
+  ],
+  "answer_expectation": [
+    "direct_answer",
+    "explain_then_answer",
+    "ask_before_answering",
+    "safe_non_authoritative_guidance"
+  ]
+}

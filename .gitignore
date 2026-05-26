@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest_tmp/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Local secrets and env files
+.env
+!.env-example
+*.env
+*API.txt
+api_env.txt
+
+# Generated artifacts
+outputs/
+anchor_bank/
+*.log
+run.stdout.log
+run.stderr.log
+
+# Build artifacts
+build/
+dist/
+*.egg-info/

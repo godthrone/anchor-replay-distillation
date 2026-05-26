@@ -1,0 +1,19 @@
+{
+  "single_turn": [
+    "single_turn"
+  ],
+  "clarification": [
+    "clarification_2_turn"
+  ],
+  "troubleshooting": [
+    "troubleshooting_3_turn"
+  ],
+  "revision": [
+    "iterative_revision_3_turn",
+    "constraint_update_4_turn"
+  ],
+  "tool_and_safety": [
+    "tool_assisted_multi_turn",
+    "refusal_or_boundary_multi_turn"
+  ]
+}

@@ -1,0 +1,196 @@
+{
+  "software_engineering": {
+    "programming": [
+      "Python debugging",
+      "JavaScript async code",
+      "SQL query design",
+      "Rust ownership and lifetimes",
+      "Java concurrency",
+      "Go services",
+      "regular expressions",
+      "API client design"
+    ],
+    "software_design": [
+      "architecture tradeoffs",
+      "testing strategy",
+      "code review",
+      "refactoring plan",
+      "dependency management",
+      "backward compatibility"
+    ]
+  },
+  "systems_devops": {
+    "operations": [
+      "Linux troubleshooting",
+      "Docker deployment",
+      "Kubernetes rollout",
+      "CI/CD pipeline failure",
+      "observability and alerting",
+      "network connectivity",
+      "storage capacity"
+    ],
+    "security_operations": [
+      "secret rotation",
+      "least privilege access",
+      "incident triage",
+      "log investigation"
+    ]
+  },
+  "data_ai_ml": {
+    "data_work": [
+      "spreadsheet analysis",
+      "SQL aggregation",
+      "data cleaning",
+      "schema mapping",
+      "dashboard metric definition"
+    ],
+    "machine_learning": [
+      "model evaluation",
+      "training data quality",
+      "classification error analysis",
+      "embedding search",
+      "prompt evaluation",
+      "LLM hallucination diagnosis"
+    ]
+  },
+  "math_logic": {
+    "logic": [
+      "constraint solving",
+      "multi-step comparison",
+      "counterexample analysis",
+      "deductive reasoning",
+      "causal reasoning"
+    ],
+    "math": [
+      "percentage calculation",
+      "unit conversion",
+      "table interpretation",
+      "probability",
+      "algebra",
+      "optimization",
+      "statistical inference"
+    ]
+  },
+  "science_engineering": {
+    "physical_science": [
+      "basic physics explanation",
+      "chemistry concept",
+      "astronomy fact check",
+      "energy and power calculation"
+    ],
+    "engineering": [
+      "mechanical tradeoff",
+      "electrical circuit intuition",
+      "materials constraint",
+      "environmental impact"
+    ]
+  },
+  "business_operations": {
+    "service": [
+      "customer ticket triage",
+      "incident summary",
+      "field maintenance report",
+      "support escalation",
+      "root cause summary"
+    ],
+    "process": [
+      "meeting action items",
+      "risk assessment",
+      "status update",
+      "project planning",
+      "stakeholder communication",
+      "policy rollout"
+    ]
+  },
+  "finance_economics": {
+    "personal_finance_safety": [
+      "budget comparison",
+      "loan term explanation",
+      "risk disclosure",
+      "non-advisory investment education"
+    ],
+    "business_finance": [
+      "invoice reconciliation",
+      "revenue variance",
+      "cost benefit analysis",
+      "economic tradeoff explanation"
+    ]
+  },
+  "law_policy_safety": {
+    "legal_information_safety": [
+      "contract clause explanation",
+      "privacy policy summary",
+      "employment policy question",
+      "non-advisory legal information"
+    ],
+    "policy_and_compliance": [
+      "data retention policy",
+      "access control policy",
+      "regulatory checklist",
+      "compliance risk summary"
+    ]
+  },
+  "medicine_health_safety": {
+    "health_information_safety": [
+      "symptom information boundary",
+      "medication safety disclaimer",
+      "when to seek professional care",
+      "wellness education"
+    ],
+    "clinical_operations": [
+      "appointment preparation",
+      "patient instruction rewrite",
+      "medical terminology explanation",
+      "triage boundary clarification"
+    ]
+  },
+  "humanities_world_knowledge": {
+    "world_knowledge": [
+      "history explanation",
+      "geography comparison",
+      "civic concept",
+      "culture and etiquette",
+      "current-affairs uncertainty handling"
+    ],
+    "humanities": [
+      "literary analysis",
+      "philosophy argument",
+      "education tutoring",
+      "media literacy"
+    ]
+  },
+  "language_writing_translation": {
+    "writing": [
+      "technical explanation",
+      "concise summary",
+      "rewrite for clarity",
+      "professional email",
+      "creative writing",
+      "tone adaptation"
+    ],
+    "cross_lingual": [
+      "English to Chinese translation",
+      "Chinese to English translation",
+      "bilingual terminology",
+      "translation with cultural context",
+      "multilingual summary"
+    ]
+  },
+  "agent_tool_use": {
+    "tools": [
+      "calendar scheduling",
+      "database lookup",
+      "log search",
+      "file search",
+      "spreadsheet update",
+      "API tool selection"
+    ],
+    "structured_output": [
+      "JSON argument construction",
+      "field validation",
+      "error recovery",
+      "tool result interpretation",
+      "schema-constrained extraction"
+    ]
+  }
+}
