@@ -99,6 +99,12 @@ outputs/ard_anchor_dataset_default/
 - `input_generation_stats.json` / `target_answer_stats.json`：生成统计
 - `batch_*/`：中间 prompts/generated-inputs/target-answers，便于排查
 
+如果只想看 JSONL 格式，不想使用真实 API 输出，可以参考
+`examples/anchor_bank.sample.jsonl`。
+
+生成过程中，日志会包含时间戳、进度百分比、吞吐量和预计剩余时间（ETA）。
+input generation 和 target answer 会流水线并发执行，因此两类日志会交错出现。
+
 默认是“尝试数量语义”：`ARD_TARGET_COUNT=10` 表示尝试 10 个候选，过滤后 `anchor_bank.jsonl` 可能少于 10 条。过滤只筛明显坏样本；如果你必须拿到精确数量，把 `ARD_REQUIRE_EXACT_COUNT=true`。
 
 ## 修改默认参数

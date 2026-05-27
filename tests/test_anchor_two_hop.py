@@ -330,6 +330,7 @@ def test_build_anchor_dataset_api_end_to_end_with_fake_chat(tmp_path):
     assert any("stage=build status=start" in line for line in logs)
     assert any("stage=input_generation" in line for line in logs)
     assert any("stage=target_answer" in line for line in logs)
+    assert any("progress=" in line and "eta=" in line for line in logs)
     assert any("stage=build status=done" in line for line in logs)
 
 
@@ -353,6 +354,7 @@ def test_build_anchor_dataset_streams_target_answers_before_all_inputs_finish(tm
     lock = threading.Lock()
     input_completed = {"count": 0}
     target_start_input_counts: list[int] = []
+    logs: list[str] = []
 
     def fake_input_generation_chat(_config, _messages, *_args):
         time.sleep(0.05)
@@ -387,13 +389,31 @@ def test_build_anchor_dataset_streams_target_answers_before_all_inputs_finish(tm
         target_concurrency=2,
         input_generation_chat_fn=fake_input_generation_chat,
         target_answer_chat_fn=fake_answer_chat,
+        logger=logs.append,
     )
     manifest = json.loads((tmp_path / "dataset" / "manifest.json").read_text(encoding="utf-8"))
+    target_log_positions = [
+        index for index, line in enumerate(logs) if "stage=target_answer" in line
+    ]
+    input_log_positions = [
+        index for index, line in enumerate(logs) if "stage=input_generation" in line
+    ]
 
     assert result.final_count == 4
     assert min(target_start_input_counts) < 4
+    assert target_log_positions[0] < input_log_positions[-1]
     assert manifest["generation_config"]["input_generator_concurrency"] == 2
     assert manifest["generation_config"]["target_concurrency"] == 2
+
+
+def test_cli_logger_prefixes_timestamp(capsys):
+    from ard.cli import _print_log
+
+    _print_log("stage=build status=start")
+
+    captured = capsys.readouterr()
+    assert captured.out.startswith("ts=")
+    assert " stage=build status=start\n" in captured.out
 
 
 def test_build_anchor_dataset_attempt_count_does_not_refill_by_default(tmp_path):

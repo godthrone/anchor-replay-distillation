@@ -29,6 +29,7 @@ name = "anchor-replay-distillation"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "numpy" },
     { name = "pyyaml" },
     { name = "torch" },
 ]
@@ -49,6 +50,7 @@ train = [
 requires-dist = [
     { name = "accelerate", marker = "extra == 'train'", specifier = ">=1.10.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11.0" },
+    { name = "numpy", specifier = ">=1.26.0" },
     { name = "peft", marker = "extra == 'train'", specifier = ">=0.17.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pyyaml", specifier = ">=6.0.0" },
