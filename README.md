@@ -91,10 +91,10 @@ ARD_TARGET_API_KEY=replace-me
 uv run python scripts/generate_anchors.py
 ```
 
-The script runs `uv sync --extra dev`, then attempts 10 candidate anchors by default under:
+The script runs `uv sync --extra dev`, then attempts 10 candidate anchors by default under a timestamped run directory:
 
 ```text
-outputs/ard_anchor_dataset_default/
+outputs/ard_anchor_dataset_YYYYMMDD_HHMMSS_n10_seed42/
 ```
 
 Main outputs:
@@ -123,7 +123,8 @@ ARD_BATCH_SIZE=10
 ARD_MAX_BATCHES=3
 ARD_REQUIRE_EXACT_COUNT=false
 ARD_SEED=42
-ARD_OUTPUT_DIR=outputs/ard_anchor_dataset_default
+ARD_OUTPUT_DIR=
+ARD_OVERWRITE_OUTPUT=false
 ARD_CONFIG_PATH=configs/anchor_generation.yaml
 ARD_LANGUAGES=
 ARD_TASK_TYPES=
@@ -140,6 +141,10 @@ ARD_TARGET_MAX_TOKENS=
 ```
 
 `ARD_INPUT_GENERATOR_CONCURRENCY` and `ARD_TARGET_CONCURRENCY` control the two API stages independently. The end-to-end builder is pipelined: once one input is generated, its target answer can start immediately without waiting for all inputs to finish.
+
+Leave `ARD_OUTPUT_DIR` blank to avoid overwriting previous runs. If you set a fixed
+`ARD_OUTPUT_DIR`, ARD refuses to write into a non-empty directory unless
+`ARD_OVERWRITE_OUTPUT=true`.
 
 `ARD_LANGUAGES` and `ARD_TASK_TYPES` are comma-separated, for example:
 

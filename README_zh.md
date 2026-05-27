@@ -86,10 +86,10 @@ ARD_TARGET_API_KEY=replace-me
 uv run python scripts/generate_anchors.py
 ```
 
-脚本会自动运行 `uv sync --extra dev`，然后默认尝试生成 10 个候选 anchors 到：
+脚本会自动运行 `uv sync --extra dev`，然后默认尝试生成 10 个候选 anchors 到带时间戳的运行目录：
 
 ```text
-outputs/ard_anchor_dataset_default/
+outputs/ard_anchor_dataset_YYYYMMDD_HHMMSS_n10_seed42/
 ```
 
 主要输出：
@@ -117,7 +117,8 @@ ARD_BATCH_SIZE=10
 ARD_MAX_BATCHES=3
 ARD_REQUIRE_EXACT_COUNT=false
 ARD_SEED=42
-ARD_OUTPUT_DIR=outputs/ard_anchor_dataset_default
+ARD_OUTPUT_DIR=
+ARD_OVERWRITE_OUTPUT=false
 ARD_CONFIG_PATH=configs/anchor_generation.yaml
 ARD_LANGUAGES=
 ARD_TASK_TYPES=
@@ -134,6 +135,10 @@ ARD_TARGET_MAX_TOKENS=
 ```
 
 `ARD_INPUT_GENERATOR_CONCURRENCY` 和 `ARD_TARGET_CONCURRENCY` 分别控制两个 API 阶段的并发度。端到端构建器采用流水线执行：一条 input 生成完成后，可以立刻开始 target answer，不需要等全部 input 都生成完。
+
+`ARD_OUTPUT_DIR` 留空可以避免覆盖上一次运行结果。如果你设置固定的
+`ARD_OUTPUT_DIR`，ARD 默认会拒绝写入非空目录；只有设置
+`ARD_OVERWRITE_OUTPUT=true` 时才会覆盖。
 
 `ARD_LANGUAGES` 和 `ARD_TASK_TYPES` 使用逗号分隔，例如：
 

@@ -307,6 +307,7 @@ def cmd_anchor_build_dataset(args: argparse.Namespace) -> int:
         input_generator_concurrency=args.input_generator_concurrency,
         target_concurrency=args.target_concurrency,
         require_exact_count=args.require_exact_count,
+        overwrite_output=args.overwrite_output,
         min_target_answer_chars=args.min_target_answer_chars,
         max_target_answer_chars=args.max_target_answer_chars,
         logger=None if args.quiet else _print_log,
@@ -498,6 +499,7 @@ def build_parser() -> argparse.ArgumentParser:
     anchor_build.add_argument("--input-generator-concurrency", type=int, default=4)
     anchor_build.add_argument("--target-concurrency", type=int, default=4)
     anchor_build.add_argument("--require-exact-count", action="store_true")
+    anchor_build.add_argument("--overwrite-output", action="store_true")
     anchor_build.add_argument("--min-target-answer-chars", type=int, default=8)
     anchor_build.add_argument("--max-target-answer-chars", type=_optional_int)
     anchor_build.add_argument("--quiet", action="store_true")
