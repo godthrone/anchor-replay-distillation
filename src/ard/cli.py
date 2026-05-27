@@ -109,10 +109,10 @@ def cmd_anchor_generate(args: argparse.Namespace) -> int:
     prompts = generate_anchor_prompts(
         knowledge=anchor_ontology.knowledge,
         language=anchor_ontology.language_features,
-        config=prompt_config,
         capability=anchor_ontology.capabilities,
         conversation=anchor_ontology.conversation_types,
         safety=anchor_ontology.safety_boundaries,
+        config=prompt_config,
     )
     write_jsonl(prompts, output_path)
     print(f"Wrote {len(prompts)} anchor prompts to {output_path}")
@@ -281,14 +281,6 @@ def cmd_anchor_build_dataset(args: argparse.Namespace) -> int:
     )
     print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
     return 0 if (not args.require_exact_count or result.final_count >= result.target_count) else 2
-
-
-def cmd_train_sft_ard(args: argparse.Namespace) -> int:
-    from ard.sft import ARDSFTTrainer
-    from ard.sft.schema import ARDSFTConfig
-
-    ARDSFTTrainer(ARDSFTConfig.from_yaml(args.config)).train()
-    return 0
 
 
 def cmd_eval_forgetting(args: argparse.Namespace) -> int:
@@ -462,12 +454,6 @@ def build_parser() -> argparse.ArgumentParser:
     anchor_build.add_argument("--max-target-answer-chars", type=_optional_int)
     anchor_build.add_argument("--quiet", action="store_true")
     anchor_build.set_defaults(func=cmd_anchor_build_dataset)
-
-    train_sft = subparsers.add_parser(
-        "train-sft-ard", help="Run experimental ARD-SFT LoRA training."
-    )
-    train_sft.add_argument("--config", "-c", required=True)
-    train_sft.set_defaults(func=cmd_train_sft_ard)
 
     eval_forgetting = subparsers.add_parser(
         "eval-forgetting", help="Compare anchor eval completions to target answers."

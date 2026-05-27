@@ -35,18 +35,18 @@ def test_anchor_generation_is_deterministic(tmp_path):
     first = generate_anchor_prompts(
         ontology.knowledge,
         ontology.language_features,
-        config,
         ontology.capabilities,
         ontology.conversation_types,
         ontology.safety_boundaries,
+        config,
     )
     second = generate_anchor_prompts(
         ontology.knowledge,
         ontology.language_features,
-        config,
         ontology.capabilities,
         ontology.conversation_types,
         ontology.safety_boundaries,
+        config,
     )
 
     assert [item.id for item in first] == [item.id for item in second]
@@ -85,6 +85,7 @@ def test_extended_anchor_sampling_is_deterministic_and_balanced():
         count=100,
         seed=11,
         languages=ontology.languages,
+        task_types=[str(leaf["leaf"]) for leaf in ontology.capabilities.leaves],
         input_generator_model="strong-input-generator",
         target_model="open-anchor-target",
     )
@@ -92,18 +93,18 @@ def test_extended_anchor_sampling_is_deterministic_and_balanced():
     first = generate_anchor_prompts(
         ontology.knowledge,
         ontology.language_features,
-        config,
         ontology.capabilities,
         ontology.conversation_types,
         ontology.safety_boundaries,
+        config,
     )
     second = generate_anchor_prompts(
         ontology.knowledge,
         ontology.language_features,
-        config,
         ontology.capabilities,
         ontology.conversation_types,
         ontology.safety_boundaries,
+        config,
     )
 
     assert [item.id for item in first] == [item.id for item in second]
@@ -138,10 +139,10 @@ def test_task_type_filter_limits_capability_sampling():
     prompts = generate_anchor_prompts(
         ontology.knowledge,
         ontology.language_features,
-        config,
         ontology.capabilities,
         ontology.conversation_types,
         ontology.safety_boundaries,
+        config,
     )
 
     assert {item.anchor_meta["task_type"] for item in prompts} <= {"qa", "coding"}
@@ -149,15 +150,20 @@ def test_task_type_filter_limits_capability_sampling():
 
 def test_prompt_shape_instructions_for_single_and_multi_turn():
     ontology = load_anchor_ontology(Path("data/anchor_seed/anchor_ontology.json"))
-    config = AnchorGenerationConfig(count=20, seed=3, languages=["English"])
+    config = AnchorGenerationConfig(
+        count=20,
+        seed=3,
+        languages=["English"],
+        task_types=[str(leaf["leaf"]) for leaf in ontology.capabilities.leaves],
+    )
 
     prompts = generate_anchor_prompts(
         ontology.knowledge,
         ontology.language_features,
-        config,
         ontology.capabilities,
         ontology.conversation_types,
         ontology.safety_boundaries,
+        config,
     )
     single = next(
         item for item in prompts if item.anchor_meta["conversation_type"] == "single_turn"
@@ -174,15 +180,20 @@ def test_prompt_shape_instructions_for_single_and_multi_turn():
 
 def test_safety_specs_add_safe_boundary_language():
     ontology = load_anchor_ontology(Path("data/anchor_seed/anchor_ontology.json"))
-    config = AnchorGenerationConfig(count=20, seed=5, languages=["English"])
+    config = AnchorGenerationConfig(
+        count=20,
+        seed=5,
+        languages=["English"],
+        task_types=[str(leaf["leaf"]) for leaf in ontology.capabilities.leaves],
+    )
 
     prompts = generate_anchor_prompts(
         ontology.knowledge,
         ontology.language_features,
-        config,
         ontology.capabilities,
         ontology.conversation_types,
         ontology.safety_boundaries,
+        config,
     )
     safety_prompts = [
         item

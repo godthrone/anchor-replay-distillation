@@ -4,7 +4,7 @@
 
 Anchor Replay Distillation (ARD) 用来自动生成可直接用于监督微调（SFT）的聊天数据。你只需要配置两个 OpenAI-compatible 模型：`ARD_INPUT_GENERATOR_*` 负责把采样到的 anchor spec 写成真实用户请求，`ARD_TARGET_*` 负责以你要训练、评估或保留能力的目标模型身份回答。最终输出是 SFT-ready 的 `anchor_bank.jsonl`，可以混入你的微调数据，降低模型在微调后遗忘通用问答、推理、翻译、代码和安全边界等能力的风险。
 
-默认流程尽量简单：一条命令创建 `.venv`、安装依赖、调用 API，并写出生成数据。
+默认流程尽量简单：一条命令创建 `.venv`、安装依赖、调用 API，并写出生成数据。本仓库聚焦数据生成，不再包含模型训练或微调运行器。
 
 ## 快速开始
 
