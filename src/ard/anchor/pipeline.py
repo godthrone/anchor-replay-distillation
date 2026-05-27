@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -8,6 +9,8 @@ from typing import Any, Callable
 
 from ard.anchor.api_client import ChatAPIConfig, chat_completion
 from ard.anchor.bank import (
+    AnchorPrompt,
+    GeneratedInputAnchor,
     TargetAnswerAnchor,
     filter_target_answer_anchors,
     normalize_text,
@@ -15,9 +18,9 @@ from ard.anchor.bank import (
 )
 from ard.anchor.manifest import build_anchor_manifest, write_manifest
 from ard.anchor.ontology import Ontology
-from ard.anchor.input_generator import generate_anchor_inputs
+from ard.anchor.input_generator import InputGenerationStats, generate_one_anchor_input
 from ard.anchor.sampler import AnchorGenerationConfig, generate_anchor_prompts
-from ard.anchor.target import answer_generated_inputs_api
+from ard.anchor.target import TargetAnswerStats, answer_one_generated_input_api
 
 ChatFn = Callable[..., str]
 LogFn = Callable[[str], None]
@@ -36,6 +39,145 @@ class DatasetBuildResult:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def _run_streaming_batch(
+    prompts: list[AnchorPrompt],
+    input_generator_config: ChatAPIConfig,
+    target_config: ChatAPIConfig,
+    input_generator_max_tokens: int | None,
+    target_max_tokens: int | None,
+    temperature: float,
+    top_p: float,
+    timeout: float,
+    max_retries: int,
+    input_generator_concurrency: int,
+    target_concurrency: int,
+    input_generation_chat_fn: ChatFn,
+    target_answer_chat_fn: ChatFn,
+    logger: LogFn | None,
+    start: float,
+) -> tuple[
+    list[GeneratedInputAnchor], list[TargetAnswerAnchor], InputGenerationStats, TargetAnswerStats
+]:
+    input_stats = InputGenerationStats(input_count=len(prompts))
+    target_stats = TargetAnswerStats()
+    generated: list[tuple[int, GeneratedInputAnchor]] = []
+    answered: list[tuple[int, TargetAnswerAnchor]] = []
+    input_started_at: dict[Future[GeneratedInputAnchor], float] = {}
+    input_indexes: dict[Future[GeneratedInputAnchor], int] = {}
+    target_started_at: dict[Future[TargetAnswerAnchor], float] = {}
+    target_indexes: dict[Future[TargetAnswerAnchor], int] = {}
+
+    with (
+        ThreadPoolExecutor(
+            max_workers=input_generator_concurrency,
+            thread_name_prefix="ard-input-generator",
+        ) as input_pool,
+        ThreadPoolExecutor(
+            max_workers=target_concurrency,
+            thread_name_prefix="ard-target",
+        ) as target_pool,
+    ):
+        for idx, item in enumerate(prompts, start=1):
+            input_future = input_pool.submit(
+                generate_one_anchor_input,
+                item=item,
+                api_config=input_generator_config,
+                max_tokens=input_generator_max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                timeout=timeout,
+                max_retries=max_retries,
+                chat_fn=input_generation_chat_fn,
+            )
+            input_indexes[input_future] = idx
+            input_started_at[input_future] = perf_counter()
+
+        target_futures: list[Future[TargetAnswerAnchor]] = []
+        for completed_input in as_completed(input_indexes):
+            idx = input_indexes[completed_input]
+            try:
+                generated_item = completed_input.result()
+            except Exception as exc:  # noqa: BLE001
+                input_stats.failed_count += 1
+                if "request failed" in str(exc):
+                    input_stats.api_failed_count += 1
+                else:
+                    input_stats.parse_failed_count += 1
+                if logger:
+                    logger(
+                        "stage=input_generation "
+                        f"idx={idx}/{len(prompts)} status=failed "
+                        f"kept={len(generated)} failed={input_stats.failed_count} "
+                        f"api_failed={input_stats.api_failed_count} "
+                        f"parse_failed={input_stats.parse_failed_count} "
+                        f"error={type(exc).__name__} "
+                        f"elapsed={perf_counter() - input_started_at[completed_input]:.1f}s "
+                        f"total={perf_counter() - start:.1f}s"
+                    )
+                continue
+
+            generated.append((idx, generated_item))
+            if logger:
+                logger(
+                    "stage=input_generation "
+                    f"idx={idx}/{len(prompts)} status=kept "
+                    f"conversation={generated_item.anchor_meta.get('conversation_type', 'unknown')} "
+                    f"kept={len(generated)} failed={input_stats.failed_count} "
+                    f"elapsed={perf_counter() - input_started_at[completed_input]:.1f}s "
+                    f"total={perf_counter() - start:.1f}s"
+                )
+
+            target_future = target_pool.submit(
+                answer_one_generated_input_api,
+                item=generated_item,
+                api_config=target_config,
+                max_tokens=target_max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                timeout=timeout,
+                chat_fn=target_answer_chat_fn,
+            )
+            target_futures.append(target_future)
+            target_indexes[target_future] = idx
+            target_started_at[target_future] = perf_counter()
+
+        target_stats.input_count = len(target_futures)
+        for completed_target in as_completed(target_futures):
+            idx = target_indexes[completed_target]
+            try:
+                answered_item = completed_target.result()
+            except Exception as exc:  # noqa: BLE001
+                target_stats.failed_count += 1
+                target_stats.api_failed_count += 1
+                if logger:
+                    logger(
+                        "stage=target_answer "
+                        f"idx={idx}/{len(prompts)} status=failed "
+                        f"kept={len(answered)} failed={target_stats.failed_count} "
+                        f"error={type(exc).__name__} "
+                        f"elapsed={perf_counter() - target_started_at[completed_target]:.1f}s "
+                        f"total={perf_counter() - start:.1f}s"
+                    )
+                continue
+
+            answered.append((idx, answered_item))
+            if logger:
+                logger(
+                    "stage=target_answer "
+                    f"idx={idx}/{len(prompts)} status=kept "
+                    f"kept={len(answered)} failed={target_stats.failed_count} "
+                    f"answer_chars={len(answered_item.target_answer)} "
+                    f"elapsed={perf_counter() - target_started_at[completed_target]:.1f}s "
+                    f"total={perf_counter() - start:.1f}s"
+                )
+
+    input_stats.kept_count = len(generated)
+    target_stats.kept_count = len(answered)
+    generated_items = [item for _idx, item in sorted(generated, key=lambda pair: pair[0])]
+    answered_items = [item for _idx, item in sorted(answered, key=lambda pair: pair[0])]
+    return generated_items, answered_items, input_stats, target_stats
 
 
 def build_anchor_dataset_api(
@@ -59,6 +201,8 @@ def build_anchor_dataset_api(
     top_p: float = 0.95,
     timeout: float = 60,
     max_retries: int = 2,
+    input_generator_concurrency: int = 4,
+    target_concurrency: int = 4,
     require_exact_count: bool = False,
     min_target_answer_chars: int = 8,
     max_target_answer_chars: int | None = None,
@@ -72,6 +216,10 @@ def build_anchor_dataset_api(
         raise ValueError("batch_size must be positive")
     if max_batches <= 0:
         raise ValueError("max_batches must be positive")
+    if input_generator_concurrency <= 0:
+        raise ValueError("input_generator_concurrency must be positive")
+    if target_concurrency <= 0:
+        raise ValueError("target_concurrency must be positive")
     if min_target_answer_chars < 0:
         raise ValueError("min_target_answer_chars must be non-negative")
     if max_target_answer_chars is not None and max_target_answer_chars < min_target_answer_chars:
@@ -114,6 +262,8 @@ def build_anchor_dataset_api(
             "stage=build status=start "
             f"target={target_count} batch_size={batch_size} max_batches={max_batches} "
             f"require_exact_count={require_exact_count} "
+            f"input_generator_concurrency={input_generator_concurrency} "
+            f"target_concurrency={target_concurrency} "
             f"input_generator_model={input_generator_config.model_name} target_model={target_config.model_name}"
         )
 
@@ -158,18 +308,32 @@ def build_anchor_dataset_api(
                 f"elapsed={perf_counter() - batch_start:.1f}s total={perf_counter() - run_start:.1f}s"
             )
         attempted_count += len(prompts)
-        _generated_inputs, q_stats = generate_anchor_inputs(
-            api_config=input_generator_config,
-            input_path=prompts_path,
-            output_path=generated_inputs_path,
-            max_tokens=input_generator_max_tokens,
+        generated_inputs, answered, q_stats, t_stats = _run_streaming_batch(
+            prompts=prompts,
+            input_generator_config=input_generator_config,
+            target_config=target_config,
+            input_generator_max_tokens=input_generator_max_tokens,
+            target_max_tokens=target_max_tokens,
             temperature=temperature,
             top_p=top_p,
             timeout=timeout,
             max_retries=max_retries,
-            stats_output=input_generation_stats_path,
-            chat_fn=input_generation_chat_fn or chat_completion,
+            input_generator_concurrency=input_generator_concurrency,
+            target_concurrency=target_concurrency,
+            input_generation_chat_fn=input_generation_chat_fn or chat_completion,
+            target_answer_chat_fn=target_answer_chat_fn or chat_completion,
             logger=logger,
+            start=batch_start,
+        )
+        write_jsonl(generated_inputs, generated_inputs_path)
+        write_jsonl(answered, answered_path)
+        input_generation_stats_path.write_text(
+            json.dumps(q_stats.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        target_answer_stats_path.write_text(
+            json.dumps(t_stats.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
         if logger:
             logger(
@@ -180,18 +344,6 @@ def build_anchor_dataset_api(
                 f"parse_failed={q_stats.parse_failed_count} "
                 f"elapsed={perf_counter() - batch_start:.1f}s total={perf_counter() - run_start:.1f}s"
             )
-        answered = answer_generated_inputs_api(
-            api_config=target_config,
-            input_path=generated_inputs_path,
-            output_path=answered_path,
-            max_tokens=target_max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            timeout=timeout,
-            stats_output=target_answer_stats_path,
-            chat_fn=target_answer_chat_fn or chat_completion,
-            logger=logger,
-        )
         existing_prompts = {
             normalize_text("\n\n".join(msg.get("content", "") for msg in item.messages))
             for item in all_kept
@@ -208,8 +360,8 @@ def build_anchor_dataset_api(
 
         for key, value in q_stats.to_dict().items():
             input_generation_stats_total[key] += value
-        for key, value in json.loads(target_answer_stats_path.read_text(encoding="utf-8")).items():
-            target_answer_stats_total[key] += int(value)
+        for key, value in t_stats.to_dict().items():
+            target_answer_stats_total[key] += value
         for key, value in f_stats.to_dict().items():
             filter_stats_total[key] += value
         if logger:
@@ -248,6 +400,8 @@ def build_anchor_dataset_api(
             "max_batches": max_batches,
             "seed": seed,
             "require_exact_count": require_exact_count,
+            "input_generator_concurrency": input_generator_concurrency,
+            "target_concurrency": target_concurrency,
             "min_target_answer_chars": min_target_answer_chars,
             "max_target_answer_chars": max_target_answer_chars,
         },

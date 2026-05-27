@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 from argparse import Namespace
 
 import pytest
@@ -331,6 +333,69 @@ def test_build_anchor_dataset_api_end_to_end_with_fake_chat(tmp_path):
     assert any("stage=build status=done" in line for line in logs)
 
 
+def test_build_anchor_dataset_streams_target_answers_before_all_inputs_finish(tmp_path):
+    seed_dir = tmp_path / "seed"
+    seed_dir.mkdir()
+    knowledge_path = seed_dir / "knowledge.json"
+    language_path = seed_dir / "language.json"
+    capability_path = seed_dir / "capability.json"
+    conversation_path = seed_dir / "conversation.json"
+    safety_path = seed_dir / "safety.json"
+    knowledge_path.write_text(
+        json.dumps({"general": {"topic": ["alpha", "beta", "gamma", "delta"]}}),
+        encoding="utf-8",
+    )
+    language_path.write_text(json.dumps({"style": ["concise"]}), encoding="utf-8")
+    capability_path.write_text(json.dumps({"knowledge_response": ["qa"]}), encoding="utf-8")
+    conversation_path.write_text(json.dumps({"single_turn": ["single_turn"]}), encoding="utf-8")
+    safety_path.write_text(json.dumps({"normal": ["standard_helpful_answer"]}), encoding="utf-8")
+
+    lock = threading.Lock()
+    input_completed = {"count": 0}
+    target_start_input_counts: list[int] = []
+
+    def fake_input_generation_chat(_config, _messages, *_args):
+        time.sleep(0.05)
+        with lock:
+            input_completed["count"] += 1
+            count = input_completed["count"]
+        return f"unique input {count}"
+
+    def fake_answer_chat(**kwargs):
+        with lock:
+            target_start_input_counts.append(input_completed["count"])
+        return "useful answer for " + kwargs["messages"][-1]["content"]
+
+    result = build_anchor_dataset_api(
+        output_dir=tmp_path / "dataset",
+        target_count=4,
+        seed=1,
+        knowledge=load_ontology(knowledge_path),
+        language=load_ontology(language_path),
+        capability=load_ontology(capability_path),
+        conversation=load_ontology(conversation_path),
+        safety=load_ontology(safety_path),
+        languages=["English"],
+        task_types=["qa"],
+        input_generator_config=ChatAPIConfig(
+            "https://api.example.com", "input-generator", "secret"
+        ),
+        target_config=ChatAPIConfig("https://api.example.com", "target", "secret"),
+        batch_size=4,
+        max_batches=1,
+        input_generator_concurrency=2,
+        target_concurrency=2,
+        input_generation_chat_fn=fake_input_generation_chat,
+        target_answer_chat_fn=fake_answer_chat,
+    )
+    manifest = json.loads((tmp_path / "dataset" / "manifest.json").read_text(encoding="utf-8"))
+
+    assert result.final_count == 4
+    assert min(target_start_input_counts) < 4
+    assert manifest["generation_config"]["input_generator_concurrency"] == 2
+    assert manifest["generation_config"]["target_concurrency"] == 2
+
+
 def test_build_anchor_dataset_attempt_count_does_not_refill_by_default(tmp_path):
     seed_dir = tmp_path / "seed"
     seed_dir.mkdir()
@@ -517,3 +582,5 @@ def test_anchor_build_dataset_command_is_registered():
 
     assert args.func.__name__ == "cmd_anchor_build_dataset"
     assert args.target_count == 3
+    assert args.input_generator_concurrency == 4
+    assert args.target_concurrency == 4

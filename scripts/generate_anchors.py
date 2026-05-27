@@ -173,6 +173,8 @@ def main() -> int:
     top_p = get_float(env_values, "ARD_TOP_P", 0.95)
     timeout = get_float(env_values, "ARD_TIMEOUT", 60)
     max_retries = get_int(env_values, "ARD_MAX_RETRIES", 2, minimum=0)
+    input_generator_concurrency = get_int(env_values, "ARD_INPUT_GENERATOR_CONCURRENCY", 4)
+    target_concurrency = get_int(env_values, "ARD_TARGET_CONCURRENCY", 4)
     require_exact_count = get_bool(env_values, "ARD_REQUIRE_EXACT_COUNT", False)
 
     config_path = PROJECT_ROOT / get_value(
@@ -222,6 +224,10 @@ def main() -> int:
         str(timeout),
         "--max-retries",
         str(max_retries),
+        "--input-generator-concurrency",
+        str(input_generator_concurrency),
+        "--target-concurrency",
+        str(target_concurrency),
     ]
 
     optional_cli_args = {

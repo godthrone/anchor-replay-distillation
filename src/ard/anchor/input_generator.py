@@ -92,7 +92,7 @@ def parse_input_generator_messages(text: str, conversation_type: str) -> list[di
     return messages
 
 
-def _generate_one_input(
+def generate_one_anchor_input(
     item: AnchorPrompt,
     api_config: ChatAPIConfig,
     max_tokens: int | None,
@@ -146,7 +146,7 @@ def generate_anchor_inputs(
     for idx, item in enumerate(prompts, start=1):
         item_start = perf_counter()
         try:
-            generated_inputs_item = _generate_one_input(
+            generated_inputs_item = generate_one_anchor_input(
                 item=item,
                 api_config=api_config,
                 max_tokens=max_tokens,
