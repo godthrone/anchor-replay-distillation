@@ -99,6 +99,11 @@ def get_bool(env_values: dict[str, str], key: str, default: bool = False) -> boo
     fail(f"{key} must be true or false, got {raw!r}.")
 
 
+def default_output_dir(target_count: int, seed: int) -> Path:
+    timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
+    return PROJECT_ROOT / "outputs" / f"ard_anchor_dataset_{timestamp}_n{target_count}_seed{seed}"
+
+
 def run(command: list[str], env: dict[str, str]) -> None:
     log("cmd=" + " ".join(command))
     completed = subprocess.run(command, cwd=PROJECT_ROOT, env=env, check=False)
@@ -187,9 +192,13 @@ def main() -> int:
     config_path = PROJECT_ROOT / get_value(
         env_values, "ARD_CONFIG_PATH", "configs/anchor_generation.yaml"
     )
-    output_dir = PROJECT_ROOT / get_value(
-        env_values, "ARD_OUTPUT_DIR", "outputs/ard_anchor_dataset_default"
+    configured_output_dir = get_optional(env_values, "ARD_OUTPUT_DIR")
+    output_dir = (
+        PROJECT_ROOT / configured_output_dir
+        if configured_output_dir is not None
+        else default_output_dir(target_count, seed)
     )
+    overwrite_output = get_bool(env_values, "ARD_OVERWRITE_OUTPUT", False)
     if not config_path.exists():
         fail(f"Config file does not exist: {config_path}")
 
@@ -251,6 +260,8 @@ def main() -> int:
             command.extend([cli_arg, value])
     if require_exact_count:
         command.append("--require-exact-count")
+    if overwrite_output:
+        command.append("--overwrite-output")
 
     run(command, process_env)
     validate_outputs(

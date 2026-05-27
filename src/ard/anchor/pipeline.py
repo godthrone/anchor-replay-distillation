@@ -248,6 +248,7 @@ def build_anchor_dataset_api(
     input_generator_concurrency: int = 4,
     target_concurrency: int = 4,
     require_exact_count: bool = False,
+    overwrite_output: bool = False,
     min_target_answer_chars: int = 8,
     max_target_answer_chars: int | None = None,
     input_generation_chat_fn: ChatFn | None = None,
@@ -272,6 +273,11 @@ def build_anchor_dataset_api(
         )
 
     out = Path(output_dir)
+    if out.exists() and any(out.iterdir()) and not overwrite_output:
+        raise FileExistsError(
+            f"Output directory already exists and is not empty: {out}. "
+            "Use a new output directory or pass --overwrite-output."
+        )
     out.mkdir(parents=True, exist_ok=True)
     all_kept: list[TargetAnswerAnchor] = []
     attempted_count = 0
