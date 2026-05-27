@@ -22,6 +22,11 @@ REQUIRED_API_KEYS = (
     "ARD_TARGET_API_KEY",
 )
 PLACEHOLDER_VALUES = {"", "...", "replace-me", "your-api-key", "sk-..."}
+DEPRECATED_ENV_KEYS = {
+    "ARD_REQUIRE_EXACT_COUNT": "ARD_EXACT_FINAL_COUNT_ENABLED",
+    "ARD_BATCH_SIZE": "ARD_EXACT_FINAL_COUNT_BATCH_SIZE",
+    "ARD_MAX_BATCHES": "ARD_EXACT_FINAL_COUNT_MAX_BATCHES",
+}
 
 
 def log(message: str) -> None:
@@ -120,7 +125,7 @@ def count_jsonl(path: Path) -> int:
 def validate_outputs(
     output_dir: Path,
     target_count: int,
-    require_exact_count: bool,
+    exact_final_count_enabled: bool,
     api_keys: tuple[str, ...],
 ) -> None:
     anchor_bank_path = output_dir / "anchor_bank.jsonl"
@@ -129,7 +134,7 @@ def validate_outputs(
     target_answer_stats_path = output_dir / "target_answer_stats.json"
 
     anchor_count = count_jsonl(anchor_bank_path)
-    if require_exact_count and anchor_count != target_count:
+    if exact_final_count_enabled and anchor_count != target_count:
         fail(f"Expected {target_count} anchors, found {anchor_count} in {anchor_bank_path}.")
     if anchor_count > target_count:
         fail(
@@ -142,7 +147,7 @@ def validate_outputs(
     generation_config = manifest.get("generation_config", {})
     if generation_config.get("target_count") != target_count:
         fail(f"Manifest does not confirm target_count={target_count}: {manifest_path}")
-    if manifest.get("attempted_count") != target_count and not require_exact_count:
+    if manifest.get("attempted_count") != target_count and not exact_final_count_enabled:
         fail(f"Manifest does not confirm attempted_count={target_count}: {manifest_path}")
 
     for stats_path in (input_generation_stats_path, target_answer_stats_path):
@@ -170,6 +175,11 @@ def main() -> int:
         fail("uv is required. Install it from https://docs.astral.sh/uv/")
 
     env_values = parse_env_file(ENV_PATH)
+    deprecated_keys = [key for key in DEPRECATED_ENV_KEYS if key in env_values]
+    if deprecated_keys:
+        replacements = ", ".join(f"{key}->{DEPRECATED_ENV_KEYS[key]}" for key in deprecated_keys)
+        fail(f"Deprecated .env keys found. Rename them: {replacements}.")
+
     input_generator_api_base = get_required(env_values, "ARD_INPUT_GENERATOR_API_BASE")
     input_generator_model_name = get_required(env_values, "ARD_INPUT_GENERATOR_MODEL_NAME")
     input_generator_api_key = get_required(env_values, "ARD_INPUT_GENERATOR_API_KEY")
@@ -178,8 +188,8 @@ def main() -> int:
     target_api_key = get_required(env_values, "ARD_TARGET_API_KEY")
 
     target_count = get_int(env_values, "ARD_TARGET_COUNT", 10)
-    batch_size = get_int(env_values, "ARD_BATCH_SIZE", 10)
-    max_batches = get_int(env_values, "ARD_MAX_BATCHES", 3)
+    exact_final_count_batch_size = get_int(env_values, "ARD_EXACT_FINAL_COUNT_BATCH_SIZE", 10)
+    exact_final_count_max_batches = get_int(env_values, "ARD_EXACT_FINAL_COUNT_MAX_BATCHES", 3)
     seed = get_int(env_values, "ARD_SEED", 42, minimum=0)
     temperature = get_float(env_values, "ARD_TEMPERATURE", 0.7)
     top_p = get_float(env_values, "ARD_TOP_P", 0.95)
@@ -187,7 +197,7 @@ def main() -> int:
     max_retries = get_int(env_values, "ARD_MAX_RETRIES", 2, minimum=0)
     input_generator_concurrency = get_int(env_values, "ARD_INPUT_GENERATOR_CONCURRENCY", 4)
     target_concurrency = get_int(env_values, "ARD_TARGET_CONCURRENCY", 4)
-    require_exact_count = get_bool(env_values, "ARD_REQUIRE_EXACT_COUNT", False)
+    exact_final_count_enabled = get_bool(env_values, "ARD_EXACT_FINAL_COUNT_ENABLED", False)
 
     config_path = PROJECT_ROOT / get_value(
         env_values, "ARD_CONFIG_PATH", "configs/anchor_generation.yaml"
@@ -227,9 +237,9 @@ def main() -> int:
         "--target-count",
         str(target_count),
         "--batch-size",
-        str(batch_size),
+        str(exact_final_count_batch_size),
         "--max-batches",
-        str(max_batches),
+        str(exact_final_count_max_batches),
         "--seed",
         str(seed),
         "--temperature",
@@ -258,7 +268,7 @@ def main() -> int:
         value = get_optional(env_values, env_key)
         if value is not None:
             command.extend([cli_arg, value])
-    if require_exact_count:
+    if exact_final_count_enabled:
         command.append("--require-exact-count")
     if overwrite_output:
         command.append("--overwrite-output")
@@ -267,7 +277,7 @@ def main() -> int:
     validate_outputs(
         output_dir,
         target_count,
-        require_exact_count,
+        exact_final_count_enabled,
         (input_generator_api_key, target_api_key),
     )
     return 0
