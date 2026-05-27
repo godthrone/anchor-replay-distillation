@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -24,6 +24,32 @@ from ard.anchor.target import TargetAnswerStats, answer_one_generated_input_api
 
 ChatFn = Callable[..., str]
 LogFn = Callable[[str], None]
+
+
+def _format_duration(seconds: float | None) -> str:
+    if seconds is None:
+        return "unknown"
+    seconds = max(0, int(seconds))
+    minutes, secs = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m{secs:02d}s"
+    if minutes:
+        return f"{minutes}m{secs:02d}s"
+    return f"{secs}s"
+
+
+def _progress_fields(completed: int, total: int, start: float) -> str:
+    now = perf_counter()
+    elapsed = max(now - start, 0.0)
+    percent = 100.0 if total == 0 else min(100.0, completed / total * 100.0)
+    rate = completed / elapsed if elapsed > 0 else 0.0
+    remaining = max(total - completed, 0)
+    eta = remaining / rate if rate > 0 else None
+    return (
+        f"progress={percent:.1f}% done={completed}/{total} "
+        f"rate={rate:.2f}/s eta={_format_duration(eta)}"
+    )
 
 
 @dataclass(slots=True)
@@ -68,6 +94,14 @@ def _run_streaming_batch(
     input_indexes: dict[Future[GeneratedInputAnchor], int] = {}
     target_started_at: dict[Future[TargetAnswerAnchor], float] = {}
     target_indexes: dict[Future[TargetAnswerAnchor], int] = {}
+    total_work_units = len(prompts) * 2
+
+    def completed_units() -> int:
+        input_done = len(generated) + input_stats.failed_count
+        target_done_or_skipped = (
+            len(answered) + target_stats.failed_count + input_stats.failed_count
+        )
+        return input_done + target_done_or_skipped
 
     with (
         ThreadPoolExecutor(
@@ -94,84 +128,94 @@ def _run_streaming_batch(
             input_indexes[input_future] = idx
             input_started_at[input_future] = perf_counter()
 
-        target_futures: list[Future[TargetAnswerAnchor]] = []
-        for completed_input in as_completed(input_indexes):
-            idx = input_indexes[completed_input]
-            try:
-                generated_item = completed_input.result()
-            except Exception as exc:  # noqa: BLE001
-                input_stats.failed_count += 1
-                if "request failed" in str(exc):
-                    input_stats.api_failed_count += 1
-                else:
-                    input_stats.parse_failed_count += 1
-                if logger:
-                    logger(
-                        "stage=input_generation "
-                        f"idx={idx}/{len(prompts)} status=failed "
-                        f"kept={len(generated)} failed={input_stats.failed_count} "
-                        f"api_failed={input_stats.api_failed_count} "
-                        f"parse_failed={input_stats.parse_failed_count} "
-                        f"error={type(exc).__name__} "
-                        f"elapsed={perf_counter() - input_started_at[completed_input]:.1f}s "
-                        f"total={perf_counter() - start:.1f}s"
-                    )
-                continue
-
-            generated.append((idx, generated_item))
-            if logger:
-                logger(
-                    "stage=input_generation "
-                    f"idx={idx}/{len(prompts)} status=kept "
-                    f"conversation={generated_item.anchor_meta.get('conversation_type', 'unknown')} "
-                    f"kept={len(generated)} failed={input_stats.failed_count} "
-                    f"elapsed={perf_counter() - input_started_at[completed_input]:.1f}s "
-                    f"total={perf_counter() - start:.1f}s"
-                )
-
-            target_future = target_pool.submit(
-                answer_one_generated_input_api,
-                item=generated_item,
-                api_config=target_config,
-                max_tokens=target_max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                timeout=timeout,
-                chat_fn=target_answer_chat_fn,
+        while input_indexes or target_indexes:
+            pending_futures: set[Future[Any]] = set(input_indexes)
+            pending_futures.update(target_indexes)
+            done, _pending = wait(
+                pending_futures,
+                return_when=FIRST_COMPLETED,
             )
-            target_futures.append(target_future)
-            target_indexes[target_future] = idx
-            target_started_at[target_future] = perf_counter()
+            for completed_future in done:
+                if completed_future in input_indexes:
+                    idx = input_indexes.pop(completed_future)
+                    try:
+                        generated_item = completed_future.result()
+                    except Exception as exc:  # noqa: BLE001
+                        input_stats.failed_count += 1
+                        if "request failed" in str(exc):
+                            input_stats.api_failed_count += 1
+                        else:
+                            input_stats.parse_failed_count += 1
+                        if logger:
+                            logger(
+                                "stage=input_generation "
+                                f"idx={idx}/{len(prompts)} status=failed "
+                                f"kept={len(generated)} failed={input_stats.failed_count} "
+                                f"api_failed={input_stats.api_failed_count} "
+                                f"parse_failed={input_stats.parse_failed_count} "
+                                f"error={type(exc).__name__} "
+                                f"elapsed={perf_counter() - input_started_at[completed_future]:.1f}s "
+                                f"total={perf_counter() - start:.1f}s "
+                                f"{_progress_fields(completed_units(), total_work_units, start)}"
+                            )
+                        continue
 
-        target_stats.input_count = len(target_futures)
-        for completed_target in as_completed(target_futures):
-            idx = target_indexes[completed_target]
-            try:
-                answered_item = completed_target.result()
-            except Exception as exc:  # noqa: BLE001
-                target_stats.failed_count += 1
-                target_stats.api_failed_count += 1
+                    generated.append((idx, generated_item))
+                    if logger:
+                        logger(
+                            "stage=input_generation "
+                            f"idx={idx}/{len(prompts)} status=kept "
+                            f"conversation={generated_item.anchor_meta.get('conversation_type', 'unknown')} "
+                            f"kept={len(generated)} failed={input_stats.failed_count} "
+                            f"elapsed={perf_counter() - input_started_at[completed_future]:.1f}s "
+                            f"total={perf_counter() - start:.1f}s "
+                            f"{_progress_fields(completed_units(), total_work_units, start)}"
+                        )
+
+                    target_future = target_pool.submit(
+                        answer_one_generated_input_api,
+                        item=generated_item,
+                        api_config=target_config,
+                        max_tokens=target_max_tokens,
+                        temperature=temperature,
+                        top_p=top_p,
+                        timeout=timeout,
+                        chat_fn=target_answer_chat_fn,
+                    )
+                    target_stats.input_count += 1
+                    target_indexes[target_future] = idx
+                    target_started_at[target_future] = perf_counter()
+                    continue
+
+                idx = target_indexes.pop(completed_future)
+                try:
+                    answered_item = completed_future.result()
+                except Exception as exc:  # noqa: BLE001
+                    target_stats.failed_count += 1
+                    target_stats.api_failed_count += 1
+                    if logger:
+                        logger(
+                            "stage=target_answer "
+                            f"idx={idx}/{len(prompts)} status=failed "
+                            f"kept={len(answered)} failed={target_stats.failed_count} "
+                            f"error={type(exc).__name__} "
+                            f"elapsed={perf_counter() - target_started_at[completed_future]:.1f}s "
+                            f"total={perf_counter() - start:.1f}s "
+                            f"{_progress_fields(completed_units(), total_work_units, start)}"
+                        )
+                    continue
+
+                answered.append((idx, answered_item))
                 if logger:
                     logger(
                         "stage=target_answer "
-                        f"idx={idx}/{len(prompts)} status=failed "
+                        f"idx={idx}/{len(prompts)} status=kept "
                         f"kept={len(answered)} failed={target_stats.failed_count} "
-                        f"error={type(exc).__name__} "
-                        f"elapsed={perf_counter() - target_started_at[completed_target]:.1f}s "
-                        f"total={perf_counter() - start:.1f}s"
+                        f"answer_chars={len(answered_item.target_answer)} "
+                        f"elapsed={perf_counter() - target_started_at[completed_future]:.1f}s "
+                        f"total={perf_counter() - start:.1f}s "
+                        f"{_progress_fields(completed_units(), total_work_units, start)}"
                     )
-                continue
-
-            answered.append((idx, answered_item))
-            if logger:
-                logger(
-                    "stage=target_answer "
-                    f"idx={idx}/{len(prompts)} status=kept "
-                    f"kept={len(answered)} failed={target_stats.failed_count} "
-                    f"answer_chars={len(answered_item.target_answer)} "
-                    f"elapsed={perf_counter() - target_started_at[completed_target]:.1f}s "
-                    f"total={perf_counter() - start:.1f}s"
-                )
 
     input_stats.kept_count = len(generated)
     target_stats.kept_count = len(answered)
@@ -338,10 +382,12 @@ def build_anchor_dataset_api(
         if logger:
             logger(
                 "stage=batch "
-                f"batch={batch_idx + 1}/{batch_limit} status=input_generation_done "
+                f"batch={batch_idx + 1}/{batch_limit} status=streaming_done "
                 f"input={q_stats.input_count} kept={q_stats.kept_count} "
                 f"failed={q_stats.failed_count} api_failed={q_stats.api_failed_count} "
                 f"parse_failed={q_stats.parse_failed_count} "
+                f"target_input={t_stats.input_count} target_kept={t_stats.kept_count} "
+                f"target_failed={t_stats.failed_count} "
                 f"elapsed={perf_counter() - batch_start:.1f}s total={perf_counter() - run_start:.1f}s"
             )
         existing_prompts = {
