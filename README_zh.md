@@ -100,12 +100,40 @@ outputs/ard_anchor_dataset_YYYYMMDD_HHMMSS_n10_seed42/
 - `batch_*/`：中间 prompts/generated-inputs/target-answers，便于排查
 
 如果只想看 JSONL 格式，不想使用真实 API 输出，可以参考
-`examples/anchor_bank.sample.jsonl`。
+[examples/anchor_bank.sample.jsonl](examples/anchor_bank.sample.jsonl)。
 
 生成过程中，日志会包含时间戳、进度百分比、吞吐量和预计剩余时间（ETA）。
 input generation 和 target answer 会流水线并发执行，因此两类日志会交错出现。
 
 默认是“尝试数量语义”：`ARD_TARGET_COUNT=10` 表示尝试 10 个候选，过滤后 `anchor_bank.jsonl` 可能少于 10 条。过滤只筛明显坏样本；如果你必须拿到精确数量，把 `ARD_REQUIRE_EXACT_COUNT=true`。
+
+## 输出格式
+
+`anchor_bank.jsonl` 是 JSONL 文件，每一行是一条可用于 SFT 的聊天样本。
+看 `messages` 可以判断单轮/多轮；看 `anchor_meta` 可以判断语言、能力、
+任务类型、安全边界和采样分布。
+
+| 字段 | 含义 |
+| --- | --- |
+| `id` | 稳定的 anchor 样本 ID。 |
+| `messages` | 聊天输入上下文。单轮样本通常只有一条 user 消息；多轮样本包含历史 user/assistant 轮次和最后的 user 请求。 |
+| `target_answer` | 目标模型生成的回答，也就是 SFT 监督文本。 |
+| `target_model` | 生成 `target_answer` 的目标模型。 |
+| `input_generator_model` | 用来生成真实感用户输入的强模型。 |
+| `anchor_meta` | 采样元数据和能力标签。 |
+
+关键 `anchor_meta` 字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `language` | 语言桶，例如 `English`、`简体中文`、`bilingual_zh_en`。 |
+| `knowledge_domain` | 采样到的知识或工作领域。 |
+| `capability` | 要保留的能力，例如解释、比较、推理、工具选择、不确定性处理。 |
+| `task_type` | 用于过滤或分布平衡的任务标签。 |
+| `conversation_type` | 对话形态，例如 `single_turn`、`troubleshooting_3_turn`、`constraint_update_4_turn`。 |
+| `is_multi_turn` | `messages` 是否包含多轮对话。 |
+| `safety_boundary` | 期望的安全/权威边界行为，例如标准回答、澄清、拒绝或安全替代方案。 |
+| `seed` | 用于可复现采样的 seed。 |
 
 ## 修改默认参数
 
@@ -157,3 +185,36 @@ uv run ruff check --fix .
 uv run mypy
 uv run pytest -q
 ```
+
+## 环境变量附录
+
+所有运行配置都放在 `.env` 中。`.env-example` 是简短模板；这里是完整说明。
+
+| 变量 | 默认值 | 含义 / 什么时候修改 |
+| --- | --- | --- |
+| `ARD_INPUT_GENERATOR_API_BASE` | 必填 | 强输入生成模型的 OpenAI-compatible base URL。 |
+| `ARD_INPUT_GENERATOR_MODEL_NAME` | 必填 | 用来生成真实用户请求的强模型。 |
+| `ARD_INPUT_GENERATOR_API_KEY` | 必填 | 输入生成模型 API key。不要提交 `.env`。 |
+| `ARD_TARGET_API_BASE` | 必填 | 目标模型的 OpenAI-compatible base URL。 |
+| `ARD_TARGET_MODEL_NAME` | 必填 | 你要训练、评估或保持能力的目标模型；它的回答会成为 SFT target。 |
+| `ARD_TARGET_API_KEY` | 必填 | 目标模型 API key。不要提交 `.env`。 |
+| `ARD_TARGET_COUNT` | `10` | 尝试生成的候选 input 数量。不是最终行数保证，因为过滤可能丢弃坏样本。 |
+| `ARD_BATCH_SIZE` | `10` | exact-count 补样模式下的 batch 大小。默认尝试数量模式会一次尝试 `ARD_TARGET_COUNT`。 |
+| `ARD_MAX_BATCHES` | `3` | `ARD_REQUIRE_EXACT_COUNT=true` 时最多补样多少批。 |
+| `ARD_REQUIRE_EXACT_COUNT` | `false` | 只有你必须让最终保留行数达到 `ARD_TARGET_COUNT` 时才设为 `true`。 |
+| `ARD_SEED` | `42` | 采样 seed。修改它可以得到另一组可复现的样本分布。 |
+| `ARD_OUTPUT_DIR` | 留空 | 留空时自动在 `outputs/` 下创建时间戳目录。需要固定输出位置时再填写。 |
+| `ARD_OVERWRITE_OUTPUT` | `false` | 只有明确要写入非空输出目录时才设为 `true`。 |
+| `ARD_CONFIG_PATH` | `configs/anchor_generation.yaml` | anchor ontology/config 文件。大多数用户保持默认即可。 |
+| `ARD_LANGUAGES` | 留空 | 可选语言过滤，逗号分隔，例如 `English,简体中文`。留空使用配置分布。 |
+| `ARD_TASK_TYPES` | 留空 | 可选任务类型过滤，逗号分隔，例如 `qa,explanation,reasoning`。留空使用配置分布。 |
+| `ARD_TEMPERATURE` | `0.7` | 两个模型调用使用的采样 temperature。 |
+| `ARD_TOP_P` | `0.95` | 两个模型调用使用的 top-p。 |
+| `ARD_TIMEOUT` | `60` | 单次请求超时时间，单位秒。如果服务商长回答较慢，可以调大。 |
+| `ARD_MAX_RETRIES` | `2` | API 调用失败后的重试次数。 |
+| `ARD_INPUT_GENERATOR_CONCURRENCY` | `4` | input generation 阶段并发数。 |
+| `ARD_TARGET_CONCURRENCY` | `4` | target answer 阶段并发数。 |
+| `ARD_MIN_TARGET_ANSWER_CHARS` | `8` | 低于该字符数的回答会被过滤。 |
+| `ARD_MAX_TARGET_ANSWER_CHARS` | 留空 | 可选最长回答过滤。留空表示保留长答案。 |
+| `ARD_INPUT_GENERATOR_MAX_TOKENS` | 留空 | 可选 input generation token cap。留空时 ARD 不发送 `max_tokens`。 |
+| `ARD_TARGET_MAX_TOKENS` | 留空 | 可选 target answer token cap。留空时 ARD 不发送 `max_tokens`。 |

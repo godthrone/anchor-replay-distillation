@@ -105,13 +105,42 @@ Main outputs:
 - `batch_*/`: intermediate prompts/generated-inputs/target-answers for debugging
 
 For the expected JSONL shape without any real API output, see
-`examples/anchor_bank.sample.jsonl`.
+[examples/anchor_bank.sample.jsonl](examples/anchor_bank.sample.jsonl).
 
 During generation, logs include timestamps, progress percentage, throughput, and
 ETA. Input generation and target answer logs are interleaved because both model
 stages run as a pipeline.
 
 The default uses attempt-count semantics: `ARD_TARGET_COUNT=10` means ARD attempts 10 candidates, so `anchor_bank.jsonl` may contain fewer than 10 records after filtering. Filtering is intended to remove only clearly bad samples; set `ARD_REQUIRE_EXACT_COUNT=true` only when you need an exact final count.
+
+## Output Format
+
+`anchor_bank.jsonl` is newline-delimited JSON. Each line is one SFT-ready chat
+sample. Check `messages` to understand whether the sample is single-turn or
+multi-turn, and check `anchor_meta` to understand its language, capability,
+task type, safety boundary, and sampling bucket.
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Stable anchor sample ID. |
+| `messages` | Chat input context. Single-turn samples contain one user message; multi-turn samples contain prior user/assistant turns plus the final user request. |
+| `target_answer` | The target model answer used as the SFT supervision text. |
+| `target_model` | Model that produced `target_answer`. |
+| `input_generator_model` | Strong model that generated the realistic user input. |
+| `anchor_meta` | Sampling metadata and capability labels. |
+
+Key `anchor_meta` fields:
+
+| Field | Meaning |
+| --- | --- |
+| `language` | Output/input language bucket, such as `English`, `简体中文`, or `bilingual_zh_en`. |
+| `knowledge_domain` | Knowledge or work domain sampled for the anchor. |
+| `capability` | Capability being preserved, such as explanation, comparison, reasoning, tool choice, or uncertainty handling. |
+| `task_type` | Task label used for filtering or balancing. |
+| `conversation_type` | Conversation pattern, such as `single_turn`, `troubleshooting_3_turn`, or `constraint_update_4_turn`. |
+| `is_multi_turn` | Whether `messages` includes multiple conversation turns. |
+| `safety_boundary` | Expected safety/authority behavior, such as standard answer, clarification, refusal, or safe redirect. |
+| `seed` | Seed used for reproducible sampling. |
 
 ## Changing Defaults
 
@@ -163,3 +192,37 @@ uv run ruff check --fix .
 uv run mypy
 uv run pytest -q
 ```
+
+## Environment Variables
+
+All runtime configuration lives in `.env`. `.env-example` is the short template;
+this section is the complete reference.
+
+| Variable | Default | Meaning / when to change |
+| --- | --- | --- |
+| `ARD_INPUT_GENERATOR_API_BASE` | required | OpenAI-compatible base URL for the strong input generator model. |
+| `ARD_INPUT_GENERATOR_MODEL_NAME` | required | Strong model used to create realistic user requests. |
+| `ARD_INPUT_GENERATOR_API_KEY` | required | API key for the input generator model. Never commit `.env`. |
+| `ARD_TARGET_API_BASE` | required | OpenAI-compatible base URL for the target model. |
+| `ARD_TARGET_MODEL_NAME` | required | Model you are training, evaluating, or preserving; its answers become SFT targets. |
+| `ARD_TARGET_API_KEY` | required | API key for the target model. Never commit `.env`. |
+| `ARD_TARGET_COUNT` | `10` | Number of candidate inputs to attempt. This is not an exact final row guarantee because filtering may drop bad samples. |
+| `ARD_BATCH_SIZE` | `10` | Batch size for exact-count refill mode. In default attempt-count mode, the script attempts `ARD_TARGET_COUNT` once. |
+| `ARD_MAX_BATCHES` | `3` | Maximum refill batches when `ARD_REQUIRE_EXACT_COUNT=true`. |
+| `ARD_REQUIRE_EXACT_COUNT` | `false` | Set `true` only when you require the final kept row count to reach `ARD_TARGET_COUNT`. |
+| `ARD_SEED` | `42` | Sampling seed. Change it to get a different but reproducible sample mix. |
+| `ARD_OUTPUT_DIR` | blank | Leave blank to create a timestamped directory under `outputs/`. Set a fixed path when you want a stable output location. |
+| `ARD_OVERWRITE_OUTPUT` | `false` | Set `true` only when you intentionally want to write into a non-empty output directory. |
+| `ARD_CONFIG_PATH` | `configs/anchor_generation.yaml` | Anchor ontology/config file. Most users should keep the default. |
+| `ARD_LANGUAGES` | blank | Optional comma-separated language filter, for example `English,简体中文`. Blank uses the config distribution. |
+| `ARD_TASK_TYPES` | blank | Optional comma-separated task filter, for example `qa,explanation,reasoning`. Blank uses the config distribution. |
+| `ARD_TEMPERATURE` | `0.7` | Sampling temperature for both model calls. |
+| `ARD_TOP_P` | `0.95` | Top-p sampling value for both model calls. |
+| `ARD_TIMEOUT` | `60` | Per-request timeout in seconds. Increase this if the provider often returns long answers slowly. |
+| `ARD_MAX_RETRIES` | `2` | API retry count for failed calls. |
+| `ARD_INPUT_GENERATOR_CONCURRENCY` | `4` | Parallelism for input generation requests. |
+| `ARD_TARGET_CONCURRENCY` | `4` | Parallelism for target answer requests. |
+| `ARD_MIN_TARGET_ANSWER_CHARS` | `8` | Drop answers shorter than this many characters. |
+| `ARD_MAX_TARGET_ANSWER_CHARS` | blank | Optional max answer length filter. Blank means long answers are kept. |
+| `ARD_INPUT_GENERATOR_MAX_TOKENS` | blank | Optional explicit token cap for input generation. Blank means ARD does not send `max_tokens`. |
+| `ARD_TARGET_MAX_TOKENS` | blank | Optional explicit token cap for target answers. Blank means ARD does not send `max_tokens`. |
