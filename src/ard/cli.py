@@ -302,6 +302,8 @@ def cmd_anchor_build_dataset(args: argparse.Namespace) -> int:
         top_p=args.top_p,
         timeout=args.timeout,
         max_retries=args.max_retries,
+        input_generator_concurrency=args.input_generator_concurrency,
+        target_concurrency=args.target_concurrency,
         require_exact_count=args.require_exact_count,
         min_target_answer_chars=args.min_target_answer_chars,
         max_target_answer_chars=args.max_target_answer_chars,
@@ -491,6 +493,8 @@ def build_parser() -> argparse.ArgumentParser:
     anchor_build.add_argument("--top-p", type=float, default=0.95)
     anchor_build.add_argument("--timeout", type=float, default=60)
     anchor_build.add_argument("--max-retries", type=int, default=2)
+    anchor_build.add_argument("--input-generator-concurrency", type=int, default=4)
+    anchor_build.add_argument("--target-concurrency", type=int, default=4)
     anchor_build.add_argument("--require-exact-count", action="store_true")
     anchor_build.add_argument("--min-target-answer-chars", type=int, default=8)
     anchor_build.add_argument("--max-target-answer-chars", type=_optional_int)

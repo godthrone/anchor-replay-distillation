@@ -121,6 +121,35 @@ def answer_anchor_prompts(
     return answered
 
 
+def answer_one_generated_input_api(
+    item: Any,
+    api_config: ChatAPIConfig,
+    max_tokens: int | None = None,
+    temperature: float = 0.7,
+    top_p: float = 0.95,
+    timeout: float = 60,
+    chat_fn: Any = chat_completion,
+) -> TargetAnswerAnchor:
+    answer = chat_fn(
+        config=api_config,
+        messages=item.messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        timeout=timeout,
+    )
+    meta = dict(item.anchor_meta)
+    meta["target_model"] = api_config.model_name
+    return TargetAnswerAnchor(
+        id=item.id,
+        messages=item.messages,
+        target_answer=answer,
+        target_model=api_config.model_name,
+        anchor_meta=meta,
+        input_generator_model=item.input_generator_model,
+    )
+
+
 def answer_generated_inputs_api(
     api_config: ChatAPIConfig,
     input_path: str | Path,
@@ -144,13 +173,14 @@ def answer_generated_inputs_api(
     for idx, item in enumerate(generated_inputs, start=1):
         item_start = perf_counter()
         try:
-            answer = chat_fn(
-                config=api_config,
-                messages=item.messages,
+            answered_item = answer_one_generated_input_api(
+                item=item,
+                api_config=api_config,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 top_p=top_p,
                 timeout=timeout,
+                chat_fn=chat_fn,
             )
         except Exception:  # noqa: BLE001
             stats.failed_count += 1
@@ -164,24 +194,14 @@ def answer_generated_inputs_api(
                     f"total={perf_counter() - start:.1f}s"
                 )
             continue
-        meta = dict(item.anchor_meta)
-        meta["target_model"] = api_config.model_name
-        answered.append(
-            TargetAnswerAnchor(
-                id=item.id,
-                messages=item.messages,
-                target_answer=answer,
-                target_model=api_config.model_name,
-                anchor_meta=meta,
-                input_generator_model=item.input_generator_model,
-            )
-        )
+        answered.append(answered_item)
         if logger:
             logger(
                 "stage=target_answer "
                 f"idx={idx}/{len(generated_inputs)} status=kept "
                 f"kept={len(answered)} failed={stats.failed_count} "
-                f"answer_chars={len(answer)} elapsed={perf_counter() - item_start:.1f}s "
+                f"answer_chars={len(answered_item.target_answer)} "
+                f"elapsed={perf_counter() - item_start:.1f}s "
                 f"total={perf_counter() - start:.1f}s"
             )
 
