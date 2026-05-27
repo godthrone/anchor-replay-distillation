@@ -182,6 +182,13 @@ def _pick_capability(
     rng: random.Random,
 ) -> dict[str, Any]:
     leaves = _leaves_by_name(capability, list(config.task_types), "capability")
+    if capability and config.task_types:
+        allowed = set(config.task_types)
+        leaves = [leaf for leaf in leaves if str(leaf.get("leaf", "")) in allowed]
+        if not leaves:
+            raise ValueError(
+                "task_types did not match any capability leaves: " + ", ".join(config.task_types)
+            )
     grouped = _group_by_top_level(leaves)
     if bucket == "code_math_reasoning":
         preferred = ["reasoning", "coding_and_data"]

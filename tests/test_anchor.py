@@ -7,63 +7,104 @@ from ard.anchor import (
     TargetAnswerAnchor,
     filter_target_answer_anchors,
     generate_anchor_prompts,
-    load_ontology,
+    load_anchor_ontology,
     split_target_answer_anchors,
 )
 from ard.anchor.manifest import build_anchor_manifest
 
 
 def test_anchor_generation_is_deterministic(tmp_path):
-    knowledge_path = tmp_path / "knowledge.json"
-    language_path = tmp_path / "language.json"
-    knowledge_path.write_text(json.dumps({"domain": {"topic": ["leaf"]}}), encoding="utf-8")
-    language_path.write_text(json.dumps({"style": ["concise", "formal"]}), encoding="utf-8")
+    ontology_path = tmp_path / "anchor_ontology.json"
+    ontology_path.write_text(
+        json.dumps(
+            {
+                "languages": ["English"],
+                "knowledge_domains": {"domain": {"topic": ["leaf"]}},
+                "capabilities": {"knowledge_response": ["qa"]},
+                "conversation_types": {"single_turn": ["single_turn"]},
+                "safety_boundaries": {"normal": ["standard_helpful_answer"]},
+                "language_features": {"style": ["concise", "formal"]},
+            }
+        ),
+        encoding="utf-8",
+    )
 
-    knowledge = load_ontology(knowledge_path)
-    language = load_ontology(language_path)
+    ontology = load_anchor_ontology(ontology_path)
     config = AnchorGenerationConfig(count=4, seed=7, languages=["English"], task_types=["qa"])
 
-    first = generate_anchor_prompts(knowledge, language, config)
-    second = generate_anchor_prompts(knowledge, language, config)
+    first = generate_anchor_prompts(
+        ontology.knowledge,
+        ontology.language_features,
+        config,
+        ontology.capabilities,
+        ontology.conversation_types,
+        ontology.safety_boundaries,
+    )
+    second = generate_anchor_prompts(
+        ontology.knowledge,
+        ontology.language_features,
+        config,
+        ontology.capabilities,
+        ontology.conversation_types,
+        ontology.safety_boundaries,
+    )
 
     assert [item.id for item in first] == [item.id for item in second]
     assert len(first) == 4
     assert first[0].anchor_meta["task_type"] == "qa"
 
 
-def test_extended_seed_files_have_leaves():
-    seed_dir = Path("data/anchor_seed")
-    seed_files = [
-        "knowledge_ontology.json",
-        "language_ontology.json",
-        "capability_ontology.json",
-        "conversation_ontology.json",
-        "safety_ontology.json",
-    ]
+def test_anchor_ontology_file_exposes_all_sampling_dimensions():
+    ontology = load_anchor_ontology(Path("data/anchor_seed/anchor_ontology.json"))
 
-    for filename in seed_files:
-        ontology = load_ontology(seed_dir / filename)
-        assert ontology.leaves, filename
-        assert {leaf["top_level"] for leaf in ontology.leaves}, filename
+    assert ontology.languages == ["English", "简体中文", "bilingual_zh_en"]
+    assert ontology.knowledge.leaves
+    assert ontology.language_features.leaves
+    assert ontology.capabilities.leaves
+    assert ontology.conversation_types.leaves
+    assert ontology.safety_boundaries.leaves
+    assert {leaf["top_level"] for leaf in ontology.knowledge.leaves}
+    assert {leaf["leaf"] for leaf in ontology.capabilities.leaves} >= {"qa", "coding"}
+
+
+def test_anchor_ontology_rejects_missing_required_sections(tmp_path):
+    path = tmp_path / "bad_ontology.json"
+    path.write_text(json.dumps({"languages": ["English"]}), encoding="utf-8")
+
+    try:
+        load_anchor_ontology(path)
+    except ValueError as exc:
+        assert "missing required sections" in str(exc)
+    else:
+        raise AssertionError("expected missing section error")
 
 
 def test_extended_anchor_sampling_is_deterministic_and_balanced():
-    seed_dir = Path("data/anchor_seed")
-    knowledge = load_ontology(seed_dir / "knowledge_ontology.json")
-    language = load_ontology(seed_dir / "language_ontology.json")
-    capability = load_ontology(seed_dir / "capability_ontology.json")
-    conversation = load_ontology(seed_dir / "conversation_ontology.json")
-    safety = load_ontology(seed_dir / "safety_ontology.json")
+    ontology = load_anchor_ontology(Path("data/anchor_seed/anchor_ontology.json"))
     config = AnchorGenerationConfig(
         count=100,
         seed=11,
-        languages=["English", "简体中文", "bilingual_zh_en"],
+        languages=ontology.languages,
         input_generator_model="strong-input-generator",
         target_model="open-anchor-target",
     )
 
-    first = generate_anchor_prompts(knowledge, language, config, capability, conversation, safety)
-    second = generate_anchor_prompts(knowledge, language, config, capability, conversation, safety)
+    first = generate_anchor_prompts(
+        ontology.knowledge,
+        ontology.language_features,
+        config,
+        ontology.capabilities,
+        ontology.conversation_types,
+        ontology.safety_boundaries,
+    )
+    second = generate_anchor_prompts(
+        ontology.knowledge,
+        ontology.language_features,
+        config,
+        ontology.capabilities,
+        ontology.conversation_types,
+        ontology.safety_boundaries,
+    )
 
     assert [item.id for item in first] == [item.id for item in second]
     buckets = Counter(item.anchor_meta["sampling_bucket"] for item in first)
@@ -85,16 +126,39 @@ def test_extended_anchor_sampling_is_deterministic_and_balanced():
     assert all(item.anchor_meta["target_model"] == "open-anchor-target" for item in first)
 
 
+def test_task_type_filter_limits_capability_sampling():
+    ontology = load_anchor_ontology(Path("data/anchor_seed/anchor_ontology.json"))
+    config = AnchorGenerationConfig(
+        count=20,
+        seed=13,
+        languages=["English"],
+        task_types=["qa", "coding"],
+    )
+
+    prompts = generate_anchor_prompts(
+        ontology.knowledge,
+        ontology.language_features,
+        config,
+        ontology.capabilities,
+        ontology.conversation_types,
+        ontology.safety_boundaries,
+    )
+
+    assert {item.anchor_meta["task_type"] for item in prompts} <= {"qa", "coding"}
+
+
 def test_prompt_shape_instructions_for_single_and_multi_turn():
-    seed_dir = Path("data/anchor_seed")
-    knowledge = load_ontology(seed_dir / "knowledge_ontology.json")
-    language = load_ontology(seed_dir / "language_ontology.json")
-    capability = load_ontology(seed_dir / "capability_ontology.json")
-    conversation = load_ontology(seed_dir / "conversation_ontology.json")
-    safety = load_ontology(seed_dir / "safety_ontology.json")
+    ontology = load_anchor_ontology(Path("data/anchor_seed/anchor_ontology.json"))
     config = AnchorGenerationConfig(count=20, seed=3, languages=["English"])
 
-    prompts = generate_anchor_prompts(knowledge, language, config, capability, conversation, safety)
+    prompts = generate_anchor_prompts(
+        ontology.knowledge,
+        ontology.language_features,
+        config,
+        ontology.capabilities,
+        ontology.conversation_types,
+        ontology.safety_boundaries,
+    )
     single = next(
         item for item in prompts if item.anchor_meta["conversation_type"] == "single_turn"
     )
@@ -109,15 +173,17 @@ def test_prompt_shape_instructions_for_single_and_multi_turn():
 
 
 def test_safety_specs_add_safe_boundary_language():
-    seed_dir = Path("data/anchor_seed")
-    knowledge = load_ontology(seed_dir / "knowledge_ontology.json")
-    language = load_ontology(seed_dir / "language_ontology.json")
-    capability = load_ontology(seed_dir / "capability_ontology.json")
-    conversation = load_ontology(seed_dir / "conversation_ontology.json")
-    safety = load_ontology(seed_dir / "safety_ontology.json")
+    ontology = load_anchor_ontology(Path("data/anchor_seed/anchor_ontology.json"))
     config = AnchorGenerationConfig(count=20, seed=5, languages=["English"])
 
-    prompts = generate_anchor_prompts(knowledge, language, config, capability, conversation, safety)
+    prompts = generate_anchor_prompts(
+        ontology.knowledge,
+        ontology.language_features,
+        config,
+        ontology.capabilities,
+        ontology.conversation_types,
+        ontology.safety_boundaries,
+    )
     safety_prompts = [
         item
         for item in prompts
