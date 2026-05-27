@@ -12,6 +12,8 @@ answering, reasoning, translation, coding, and safety behavior.
 
 The default workflow is intentionally simple: one command creates `.venv`,
 installs dependencies, calls the APIs, and writes the generated data.
+This repository focuses on data generation; it does not include a model training
+or fine-tuning runner.
 
 ## Quick Start
 
