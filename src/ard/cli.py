@@ -54,49 +54,48 @@ def _print_log(message: str) -> None:
     print(f"ts={timestamp} {message}", flush=True)
 
 
-def _load_seed_paths(args: argparse.Namespace, config_data: dict[str, Any]) -> dict[str, Any]:
-    ontology_cfg = config_data.get("ontology", {})
-    return {
-        "knowledge_path": args.knowledge_ontology or ontology_cfg.get("knowledge_path"),
-        "language_path": args.language_ontology or ontology_cfg.get("language_path"),
-        "capability_path": args.capability_ontology or ontology_cfg.get("capability_path"),
-        "conversation_path": args.conversation_ontology or ontology_cfg.get("conversation_path"),
-        "safety_path": args.safety_ontology or ontology_cfg.get("safety_path"),
-        "knowledge_root": args.knowledge_root or ontology_cfg.get("knowledge_root"),
-        "language_root": args.language_root or ontology_cfg.get("language_root"),
-        "capability_root": args.capability_root or ontology_cfg.get("capability_root"),
-        "conversation_root": args.conversation_root or ontology_cfg.get("conversation_root"),
-        "safety_root": args.safety_root or ontology_cfg.get("safety_root"),
-    }
+def _ontology_path(args: argparse.Namespace) -> str:
+    from ard.anchor.ontology import DEFAULT_ONTOLOGY_PATH
+
+    return str(args.ontology or DEFAULT_ONTOLOGY_PATH)
+
+
+def _leaf_values(leaves: list[dict[str, Any]]) -> list[str]:
+    return [str(leaf["leaf"]) for leaf in leaves]
+
+
+def _filtered_csv(value: str | None, defaults: list[str], label: str) -> list[str]:
+    selected = _csv(value)
+    if not selected:
+        return defaults
+    unknown = sorted(set(selected) - set(defaults))
+    if unknown:
+        raise SystemExit(
+            f"{label} contains values not present in the ontology: {', '.join(unknown)}"
+        )
+    return selected
 
 
 def cmd_anchor_generate(args: argparse.Namespace) -> int:
-    from ard.anchor import AnchorGenerationConfig, generate_anchor_prompts, load_ontology
+    from ard.anchor import AnchorGenerationConfig, generate_anchor_prompts, load_anchor_ontology
     from ard.anchor.bank import write_jsonl
-    from ard.anchor.sampler import DEFAULT_TASK_TYPES
 
     config_data = _read_yaml(args.config)
     generation_cfg = config_data.get("generation", {})
-    paths = _load_seed_paths(args, config_data)
-    if not paths["knowledge_path"] or not paths["language_path"]:
-        raise SystemExit("--knowledge-ontology and --language-ontology are required")
+    anchor_ontology = load_anchor_ontology(_ontology_path(args))
     output_path = args.output or generation_cfg.get("output_path")
     if not output_path:
         raise SystemExit("--output is required")
 
-    languages = (
-        _csv(args.languages)
-        or generation_cfg.get("languages")
-        or ["English", "简体中文", "bilingual_zh_en"]
-    )
-    task_types = (
-        _csv(args.task_types) or generation_cfg.get("task_types") or list(DEFAULT_TASK_TYPES)
+    languages = _filtered_csv(args.languages, anchor_ontology.languages, "languages")
+    task_types = _filtered_csv(
+        args.task_types, _leaf_values(anchor_ontology.capabilities.leaves), "task_types"
     )
     prompt_config = AnchorGenerationConfig(
         count=args.count if args.count is not None else int(generation_cfg.get("count", 100)),
         seed=args.seed if args.seed is not None else int(generation_cfg.get("seed", 42)),
-        languages=list(languages),
-        task_types=list(task_types),
+        languages=languages,
+        task_types=task_types,
         language_features_per_prompt=(
             args.language_features_per_prompt
             if args.language_features_per_prompt is not None
@@ -108,24 +107,12 @@ def cmd_anchor_generate(args: argparse.Namespace) -> int:
         or str(generation_cfg.get("target_model", "unspecified_target_model")),
     )
     prompts = generate_anchor_prompts(
-        knowledge=load_ontology(paths["knowledge_path"], root_key=paths["knowledge_root"]),
-        language=load_ontology(paths["language_path"], root_key=paths["language_root"]),
+        knowledge=anchor_ontology.knowledge,
+        language=anchor_ontology.language_features,
         config=prompt_config,
-        capability=(
-            load_ontology(paths["capability_path"], root_key=paths["capability_root"])
-            if paths["capability_path"]
-            else None
-        ),
-        conversation=(
-            load_ontology(paths["conversation_path"], root_key=paths["conversation_root"])
-            if paths["conversation_path"]
-            else None
-        ),
-        safety=(
-            load_ontology(paths["safety_path"], root_key=paths["safety_root"])
-            if paths["safety_path"]
-            else None
-        ),
+        capability=anchor_ontology.capabilities,
+        conversation=anchor_ontology.conversation_types,
+        safety=anchor_ontology.safety_boundaries,
     )
     write_jsonl(prompts, output_path)
     print(f"Wrote {len(prompts)} anchor prompts to {output_path}")
@@ -248,48 +235,28 @@ def cmd_anchor_split(args: argparse.Namespace) -> int:
 
 
 def cmd_anchor_build_dataset(args: argparse.Namespace) -> int:
+    from ard.anchor import load_anchor_ontology
     from ard.anchor.api_client import chat_api_config_from_env
-    from ard.anchor.ontology import load_ontology
     from ard.anchor.pipeline import build_anchor_dataset_api
-    from ard.anchor.sampler import DEFAULT_TASK_TYPES
 
     config_data = _read_yaml(args.config)
     generation_cfg = config_data.get("generation", {})
-    paths = _load_seed_paths(args, config_data)
-    if not paths["knowledge_path"] or not paths["language_path"]:
-        raise SystemExit("--knowledge-ontology and --language-ontology are required")
-
-    languages = (
-        _csv(args.languages)
-        or generation_cfg.get("languages")
-        or ["English", "简体中文", "bilingual_zh_en"]
-    )
-    task_types = (
-        _csv(args.task_types) or generation_cfg.get("task_types") or list(DEFAULT_TASK_TYPES)
+    anchor_ontology = load_anchor_ontology(_ontology_path(args))
+    languages = _filtered_csv(args.languages, anchor_ontology.languages, "languages")
+    task_types = _filtered_csv(
+        args.task_types, _leaf_values(anchor_ontology.capabilities.leaves), "task_types"
     )
     result = build_anchor_dataset_api(
         output_dir=args.output_dir,
         target_count=args.target_count,
         seed=args.seed if args.seed is not None else int(generation_cfg.get("seed", 42)),
-        knowledge=load_ontology(paths["knowledge_path"], root_key=paths["knowledge_root"]),
-        language=load_ontology(paths["language_path"], root_key=paths["language_root"]),
-        capability=(
-            load_ontology(paths["capability_path"], root_key=paths["capability_root"])
-            if paths["capability_path"]
-            else None
-        ),
-        conversation=(
-            load_ontology(paths["conversation_path"], root_key=paths["conversation_root"])
-            if paths["conversation_path"]
-            else None
-        ),
-        safety=(
-            load_ontology(paths["safety_path"], root_key=paths["safety_root"])
-            if paths["safety_path"]
-            else None
-        ),
-        languages=list(languages),
-        task_types=list(task_types),
+        knowledge=anchor_ontology.knowledge,
+        language=anchor_ontology.language_features,
+        capability=anchor_ontology.capabilities,
+        conversation=anchor_ontology.conversation_types,
+        safety=anchor_ontology.safety_boundaries,
+        languages=languages,
+        task_types=task_types,
         input_generator_config=chat_api_config_from_env(
             args.api_env_file, args.input_generator_model, env_prefix="ARD_INPUT_GENERATOR"
         ),
@@ -366,17 +333,8 @@ def cmd_eval_forgetting(args: argparse.Namespace) -> int:
     return 0
 
 
-def _add_seed_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--knowledge-ontology")
-    parser.add_argument("--language-ontology")
-    parser.add_argument("--capability-ontology")
-    parser.add_argument("--conversation-ontology")
-    parser.add_argument("--safety-ontology")
-    parser.add_argument("--knowledge-root")
-    parser.add_argument("--language-root")
-    parser.add_argument("--capability-root")
-    parser.add_argument("--conversation-root")
-    parser.add_argument("--safety-root")
+def _add_ontology_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--ontology", help="Path to the single ARD ontology JSON file.")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -387,7 +345,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     anchor_generate = subparsers.add_parser("anchor-generate", help="Generate anchor meta prompts.")
     anchor_generate.add_argument("--config", default="configs/anchor_generation.yaml")
-    _add_seed_args(anchor_generate)
+    _add_ontology_arg(anchor_generate)
     anchor_generate.add_argument("--output", "-o")
     anchor_generate.add_argument("--count", type=int)
     anchor_generate.add_argument("--seed", type=int)
@@ -481,7 +439,7 @@ def build_parser() -> argparse.ArgumentParser:
     anchor_build.add_argument("--seed", type=int)
     anchor_build.add_argument("--input-generator-model")
     anchor_build.add_argument("--target-model")
-    _add_seed_args(anchor_build)
+    _add_ontology_arg(anchor_build)
     anchor_build.add_argument("--languages")
     anchor_build.add_argument("--task-types")
     anchor_build.add_argument(

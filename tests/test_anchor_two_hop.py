@@ -8,10 +8,36 @@ import pytest
 from ard.anchor.api_client import ChatAPIConfig, chat_api_config_from_env
 from ard.anchor import api_client
 from ard.anchor.bank import AnchorPrompt, GeneratedInputAnchor, write_jsonl
-from ard.anchor.ontology import load_ontology
+from ard.anchor.ontology import load_anchor_ontology
 from ard.anchor.input_generator import parse_input_generator_messages, generate_anchor_inputs
 from ard.anchor.pipeline import build_anchor_dataset_api
 from ard.anchor.target import answer_generated_inputs_api
+
+
+def _write_test_anchor_ontology(
+    tmp_path,
+    *,
+    knowledge: dict,
+    language_features: dict | None = None,
+    capabilities: dict | None = None,
+    conversation_types: dict | None = None,
+    safety_boundaries: dict | None = None,
+):
+    path = tmp_path / "anchor_ontology.json"
+    path.write_text(
+        json.dumps(
+            {
+                "languages": ["English"],
+                "knowledge_domains": knowledge,
+                "language_features": language_features or {"style": ["concise"]},
+                "capabilities": capabilities or {"knowledge_response": ["qa"]},
+                "conversation_types": conversation_types or {"single_turn": ["single_turn"]},
+                "safety_boundaries": safety_boundaries or {"normal": ["standard_helpful_answer"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return load_anchor_ontology(path)
 
 
 def test_api_env_file_parsing_and_no_key_serialization(tmp_path):
@@ -251,32 +277,18 @@ def test_anchor_generate_inputs_cli_uses_input_generator_stage(tmp_path, monkeyp
 
 
 def test_build_anchor_dataset_api_end_to_end_with_fake_chat(tmp_path):
-    seed_dir = tmp_path / "seed"
-    seed_dir.mkdir()
-    knowledge_path = seed_dir / "knowledge.json"
-    language_path = seed_dir / "language.json"
-    capability_path = seed_dir / "capability.json"
-    conversation_path = seed_dir / "conversation.json"
-    safety_path = seed_dir / "safety.json"
-    knowledge_path.write_text(
-        json.dumps({"general": {"topic": ["alpha", "beta", "gamma"]}}), encoding="utf-8"
+    ontology = _write_test_anchor_ontology(
+        tmp_path,
+        knowledge={"general": {"topic": ["alpha", "beta", "gamma"]}},
+        language_features={
+            "style": ["concise"],
+            "format": ["paragraph"],
+            "difficulty": ["basic"],
+            "context_length": ["short"],
+            "noise": ["clean"],
+            "answer_expectation": ["direct_answer"],
+        },
     )
-    language_path.write_text(
-        json.dumps(
-            {
-                "style": ["concise"],
-                "format": ["paragraph"],
-                "difficulty": ["basic"],
-                "context_length": ["short"],
-                "noise": ["clean"],
-                "answer_expectation": ["direct_answer"],
-            }
-        ),
-        encoding="utf-8",
-    )
-    capability_path.write_text(json.dumps({"knowledge_response": ["qa"]}), encoding="utf-8")
-    conversation_path.write_text(json.dumps({"single_turn": ["single_turn"]}), encoding="utf-8")
-    safety_path.write_text(json.dumps({"normal": ["standard_helpful_answer"]}), encoding="utf-8")
 
     input_counter = {"value": 0}
 
@@ -293,11 +305,11 @@ def test_build_anchor_dataset_api_end_to_end_with_fake_chat(tmp_path):
         output_dir=tmp_path / "dataset",
         target_count=3,
         seed=1,
-        knowledge=load_ontology(knowledge_path),
-        language=load_ontology(language_path),
-        capability=load_ontology(capability_path),
-        conversation=load_ontology(conversation_path),
-        safety=load_ontology(safety_path),
+        knowledge=ontology.knowledge,
+        language=ontology.language_features,
+        capability=ontology.capabilities,
+        conversation=ontology.conversation_types,
+        safety=ontology.safety_boundaries,
         languages=["English"],
         task_types=["qa"],
         input_generator_config=ChatAPIConfig(
@@ -335,21 +347,10 @@ def test_build_anchor_dataset_api_end_to_end_with_fake_chat(tmp_path):
 
 
 def test_build_anchor_dataset_streams_target_answers_before_all_inputs_finish(tmp_path):
-    seed_dir = tmp_path / "seed"
-    seed_dir.mkdir()
-    knowledge_path = seed_dir / "knowledge.json"
-    language_path = seed_dir / "language.json"
-    capability_path = seed_dir / "capability.json"
-    conversation_path = seed_dir / "conversation.json"
-    safety_path = seed_dir / "safety.json"
-    knowledge_path.write_text(
-        json.dumps({"general": {"topic": ["alpha", "beta", "gamma", "delta"]}}),
-        encoding="utf-8",
+    ontology = _write_test_anchor_ontology(
+        tmp_path,
+        knowledge={"general": {"topic": ["alpha", "beta", "gamma", "delta"]}},
     )
-    language_path.write_text(json.dumps({"style": ["concise"]}), encoding="utf-8")
-    capability_path.write_text(json.dumps({"knowledge_response": ["qa"]}), encoding="utf-8")
-    conversation_path.write_text(json.dumps({"single_turn": ["single_turn"]}), encoding="utf-8")
-    safety_path.write_text(json.dumps({"normal": ["standard_helpful_answer"]}), encoding="utf-8")
 
     lock = threading.Lock()
     input_completed = {"count": 0}
@@ -372,11 +373,11 @@ def test_build_anchor_dataset_streams_target_answers_before_all_inputs_finish(tm
         output_dir=tmp_path / "dataset",
         target_count=4,
         seed=1,
-        knowledge=load_ontology(knowledge_path),
-        language=load_ontology(language_path),
-        capability=load_ontology(capability_path),
-        conversation=load_ontology(conversation_path),
-        safety=load_ontology(safety_path),
+        knowledge=ontology.knowledge,
+        language=ontology.language_features,
+        capability=ontology.capabilities,
+        conversation=ontology.conversation_types,
+        safety=ontology.safety_boundaries,
         languages=["English"],
         task_types=["qa"],
         input_generator_config=ChatAPIConfig(
@@ -417,20 +418,10 @@ def test_cli_logger_prefixes_timestamp(capsys):
 
 
 def test_build_anchor_dataset_attempt_count_does_not_refill_by_default(tmp_path):
-    seed_dir = tmp_path / "seed"
-    seed_dir.mkdir()
-    knowledge_path = seed_dir / "knowledge.json"
-    language_path = seed_dir / "language.json"
-    capability_path = seed_dir / "capability.json"
-    conversation_path = seed_dir / "conversation.json"
-    safety_path = seed_dir / "safety.json"
-    knowledge_path.write_text(
-        json.dumps({"general": {"topic": ["alpha", "beta", "gamma"]}}), encoding="utf-8"
+    ontology = _write_test_anchor_ontology(
+        tmp_path,
+        knowledge={"general": {"topic": ["alpha", "beta", "gamma"]}},
     )
-    language_path.write_text(json.dumps({"style": ["concise"]}), encoding="utf-8")
-    capability_path.write_text(json.dumps({"knowledge_response": ["qa"]}), encoding="utf-8")
-    conversation_path.write_text(json.dumps({"single_turn": ["single_turn"]}), encoding="utf-8")
-    safety_path.write_text(json.dumps({"normal": ["standard_helpful_answer"]}), encoding="utf-8")
 
     answer_counter = {"value": 0}
     input_counter = {"value": 0}
@@ -449,11 +440,11 @@ def test_build_anchor_dataset_attempt_count_does_not_refill_by_default(tmp_path)
         output_dir=tmp_path / "dataset",
         target_count=3,
         seed=1,
-        knowledge=load_ontology(knowledge_path),
-        language=load_ontology(language_path),
-        capability=load_ontology(capability_path),
-        conversation=load_ontology(conversation_path),
-        safety=load_ontology(safety_path),
+        knowledge=ontology.knowledge,
+        language=ontology.language_features,
+        capability=ontology.capabilities,
+        conversation=ontology.conversation_types,
+        safety=ontology.safety_boundaries,
         languages=["English"],
         task_types=["qa"],
         input_generator_config=ChatAPIConfig(
@@ -479,23 +470,18 @@ def test_build_anchor_dataset_refuses_non_empty_output_dir(tmp_path):
     output_dir = tmp_path / "dataset"
     output_dir.mkdir()
     (output_dir / "old.txt").write_text("previous run", encoding="utf-8")
-    seed_dir = tmp_path / "seed"
-    seed_dir.mkdir()
-    knowledge_path = seed_dir / "knowledge.json"
-    language_path = seed_dir / "language.json"
-    knowledge_path.write_text(json.dumps({"general": ["alpha"]}), encoding="utf-8")
-    language_path.write_text(json.dumps({"style": ["concise"]}), encoding="utf-8")
+    ontology = _write_test_anchor_ontology(tmp_path, knowledge={"general": ["alpha"]})
 
     with pytest.raises(FileExistsError, match="Output directory already exists"):
         build_anchor_dataset_api(
             output_dir=output_dir,
             target_count=1,
             seed=1,
-            knowledge=load_ontology(knowledge_path),
-            language=load_ontology(language_path),
-            capability=None,
-            conversation=None,
-            safety=None,
+            knowledge=ontology.knowledge,
+            language=ontology.language_features,
+            capability=ontology.capabilities,
+            conversation=ontology.conversation_types,
+            safety=ontology.safety_boundaries,
             languages=["English"],
             task_types=["qa"],
             input_generator_config=ChatAPIConfig(
@@ -508,20 +494,10 @@ def test_build_anchor_dataset_refuses_non_empty_output_dir(tmp_path):
 
 
 def test_build_anchor_dataset_exact_count_refills_when_enabled(tmp_path):
-    seed_dir = tmp_path / "seed"
-    seed_dir.mkdir()
-    knowledge_path = seed_dir / "knowledge.json"
-    language_path = seed_dir / "language.json"
-    capability_path = seed_dir / "capability.json"
-    conversation_path = seed_dir / "conversation.json"
-    safety_path = seed_dir / "safety.json"
-    knowledge_path.write_text(
-        json.dumps({"general": {"topic": ["alpha", "beta", "gamma"]}}), encoding="utf-8"
+    ontology = _write_test_anchor_ontology(
+        tmp_path,
+        knowledge={"general": {"topic": ["alpha", "beta", "gamma"]}},
     )
-    language_path.write_text(json.dumps({"style": ["concise"]}), encoding="utf-8")
-    capability_path.write_text(json.dumps({"knowledge_response": ["qa"]}), encoding="utf-8")
-    conversation_path.write_text(json.dumps({"single_turn": ["single_turn"]}), encoding="utf-8")
-    safety_path.write_text(json.dumps({"normal": ["standard_helpful_answer"]}), encoding="utf-8")
 
     answer_counter = {"value": 0}
     input_counter = {"value": 0}
@@ -540,11 +516,11 @@ def test_build_anchor_dataset_exact_count_refills_when_enabled(tmp_path):
         output_dir=tmp_path / "dataset",
         target_count=3,
         seed=1,
-        knowledge=load_ontology(knowledge_path),
-        language=load_ontology(language_path),
-        capability=load_ontology(capability_path),
-        conversation=load_ontology(conversation_path),
-        safety=load_ontology(safety_path),
+        knowledge=ontology.knowledge,
+        language=ontology.language_features,
+        capability=ontology.capabilities,
+        conversation=ontology.conversation_types,
+        safety=ontology.safety_boundaries,
         languages=["English"],
         task_types=["qa"],
         input_generator_config=ChatAPIConfig(
@@ -564,20 +540,10 @@ def test_build_anchor_dataset_exact_count_refills_when_enabled(tmp_path):
 
 
 def test_build_anchor_dataset_filters_duplicates_across_exact_batches(tmp_path):
-    seed_dir = tmp_path / "seed"
-    seed_dir.mkdir()
-    knowledge_path = seed_dir / "knowledge.json"
-    language_path = seed_dir / "language.json"
-    capability_path = seed_dir / "capability.json"
-    conversation_path = seed_dir / "conversation.json"
-    safety_path = seed_dir / "safety.json"
-    knowledge_path.write_text(
-        json.dumps({"general": {"topic": ["alpha", "beta", "gamma"]}}), encoding="utf-8"
+    ontology = _write_test_anchor_ontology(
+        tmp_path,
+        knowledge={"general": {"topic": ["alpha", "beta", "gamma"]}},
     )
-    language_path.write_text(json.dumps({"style": ["concise"]}), encoding="utf-8")
-    capability_path.write_text(json.dumps({"knowledge_response": ["qa"]}), encoding="utf-8")
-    conversation_path.write_text(json.dumps({"single_turn": ["single_turn"]}), encoding="utf-8")
-    safety_path.write_text(json.dumps({"normal": ["standard_helpful_answer"]}), encoding="utf-8")
 
     input_counter = {"value": 0}
 
@@ -594,11 +560,11 @@ def test_build_anchor_dataset_filters_duplicates_across_exact_batches(tmp_path):
         output_dir=tmp_path / "dataset",
         target_count=2,
         seed=1,
-        knowledge=load_ontology(knowledge_path),
-        language=load_ontology(language_path),
-        capability=load_ontology(capability_path),
-        conversation=load_ontology(conversation_path),
-        safety=load_ontology(safety_path),
+        knowledge=ontology.knowledge,
+        language=ontology.language_features,
+        capability=ontology.capabilities,
+        conversation=ontology.conversation_types,
+        safety=ontology.safety_boundaries,
         languages=["English"],
         task_types=["qa"],
         input_generator_config=ChatAPIConfig(

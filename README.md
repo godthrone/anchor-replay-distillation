@@ -147,11 +147,12 @@ Key `anchor_meta` fields:
 
 ## Changing Defaults
 
-For normal use, `.env` is the only configuration surface. `.env-example` lists
-every supported `ARD_*` environment variable, including the default seed
-`ARD_SEED=42`. The YAML file referenced by `ARD_CONFIG_PATH` defines the built-in
-anchor ontology and sampling distribution; keep it unchanged unless you are
-extending ARD itself.
+For runtime settings, `.env` is the main configuration surface. `.env-example`
+lists every supported `ARD_*` environment variable, including the default seed
+`ARD_SEED=42`. All sampling choices for generated questions live in one JSON
+file: `data/anchor_seed/anchor_ontology.json`. Copy and edit that file when you
+want ARD to generate data for your own domains, languages, capabilities,
+conversation types, safety boundaries, or language features.
 
 Edit `.env` to customize common parameters:
 
@@ -164,27 +165,29 @@ ARD_SEED=42
 ARD_OUTPUT_DIR=
 ARD_OVERWRITE_OUTPUT=false
 ARD_CONFIG_PATH=configs/anchor_generation.yaml
+ARD_ONTOLOGY_PATH=data/anchor_seed/anchor_ontology.json
 ARD_LANGUAGES=
 ARD_TASK_TYPES=
 ARD_TEMPERATURE=0.7
 ARD_TOP_P=0.95
 ARD_TIMEOUT=60
 ARD_MAX_RETRIES=2
-ARD_INPUT_GENERATOR_CONCURRENCY=4
-ARD_TARGET_CONCURRENCY=4
+ARD_INPUT_GENERATOR_CONCURRENCY=100
+ARD_TARGET_CONCURRENCY=100
 ARD_MIN_TARGET_ANSWER_CHARS=8
 ARD_MAX_TARGET_ANSWER_CHARS=
 ARD_INPUT_GENERATOR_MAX_TOKENS=
 ARD_TARGET_MAX_TOKENS=
 ```
 
-`ARD_INPUT_GENERATOR_CONCURRENCY` and `ARD_TARGET_CONCURRENCY` control the two API stages independently. The end-to-end builder is pipelined: once one input is generated, its target answer can start immediately without waiting for all inputs to finish.
+`ARD_INPUT_GENERATOR_CONCURRENCY` and `ARD_TARGET_CONCURRENCY` control the two API stages independently. The defaults assume a provider/model tier that allows high request concurrency; lower them if your API provider rate-limits or times out. The end-to-end builder is pipelined: once one input is generated, its target answer can start immediately without waiting for all inputs to finish.
 
 Leave `ARD_OUTPUT_DIR` blank to avoid overwriting previous runs. If you set a fixed
 `ARD_OUTPUT_DIR`, ARD refuses to write into a non-empty directory unless
 `ARD_OVERWRITE_OUTPUT=true`.
 
-`ARD_LANGUAGES` and `ARD_TASK_TYPES` are comma-separated, for example:
+`ARD_LANGUAGES` and `ARD_TASK_TYPES` are comma-separated runtime filters. Leave
+them blank to use the full ontology defaults, or narrow a run like this:
 
 ```env
 ARD_LANGUAGES=English,简体中文,bilingual_zh_en
@@ -192,6 +195,27 @@ ARD_TASK_TYPES=qa,explanation,reasoning,coding,debugging
 ```
 
 Leave `ARD_MAX_TARGET_ANSWER_CHARS` blank to keep long target answers. Strict requirement: do not set `ARD_INPUT_GENERATOR_MAX_TOKENS` or `ARD_TARGET_MAX_TOKENS` by default. When they are blank, ARD does not send `max_tokens` or any equivalent token cap to large-model API calls, letting the provider/model use its default output budget. Fill them only when you intentionally want to override that default.
+
+## Sampling Ontology
+
+ARD samples from a single JSON file: `data/anchor_seed/anchor_ontology.json`. The
+file is plain nested JSON. Dictionaries create paths, lists contain leaf values,
+and each leaf becomes a possible sampling choice.
+
+Top-level sections:
+
+| Section | Meaning | Default top-level values |
+| --- | --- | --- |
+| `languages` | Output language buckets. | `English`, `简体中文`, `bilingual_zh_en` |
+| `knowledge_domains` | Knowledge/work domains. | `software_engineering`, `systems_devops`, `data_ai_ml`, `math_logic`, `science_engineering`, `business_operations`, `finance_economics`, `law_policy_safety`, `medicine_health_safety`, `humanities_world_knowledge`, `language_writing_translation`, `agent_tool_use` |
+| `capabilities` | Capability/task labels. | `knowledge_response`, `reasoning`, `coding_and_data`, `language_work`, `agentic_behavior` |
+| `conversation_types` | Single-turn and multi-turn shapes. | `single_turn`, `clarification`, `troubleshooting`, `revision`, `tool_and_safety` |
+| `safety_boundaries` | Safety and authority-boundary behavior. | `normal`, `regulated_domain`, `boundary` |
+| `language_features` | Style, format, difficulty, context length, noise, and answer expectation. | `style`, `format`, `difficulty`, `context_length`, `noise`, `answer_expectation` |
+
+To customize the sampling space, copy `data/anchor_seed/anchor_ontology.json`,
+edit the copy, then set `ARD_ONTOLOGY_PATH` to that file. To only narrow one run,
+use `ARD_LANGUAGES` or `ARD_TASK_TYPES` without editing the ontology.
 
 ## Development Checks
 
@@ -222,15 +246,16 @@ this section is the complete reference.
 | `ARD_SEED` | `42` | Sampling seed. Change it to get a different but reproducible sample mix. |
 | `ARD_OUTPUT_DIR` | blank | Leave blank to create a timestamped directory under `outputs/`. Set a fixed path when you want a stable output location. |
 | `ARD_OVERWRITE_OUTPUT` | `false` | Set `true` only when you intentionally want to write into a non-empty output directory. |
-| `ARD_CONFIG_PATH` | `configs/anchor_generation.yaml` | Anchor ontology/config file. Most users should keep the default. |
-| `ARD_LANGUAGES` | blank | Optional comma-separated language filter, for example `English,简体中文`. Blank uses the config distribution. |
-| `ARD_TASK_TYPES` | blank | Optional comma-separated task filter, for example `qa,explanation,reasoning`. Blank uses the config distribution. |
+| `ARD_CONFIG_PATH` | `configs/anchor_generation.yaml` | Base generation config. Most users should keep the default. |
+| `ARD_ONTOLOGY_PATH` | `data/anchor_seed/anchor_ontology.json` | Single ontology JSON containing languages, domains, capabilities, conversation types, safety boundaries, and language features. |
+| `ARD_LANGUAGES` | blank | Optional comma-separated language filter, for example `English,简体中文`. Blank uses the ontology defaults. |
+| `ARD_TASK_TYPES` | blank | Optional comma-separated task filter, for example `qa,explanation,reasoning`. Blank uses the ontology defaults. |
 | `ARD_TEMPERATURE` | `0.7` | Sampling temperature for both model calls. |
 | `ARD_TOP_P` | `0.95` | Top-p sampling value for both model calls. |
 | `ARD_TIMEOUT` | `60` | Per-request timeout in seconds. Increase this if the provider often returns long answers slowly. |
 | `ARD_MAX_RETRIES` | `2` | API retry count for failed calls. |
-| `ARD_INPUT_GENERATOR_CONCURRENCY` | `4` | Parallelism for input generation requests. |
-| `ARD_TARGET_CONCURRENCY` | `4` | Parallelism for target answer requests. |
+| `ARD_INPUT_GENERATOR_CONCURRENCY` | `100` | Parallelism for input generation requests. Lower this if your provider rate-limits or times out. |
+| `ARD_TARGET_CONCURRENCY` | `100` | Parallelism for target answer requests. Lower this if your provider rate-limits or times out. |
 | `ARD_MIN_TARGET_ANSWER_CHARS` | `8` | Drop answers shorter than this many characters. |
 | `ARD_MAX_TARGET_ANSWER_CHARS` | blank | Optional max answer length filter. Blank means long answers are kept. |
 | `ARD_INPUT_GENERATOR_MAX_TOKENS` | blank | Optional explicit token cap for input generation. Blank means ARD does not send `max_tokens`. |
