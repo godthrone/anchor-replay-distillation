@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "anchor-replay-distillation"
 version = "0.1.0"
-description = "Two-hop Anchor Replay Distillation data generation and ARD-SFT utilities."
+description = "Two-hop Anchor Replay Distillation data generation utilities."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -17,9 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-train = [
-  "accelerate>=1.10.0",
-  "peft>=0.17.0",
+hf = [
   "transformers>=4.53.0",
 ]
 dev = [

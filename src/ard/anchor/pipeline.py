@@ -230,9 +230,9 @@ def build_anchor_dataset_api(
     seed: int,
     knowledge: Ontology,
     language: Ontology,
-    capability: Ontology | None,
-    conversation: Ontology | None,
-    safety: Ontology | None,
+    capability: Ontology,
+    conversation: Ontology,
+    safety: Ontology,
     languages: list[str],
     task_types: list[str],
     input_generator_config: ChatAPIConfig,
@@ -344,10 +344,10 @@ def build_anchor_dataset_api(
         prompts = generate_anchor_prompts(
             knowledge=knowledge,
             language=language,
-            config=config,
             capability=capability,
             conversation=conversation,
             safety=safety,
+            config=config,
         )
         write_jsonl(prompts, prompts_path)
         if logger:

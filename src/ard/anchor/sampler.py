@@ -1,24 +1,12 @@
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from ard.anchor.bank import AnchorPrompt
 from ard.anchor.ontology import Ontology
 
-
-DEFAULT_TASK_TYPES = (
-    "qa",
-    "explanation",
-    "reasoning",
-    "coding",
-    "translation",
-    "summarization",
-    "tool_use",
-)
-
-DEFAULT_LANGUAGES = ("English", "简体中文", "bilingual_zh_en")
 
 CODE_MATH_REASONING_DOMAINS = {
     "software_engineering",
@@ -42,10 +30,10 @@ MULTI_TURN_CONVERSATIONS = {
 
 @dataclass(slots=True)
 class AnchorGenerationConfig:
+    languages: list[str]
+    task_types: list[str]
     count: int = 100
     seed: int = 42
-    languages: list[str] = field(default_factory=lambda: list(DEFAULT_LANGUAGES))
-    task_types: list[str] = field(default_factory=lambda: list(DEFAULT_TASK_TYPES))
     language_features_per_prompt: int = 2
     input_generator_model: str = "unspecified_input_generator_model"
     target_model: str = "unspecified_target_model"
@@ -56,27 +44,6 @@ def _group_by_top_level(leaves: list[dict[str, Any]]) -> dict[str, list[dict[str
     for leaf in leaves:
         grouped.setdefault(str(leaf.get("top_level", "default")), []).append(leaf)
     return grouped
-
-
-def _leaf_from_value(value: str, top_level: str = "default") -> dict[str, Any]:
-    return {
-        "full_path": value,
-        "top_level": top_level,
-        "path": [top_level],
-        "leaf": value,
-    }
-
-
-def _fallback_ontology(values: list[str], top_level: str) -> Ontology:
-    return Ontology(leaves=[_leaf_from_value(value, top_level) for value in values])
-
-
-def _leaves_by_name(
-    ontology: Ontology | None, fallback_values: list[str], top_level: str
-) -> list[dict[str, Any]]:
-    if ontology and ontology.leaves:
-        return ontology.leaves
-    return _fallback_ontology(fallback_values, top_level).leaves
 
 
 def _language_dimensions(language_features: list[dict[str, Any]]) -> dict[str, str]:
@@ -175,20 +142,19 @@ def _pick_domain(
 
 
 def _pick_capability(
-    capability: Ontology | None,
+    capability: Ontology,
     config: AnchorGenerationConfig,
     idx: int,
     bucket: str,
     rng: random.Random,
 ) -> dict[str, Any]:
-    leaves = _leaves_by_name(capability, list(config.task_types), "capability")
-    if capability and config.task_types:
-        allowed = set(config.task_types)
-        leaves = [leaf for leaf in leaves if str(leaf.get("leaf", "")) in allowed]
-        if not leaves:
-            raise ValueError(
-                "task_types did not match any capability leaves: " + ", ".join(config.task_types)
-            )
+    leaves = capability.leaves
+    allowed = set(config.task_types)
+    leaves = [leaf for leaf in leaves if str(leaf.get("leaf", "")) in allowed]
+    if not leaves:
+        raise ValueError(
+            "task_types did not match any capability leaves: " + ", ".join(config.task_types)
+        )
     grouped = _group_by_top_level(leaves)
     if bucket == "code_math_reasoning":
         preferred = ["reasoning", "coding_and_data"]
@@ -204,23 +170,21 @@ def _pick_capability(
     return leaves[idx % len(leaves)]
 
 
-def _pick_conversation(
-    conversation: Ontology | None, idx: int, rng: random.Random
-) -> dict[str, Any]:
-    leaves = _leaves_by_name(conversation, ["single_turn"], "single_turn")
+def _pick_conversation(conversation: Ontology, idx: int, rng: random.Random) -> dict[str, Any]:
+    leaves = conversation.leaves
     grouped = _group_by_top_level(leaves)
     return _pick_from_target(grouped, _conversation_target(idx), rng)
 
 
 def _pick_safety(
-    safety: Ontology | None,
+    safety: Ontology,
     domain_key: str,
     capability_leaf: str,
     conversation_leaf: str,
     idx: int,
     rng: random.Random,
 ) -> dict[str, Any]:
-    leaves = _leaves_by_name(safety, ["standard_helpful_answer"], "normal")
+    leaves = safety.leaves
     grouped = _group_by_top_level(leaves)
     if domain_key in SAFETY_DOMAINS:
         target = "regulated_domain"
@@ -283,15 +247,21 @@ def build_anchor_prompt(
 def generate_anchor_prompts(
     knowledge: Ontology,
     language: Ontology,
+    capability: Ontology,
+    conversation: Ontology,
+    safety: Ontology,
     config: AnchorGenerationConfig,
-    capability: Ontology | None = None,
-    conversation: Ontology | None = None,
-    safety: Ontology | None = None,
 ) -> list[AnchorPrompt]:
     if not knowledge.leaves:
         raise ValueError("knowledge ontology has no leaves")
     if not language.leaves:
         raise ValueError("language ontology has no leaves")
+    if not capability.leaves:
+        raise ValueError("capability ontology has no leaves")
+    if not conversation.leaves:
+        raise ValueError("conversation ontology has no leaves")
+    if not safety.leaves:
+        raise ValueError("safety ontology has no leaves")
 
     rng = random.Random(config.seed)
     grouped_domains = _group_by_top_level(knowledge.leaves)

@@ -15,7 +15,6 @@ from ard.anchor.bank import (
     read_generated_input_anchors,
     write_jsonl,
 )
-from ard.modeling import ensure_tokenizer_ready
 
 LogFn = Callable[[str], None]
 
@@ -29,6 +28,16 @@ class TargetAnswerStats:
 
     def to_dict(self) -> dict[str, int]:
         return asdict(self)
+
+
+def ensure_tokenizer_ready(tokenizer: Any) -> None:
+    """Ensure a causal-LM tokenizer has a pad token for batching/generation."""
+    if getattr(tokenizer, "pad_token_id", None) is None:
+        eos_token = getattr(tokenizer, "eos_token", None)
+        if eos_token is not None:
+            tokenizer.pad_token = eos_token
+        else:
+            tokenizer.add_special_tokens({"pad_token": "<|pad|>"})
 
 
 def render_messages(

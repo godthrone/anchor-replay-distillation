@@ -2,26 +2,6 @@ generation:
   output_path: anchor_bank/default/anchor_prompts.jsonl
   count: 1000
   seed: 42
-  require_exact_count: false
   input_generator_model: unspecified_input_generator_model
   target_model: unspecified_target_model
   language_features_per_prompt: 2
-
-target:
-  model_path: ${MODEL_PATH}
-  output_path: anchor_bank/default/anchor_target_answers.jsonl
-  torch_dtype: bfloat16
-  max_new_tokens: 512
-  max_prompt_length: 2048
-  temperature: 0.7
-  top_p: 0.95
-
-filter:
-  output_path: anchor_bank/default/anchor_filtered.jsonl
-  min_answer_chars: 8
-  max_answer_chars: null
-
-split:
-  train_output_path: anchor_bank/default/anchor_train.jsonl
-  eval_output_path: anchor_bank/default/anchor_eval.jsonl
-  eval_ratio: 0.1
