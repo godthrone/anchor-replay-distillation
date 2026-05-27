@@ -2,7 +2,16 @@
 
 English | [简体中文](README_zh.md)
 
-Anchor Replay Distillation (ARD) is a two-hop data generation utility for building replay anchors that help preserve a base model's general abilities during domain fine-tuning. The repository provides one default entry point that creates `.venv`, installs dependencies, calls an OpenAI-compatible API, and writes an SFT-ready `anchor_bank.jsonl`.
+Anchor Replay Distillation (ARD) helps you generate ready-to-use chat data for
+supervised fine-tuning. You configure two OpenAI-compatible models:
+`ARD_INPUT_GENERATOR_*` writes realistic user requests, and `ARD_TARGET_*`
+answers those requests as the model you want to train, evaluate, or preserve.
+The result is an SFT-ready `anchor_bank.jsonl` that you can mix into a
+fine-tuning dataset to reduce forgetting of general skills such as question
+answering, reasoning, translation, coding, and safety behavior.
+
+The default workflow is intentionally simple: one command creates `.venv`,
+installs dependencies, calls the APIs, and writes the generated data.
 
 ## Quick Start
 

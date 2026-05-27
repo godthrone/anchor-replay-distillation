@@ -2,7 +2,13 @@
 
 [English](README.md) | 简体中文
 
-Anchor Replay Distillation（ARD）是一个 two-hop 数据生成工具，用于构建 replay anchors，在领域微调时帮助保护基座模型的通用能力。仓库默认提供一键数据生成入口：创建 `.venv`、安装依赖、调用 OpenAI-compatible API，并输出 SFT-ready `anchor_bank.jsonl`。
+Anchor Replay Distillation（ARD）用于自动生成可直接用于监督微调（SFT）的聊天数据。
+你只需要配置两个 OpenAI-compatible 模型：`ARD_INPUT_GENERATOR_*` 负责生成真实感
+用户请求，`ARD_TARGET_*` 负责按你要训练、评估或保留能力的目标模型来回答。最终输出
+是 SFT-ready 的 `anchor_bank.jsonl`，可以混入你的领域微调数据中，降低模型在微调后遗忘
+通用问答、推理、翻译、代码和安全边界等能力的风险。
+
+默认流程尽量保持简单：一条命令创建 `.venv`、安装依赖、调用 API，并写出生成数据。
 
 ## 快速开始
 
