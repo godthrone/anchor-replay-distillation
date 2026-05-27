@@ -104,6 +104,13 @@ Main outputs:
 - `input_generation_stats.json` / `target_answer_stats.json`: generation stats
 - `batch_*/`: intermediate prompts/generated-inputs/target-answers for debugging
 
+For the expected JSONL shape without any real API output, see
+`examples/anchor_bank.sample.jsonl`.
+
+During generation, logs include timestamps, progress percentage, throughput, and
+ETA. Input generation and target answer logs are interleaved because both model
+stages run as a pipeline.
+
 The default uses attempt-count semantics: `ARD_TARGET_COUNT=10` means ARD attempts 10 candidates, so `anchor_bank.jsonl` may contain fewer than 10 records after filtering. Filtering is intended to remove only clearly bad samples; set `ARD_REQUIRE_EXACT_COUNT=true` only when you need an exact final count.
 
 ## Changing Defaults

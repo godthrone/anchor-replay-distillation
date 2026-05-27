@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 import json
 import os
 import shutil
@@ -23,8 +24,14 @@ REQUIRED_API_KEYS = (
 PLACEHOLDER_VALUES = {"", "...", "replace-me", "your-api-key", "sk-..."}
 
 
+def log(message: str) -> None:
+    timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    print(f"ts={timestamp} {message}", flush=True)
+
+
 def fail(message: str) -> None:
-    print(f"ERROR: {message}", file=sys.stderr)
+    timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    print(f"ts={timestamp} level=error message={message}", file=sys.stderr)
     raise SystemExit(1)
 
 
@@ -93,7 +100,7 @@ def get_bool(env_values: dict[str, str], key: str, default: bool = False) -> boo
 
 
 def run(command: list[str], env: dict[str, str]) -> None:
-    print("+ " + " ".join(command))
+    log("cmd=" + " ".join(command))
     completed = subprocess.run(command, cwd=PROJECT_ROOT, env=env, check=False)
     if completed.returncode != 0:
         raise SystemExit(completed.returncode)
@@ -148,8 +155,8 @@ def validate_outputs(
             if api_key and api_key in content:
                 fail(f"API key leaked into output file: {output_file}")
 
-    print(f"Generated {anchor_count} anchors in {output_dir}")
-    print(f"Final dataset: {anchor_bank_path}")
+    log(f"status=validated generated={anchor_count} output_dir={output_dir}")
+    log(f"status=done anchor_bank={anchor_bank_path}")
 
 
 def main() -> int:

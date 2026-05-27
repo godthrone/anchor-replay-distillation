@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
 from pathlib import Path
 from typing import Any
@@ -49,7 +50,8 @@ def _optional_int(value: str | None) -> int | None:
 
 
 def _print_log(message: str) -> None:
-    print(message, flush=True)
+    timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    print(f"ts={timestamp} {message}", flush=True)
 
 
 def _load_seed_paths(args: argparse.Namespace, config_data: dict[str, Any]) -> dict[str, Any]:
