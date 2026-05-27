@@ -14,6 +14,7 @@ venv/
 *.env
 *API.txt
 api_env.txt
+AGENTS.md
 
 # Generated artifacts
 outputs/
