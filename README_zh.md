@@ -105,7 +105,7 @@ outputs/ard_anchor_dataset_YYYYMMDD_HHMMSS_n10_seed42/
 生成过程中，日志会包含时间戳、进度百分比、吞吐量和预计剩余时间（ETA）。
 input generation 和 target answer 会流水线并发执行，因此两类日志会交错出现。
 
-默认是“尝试数量语义”：`ARD_TARGET_COUNT=10` 表示尝试 10 个候选，过滤后 `anchor_bank.jsonl` 可能少于 10 条。过滤只筛明显坏样本；如果你必须拿到精确数量，把 `ARD_REQUIRE_EXACT_COUNT=true`。
+默认是“尝试数量语义”：`ARD_TARGET_COUNT=10` 表示尝试 10 个候选，过滤后 `anchor_bank.jsonl` 可能少于 10 条。过滤只筛明显坏样本；如果你必须让最终保留行数达到 `ARD_TARGET_COUNT`，把 `ARD_EXACT_FINAL_COUNT_ENABLED=true`。
 
 ## 输出格式
 
@@ -141,9 +141,9 @@ input generation 和 target answer 会流水线并发执行，因此两类日志
 
 ```env
 ARD_TARGET_COUNT=10
-ARD_BATCH_SIZE=10
-ARD_MAX_BATCHES=3
-ARD_REQUIRE_EXACT_COUNT=false
+ARD_EXACT_FINAL_COUNT_ENABLED=false
+ARD_EXACT_FINAL_COUNT_BATCH_SIZE=10
+ARD_EXACT_FINAL_COUNT_MAX_BATCHES=3
 ARD_SEED=42
 ARD_OUTPUT_DIR=
 ARD_OVERWRITE_OUTPUT=false
@@ -199,9 +199,9 @@ uv run pytest -q
 | `ARD_TARGET_MODEL_NAME` | 必填 | 你要训练、评估或保持能力的目标模型；它的回答会成为 SFT target。 |
 | `ARD_TARGET_API_KEY` | 必填 | 目标模型 API key。不要提交 `.env`。 |
 | `ARD_TARGET_COUNT` | `10` | 尝试生成的候选 input 数量。不是最终行数保证，因为过滤可能丢弃坏样本。 |
-| `ARD_BATCH_SIZE` | `10` | exact-count 补样模式下的 batch 大小。默认尝试数量模式会一次尝试 `ARD_TARGET_COUNT`。 |
-| `ARD_MAX_BATCHES` | `3` | `ARD_REQUIRE_EXACT_COUNT=true` 时最多补样多少批。 |
-| `ARD_REQUIRE_EXACT_COUNT` | `false` | 只有你必须让最终保留行数达到 `ARD_TARGET_COUNT` 时才设为 `true`。 |
+| `ARD_EXACT_FINAL_COUNT_ENABLED` | `false` | 只有你必须让最终保留行数达到 `ARD_TARGET_COUNT` 时才设为 `true`。默认 `false` 可以让 API 调用量更可预期。 |
+| `ARD_EXACT_FINAL_COUNT_BATCH_SIZE` | `10` | 仅 exact-final-count 模式启用时使用的额外候选 batch 大小。 |
+| `ARD_EXACT_FINAL_COUNT_MAX_BATCHES` | `3` | 仅 exact-final-count 模式启用时最多尝试多少批。 |
 | `ARD_SEED` | `42` | 采样 seed。修改它可以得到另一组可复现的样本分布。 |
 | `ARD_OUTPUT_DIR` | 留空 | 留空时自动在 `outputs/` 下创建时间戳目录。需要固定输出位置时再填写。 |
 | `ARD_OVERWRITE_OUTPUT` | `false` | 只有明确要写入非空输出目录时才设为 `true`。 |

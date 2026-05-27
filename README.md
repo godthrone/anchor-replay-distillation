@@ -111,7 +111,7 @@ During generation, logs include timestamps, progress percentage, throughput, and
 ETA. Input generation and target answer logs are interleaved because both model
 stages run as a pipeline.
 
-The default uses attempt-count semantics: `ARD_TARGET_COUNT=10` means ARD attempts 10 candidates, so `anchor_bank.jsonl` may contain fewer than 10 records after filtering. Filtering is intended to remove only clearly bad samples; set `ARD_REQUIRE_EXACT_COUNT=true` only when you need an exact final count.
+The default uses attempt-count semantics: `ARD_TARGET_COUNT=10` means ARD attempts 10 candidates, so `anchor_bank.jsonl` may contain fewer than 10 records after filtering. Filtering is intended to remove only clearly bad samples; set `ARD_EXACT_FINAL_COUNT_ENABLED=true` only when you need the final kept row count to reach `ARD_TARGET_COUNT`.
 
 ## Output Format
 
@@ -148,9 +148,9 @@ Edit `.env` to customize common parameters:
 
 ```env
 ARD_TARGET_COUNT=10
-ARD_BATCH_SIZE=10
-ARD_MAX_BATCHES=3
-ARD_REQUIRE_EXACT_COUNT=false
+ARD_EXACT_FINAL_COUNT_ENABLED=false
+ARD_EXACT_FINAL_COUNT_BATCH_SIZE=10
+ARD_EXACT_FINAL_COUNT_MAX_BATCHES=3
 ARD_SEED=42
 ARD_OUTPUT_DIR=
 ARD_OVERWRITE_OUTPUT=false
@@ -207,9 +207,9 @@ this section is the complete reference.
 | `ARD_TARGET_MODEL_NAME` | required | Model you are training, evaluating, or preserving; its answers become SFT targets. |
 | `ARD_TARGET_API_KEY` | required | API key for the target model. Never commit `.env`. |
 | `ARD_TARGET_COUNT` | `10` | Number of candidate inputs to attempt. This is not an exact final row guarantee because filtering may drop bad samples. |
-| `ARD_BATCH_SIZE` | `10` | Batch size for exact-count refill mode. In default attempt-count mode, the script attempts `ARD_TARGET_COUNT` once. |
-| `ARD_MAX_BATCHES` | `3` | Maximum refill batches when `ARD_REQUIRE_EXACT_COUNT=true`. |
-| `ARD_REQUIRE_EXACT_COUNT` | `false` | Set `true` only when you require the final kept row count to reach `ARD_TARGET_COUNT`. |
+| `ARD_EXACT_FINAL_COUNT_ENABLED` | `false` | Set `true` only when you require the final kept row count to reach `ARD_TARGET_COUNT`. Default `false` keeps API calls predictable. |
+| `ARD_EXACT_FINAL_COUNT_BATCH_SIZE` | `10` | Extra candidate batch size used only when exact-final-count mode is enabled. |
+| `ARD_EXACT_FINAL_COUNT_MAX_BATCHES` | `3` | Maximum batches to try only when exact-final-count mode is enabled. |
 | `ARD_SEED` | `42` | Sampling seed. Change it to get a different but reproducible sample mix. |
 | `ARD_OUTPUT_DIR` | blank | Leave blank to create a timestamped directory under `outputs/`. Set a fixed path when you want a stable output location. |
 | `ARD_OVERWRITE_OUTPUT` | `false` | Set `true` only when you intentionally want to write into a non-empty output directory. |
