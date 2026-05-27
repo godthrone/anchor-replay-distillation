@@ -6,13 +6,41 @@ Anchor Replay Distillation (ARD) is a two-hop data generation utility for buildi
 
 ## Quick Start
 
-1. Install uv:
+1. Install uv and verify the toolchain.
 
-```bash
-pipx install uv
+This project requires Python 3.11 or newer, but you do not need to install Python or
+`pipx` first when using uv's standalone installer. uv can install and manage the
+project Python for you.
+
+Windows PowerShell:
+
+```powershell
+irm https://astral.sh/uv/install.ps1 | iex
 ```
 
-You can also use the official uv install guide: https://docs.astral.sh/uv/
+macOS/Linux:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Close and reopen the terminal if `uv` is not found immediately, then verify:
+
+```bash
+uv --version
+uv run --no-project --python 3.11 python --version
+```
+
+The Python check should report Python 3.11 or newer without installing this
+project's dependencies. If no compatible Python is installed yet, uv may download
+one automatically. You can also install the project Python explicitly:
+
+```bash
+uv python install 3.11
+```
+
+If you already have Python and `pipx`, `pipx install uv` is also fine. See the
+official uv installation guide for more options: https://docs.astral.sh/uv/
 
 2. Configure the API:
 

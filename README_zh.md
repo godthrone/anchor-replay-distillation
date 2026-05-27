@@ -6,13 +6,39 @@ Anchor Replay Distillation（ARD）是一个 two-hop 数据生成工具，用于
 
 ## 快速开始
 
-1. 安装 uv：
+1. 安装 uv，并验证工具链。
 
-```bash
-pipx install uv
+本项目需要 Python 3.11 或更新版本，但如果你使用 uv 的 standalone installer，
+不需要先安装 Python 或 `pipx`。uv 可以自动安装和管理本项目使用的 Python。
+
+Windows PowerShell：
+
+```powershell
+irm https://astral.sh/uv/install.ps1 | iex
 ```
 
-也可以参考 uv 官方安装方式：https://docs.astral.sh/uv/
+macOS/Linux：
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+如果安装后立刻提示找不到 `uv`，请关闭并重新打开终端，然后验证：
+
+```bash
+uv --version
+uv run --no-project --python 3.11 python --version
+```
+
+这个 Python 检查应该输出 Python 3.11 或更新版本，并且不会安装本项目依赖。如果
+本机没有可用 Python，uv 通常会自动下载。你也可以显式安装项目使用的 Python：
+
+```bash
+uv python install 3.11
+```
+
+如果你已经有 Python 和 `pipx`，也可以用 `pipx install uv`。更多安装方式见 uv
+官方文档：https://docs.astral.sh/uv/
 
 2. 配置 API：
 
