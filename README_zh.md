@@ -13,9 +13,21 @@ Anchor Replay Distillation（ARD）是一个 two-hop 数据生成工具，用于
 
 Windows PowerShell：
 
+如果 PowerShell 提示 execution policy 阻止安装脚本，先允许当前用户运行已签名脚本。
+这不需要管理员权限：
+
+```powershell
+Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+然后再运行 uv 安装命令：
+
 ```powershell
 irm https://astral.sh/uv/install.ps1 | iex
 ```
+
+如果你只想在当前终端会话临时放行，也可以在安装前使用
+`Set-ExecutionPolicy Bypass -Scope Process -Force`。
 
 macOS/Linux：
 

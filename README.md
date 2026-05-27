@@ -14,9 +14,21 @@ project Python for you.
 
 Windows PowerShell:
 
+If PowerShell reports that the execution policy blocks the installer, enable
+user-level signed scripts first. This does not require administrator privileges:
+
+```powershell
+Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+Then run the uv installer:
+
 ```powershell
 irm https://astral.sh/uv/install.ps1 | iex
 ```
+
+If you prefer a temporary policy change for this terminal session only, use
+`Set-ExecutionPolicy Bypass -Scope Process -Force` before the installer instead.
 
 macOS/Linux:
 
