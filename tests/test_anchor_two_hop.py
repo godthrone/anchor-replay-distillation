@@ -475,6 +475,38 @@ def test_build_anchor_dataset_attempt_count_does_not_refill_by_default(tmp_path)
     assert manifest["filter_stats"]["dropped_too_short"] == 1
 
 
+def test_build_anchor_dataset_refuses_non_empty_output_dir(tmp_path):
+    output_dir = tmp_path / "dataset"
+    output_dir.mkdir()
+    (output_dir / "old.txt").write_text("previous run", encoding="utf-8")
+    seed_dir = tmp_path / "seed"
+    seed_dir.mkdir()
+    knowledge_path = seed_dir / "knowledge.json"
+    language_path = seed_dir / "language.json"
+    knowledge_path.write_text(json.dumps({"general": ["alpha"]}), encoding="utf-8")
+    language_path.write_text(json.dumps({"style": ["concise"]}), encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="Output directory already exists"):
+        build_anchor_dataset_api(
+            output_dir=output_dir,
+            target_count=1,
+            seed=1,
+            knowledge=load_ontology(knowledge_path),
+            language=load_ontology(language_path),
+            capability=None,
+            conversation=None,
+            safety=None,
+            languages=["English"],
+            task_types=["qa"],
+            input_generator_config=ChatAPIConfig(
+                "https://api.example.com", "input-generator", "secret"
+            ),
+            target_config=ChatAPIConfig("https://api.example.com", "target", "secret"),
+            input_generation_chat_fn=lambda *_args: "unique input",
+            target_answer_chat_fn=lambda **_kwargs: "useful answer",
+        )
+
+
 def test_build_anchor_dataset_exact_count_refills_when_enabled(tmp_path):
     seed_dir = tmp_path / "seed"
     seed_dir.mkdir()
