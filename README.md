@@ -85,6 +85,9 @@ ARD_TARGET_API_KEY=replace-me
 
 `.env` contains secrets and must not be committed. `.env-example` is the committed template.
 
+All user-facing generation settings live in `.env`. The default seed is
+`ARD_SEED=42`; change it when you want a different reproducible sample mix.
+
 3. Generate the default dataset:
 
 ```bash
@@ -143,6 +146,12 @@ Key `anchor_meta` fields:
 | `seed` | Seed used for reproducible sampling. |
 
 ## Changing Defaults
+
+For normal use, `.env` is the only configuration surface. `.env-example` lists
+every supported `ARD_*` environment variable, including the default seed
+`ARD_SEED=42`. The YAML file referenced by `ARD_CONFIG_PATH` defines the built-in
+anchor ontology and sampling distribution; keep it unchanged unless you are
+extending ARD itself.
 
 Edit `.env` to customize common parameters:
 

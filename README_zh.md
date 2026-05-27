@@ -80,6 +80,9 @@ ARD_TARGET_API_KEY=replace-me
 
 `.env` 包含密钥，不要提交；`.env-example` 是可提交的配置模板。
 
+所有面向用户的生成配置都在 `.env` 里。默认 seed 是 `ARD_SEED=42`；
+如果你想得到另一组可复现的样本分布，就修改它。
+
 3. 一键生成默认数据：
 
 ```bash
@@ -136,6 +139,10 @@ input generation 和 target answer 会流水线并发执行，因此两类日志
 | `seed` | 用于可复现采样的 seed。 |
 
 ## 修改默认参数
+
+正常使用时，`.env` 是唯一需要修改的配置入口。`.env-example` 列出了所有支持的
+`ARD_*` 环境变量，包括默认 seed `ARD_SEED=42`。`ARD_CONFIG_PATH` 指向的 YAML
+文件定义内置 anchor ontology 和采样分布；除非你要扩展 ARD 本身，否则保持默认即可。
 
 所有常用参数都在 `.env` 中修改：
 
