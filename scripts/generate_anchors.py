@@ -22,11 +22,6 @@ REQUIRED_API_KEYS = (
     "ARD_TARGET_API_KEY",
 )
 PLACEHOLDER_VALUES = {"", "...", "replace-me", "your-api-key", "sk-..."}
-DEPRECATED_ENV_KEYS = {
-    "ARD_REQUIRE_EXACT_COUNT": "ARD_EXACT_FINAL_COUNT_ENABLED",
-    "ARD_BATCH_SIZE": "ARD_EXACT_FINAL_COUNT_BATCH_SIZE",
-    "ARD_MAX_BATCHES": "ARD_EXACT_FINAL_COUNT_MAX_BATCHES",
-}
 
 
 def log(message: str) -> None:
@@ -175,11 +170,6 @@ def main() -> int:
         fail("uv is required. Install it from https://docs.astral.sh/uv/")
 
     env_values = parse_env_file(ENV_PATH)
-    deprecated_keys = [key for key in DEPRECATED_ENV_KEYS if key in env_values]
-    if deprecated_keys:
-        replacements = ", ".join(f"{key}->{DEPRECATED_ENV_KEYS[key]}" for key in deprecated_keys)
-        fail(f"Deprecated .env keys found. Rename them: {replacements}.")
-
     input_generator_api_base = get_required(env_values, "ARD_INPUT_GENERATOR_API_BASE")
     input_generator_model_name = get_required(env_values, "ARD_INPUT_GENERATOR_MODEL_NAME")
     input_generator_api_key = get_required(env_values, "ARD_INPUT_GENERATOR_API_KEY")
