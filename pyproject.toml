@@ -19,6 +19,9 @@ dependencies = [
 hf = [
   "transformers>=4.53.0",
 ]
+embed = [
+  "sentence-transformers>=3.0.0",
+]
 dev = [
   "mypy>=1.11.0",
   "pytest>=8.0.0",

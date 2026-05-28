@@ -19,7 +19,8 @@ from ard.anchor.bank import (
 from ard.anchor.manifest import build_anchor_manifest, write_manifest
 from ard.anchor.ontology import Ontology
 from ard.anchor.input_generator import InputGenerationStats, generate_one_anchor_input
-from ard.anchor.sampler import AnchorGenerationConfig, generate_anchor_prompts
+from ard.anchor.sampler import AnchorGenerationConfig, SamplingStrategy, generate_anchor_prompts
+from ard.anchor.embeddings import OntologyEmbeddings
 from ard.anchor.target import TargetAnswerStats, answer_one_generated_input_api
 
 ChatFn = Callable[..., str]
@@ -232,7 +233,6 @@ def build_anchor_dataset_api(
     language: Ontology,
     capability: Ontology,
     conversation: Ontology,
-    safety: Ontology,
     languages: list[str],
     task_types: list[str],
     input_generator_config: ChatAPIConfig,
@@ -251,6 +251,11 @@ def build_anchor_dataset_api(
     overwrite_output: bool = False,
     min_target_answer_chars: int = 8,
     max_target_answer_chars: int | None = None,
+    sampling_strategy: SamplingStrategy = "balanced",
+    ontology_embeddings: OntologyEmbeddings | None = None,
+    ontology_sha256: str | None = None,
+    embedding_model: str | None = None,
+    embedding_distance: str | None = None,
     input_generation_chat_fn: ChatFn | None = None,
     target_answer_chat_fn: ChatFn | None = None,
     logger: LogFn | None = None,
@@ -340,13 +345,17 @@ def build_anchor_dataset_api(
             task_types=task_types,
             input_generator_model=input_generator_config.model_name,
             target_model=target_config.model_name,
+            sampling_strategy=sampling_strategy,
+            ontology_embeddings=ontology_embeddings,
+            ontology_sha256=ontology_sha256,
+            embedding_model=embedding_model,
+            embedding_distance=embedding_distance,
         )
         prompts = generate_anchor_prompts(
             knowledge=knowledge,
             language=language,
             capability=capability,
             conversation=conversation,
-            safety=safety,
             config=config,
         )
         write_jsonl(prompts, prompts_path)
@@ -456,6 +465,10 @@ def build_anchor_dataset_api(
             "target_concurrency": target_concurrency,
             "min_target_answer_chars": min_target_answer_chars,
             "max_target_answer_chars": max_target_answer_chars,
+            "sampling_strategy": sampling_strategy,
+            "ontology_sha256": ontology_sha256,
+            "embedding_model": embedding_model,
+            "embedding_distance": embedding_distance,
         },
         anchors=final,
         seed=seed,
