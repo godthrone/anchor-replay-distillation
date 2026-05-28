@@ -21,7 +21,6 @@ def _write_test_anchor_ontology(
     language_features: dict | None = None,
     capabilities: dict | None = None,
     conversation_types: dict | None = None,
-    safety_boundaries: dict | None = None,
 ):
     path = tmp_path / "anchor_ontology.json"
     path.write_text(
@@ -32,7 +31,6 @@ def _write_test_anchor_ontology(
                 "language_features": language_features or {"style": ["concise"]},
                 "capabilities": capabilities or {"knowledge_response": ["qa"]},
                 "conversation_types": conversation_types or {"single_turn": ["single_turn"]},
-                "safety_boundaries": safety_boundaries or {"normal": ["standard_helpful_answer"]},
             }
         ),
         encoding="utf-8",
@@ -309,7 +307,6 @@ def test_build_anchor_dataset_api_end_to_end_with_fake_chat(tmp_path):
         language=ontology.language_features,
         capability=ontology.capabilities,
         conversation=ontology.conversation_types,
-        safety=ontology.safety_boundaries,
         languages=["English"],
         task_types=["qa"],
         input_generator_config=ChatAPIConfig(
@@ -377,7 +374,6 @@ def test_build_anchor_dataset_streams_target_answers_before_all_inputs_finish(tm
         language=ontology.language_features,
         capability=ontology.capabilities,
         conversation=ontology.conversation_types,
-        safety=ontology.safety_boundaries,
         languages=["English"],
         task_types=["qa"],
         input_generator_config=ChatAPIConfig(
@@ -444,7 +440,6 @@ def test_build_anchor_dataset_attempt_count_does_not_refill_by_default(tmp_path)
         language=ontology.language_features,
         capability=ontology.capabilities,
         conversation=ontology.conversation_types,
-        safety=ontology.safety_boundaries,
         languages=["English"],
         task_types=["qa"],
         input_generator_config=ChatAPIConfig(
@@ -481,7 +476,6 @@ def test_build_anchor_dataset_refuses_non_empty_output_dir(tmp_path):
             language=ontology.language_features,
             capability=ontology.capabilities,
             conversation=ontology.conversation_types,
-            safety=ontology.safety_boundaries,
             languages=["English"],
             task_types=["qa"],
             input_generator_config=ChatAPIConfig(
@@ -520,7 +514,6 @@ def test_build_anchor_dataset_exact_count_refills_when_enabled(tmp_path):
         language=ontology.language_features,
         capability=ontology.capabilities,
         conversation=ontology.conversation_types,
-        safety=ontology.safety_boundaries,
         languages=["English"],
         task_types=["qa"],
         input_generator_config=ChatAPIConfig(
@@ -564,7 +557,6 @@ def test_build_anchor_dataset_filters_duplicates_across_exact_batches(tmp_path):
         language=ontology.language_features,
         capability=ontology.capabilities,
         conversation=ontology.conversation_types,
-        safety=ontology.safety_boundaries,
         languages=["English"],
         task_types=["qa"],
         input_generator_config=ChatAPIConfig(
@@ -602,3 +594,40 @@ def test_anchor_build_dataset_command_is_registered():
     assert args.target_count == 3
     assert args.input_generator_concurrency == 4
     assert args.target_concurrency == 4
+    assert args.sampling_strategy == "farthest"
+
+
+def test_ontology_embed_command_writes_hash_sidecar(tmp_path):
+    from ard.cli import cmd_ontology_embed
+
+    ontology = _write_test_anchor_ontology(
+        tmp_path,
+        knowledge={"general": {"topic": ["alpha", "beta"]}},
+    )
+    ontology_path = tmp_path / "anchor_ontology.json"
+    output_path = tmp_path / "embeddings.json"
+
+    cmd_ontology_embed(
+        Namespace(
+            ontology=str(ontology_path),
+            output=str(output_path),
+            backend="hash",
+            model=None,
+            api_env_file=None,
+            batch_size=2,
+            timeout=1.0,
+            dimensions=8,
+        )
+    )
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["embedding_model"] == "research-neutral-lexical-bootstrap-v1"
+    assert payload["embedding_dimension"] == 8
+    assert {item["section"] for item in payload["items"]} >= {
+        "languages",
+        "knowledge_domains",
+        "capabilities",
+        "conversation_types",
+        "language_features",
+    }
+    assert ontology.knowledge.leaves
