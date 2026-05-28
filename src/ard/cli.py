@@ -51,6 +51,20 @@ def _ontology_path(args: argparse.Namespace) -> str:
     return str(args.ontology or DEFAULT_ONTOLOGY_PATH)
 
 
+def _ontology_embeddings_path(args: argparse.Namespace) -> str:
+    from ard.anchor.embeddings import DEFAULT_ONTOLOGY_EMBEDDINGS_PATH
+
+    return str(args.ontology_embeddings or DEFAULT_ONTOLOGY_EMBEDDINGS_PATH)
+
+
+def _load_sampling_embeddings(args: argparse.Namespace, ontology_path: str):
+    if args.sampling_strategy != "farthest":
+        return None
+    from ard.anchor.embeddings import load_ontology_embeddings
+
+    return load_ontology_embeddings(_ontology_embeddings_path(args), ontology_path)
+
+
 def _leaf_values(leaves: list[dict[str, Any]]) -> list[str]:
     return [str(leaf["leaf"]) for leaf in leaves]
 
@@ -71,7 +85,9 @@ def cmd_anchor_generate(args: argparse.Namespace) -> int:
     from ard.anchor import AnchorGenerationConfig, generate_anchor_prompts, load_anchor_ontology
     from ard.anchor.bank import write_jsonl
 
-    anchor_ontology = load_anchor_ontology(_ontology_path(args))
+    ontology_path = _ontology_path(args)
+    anchor_ontology = load_anchor_ontology(ontology_path)
+    ontology_embeddings = _load_sampling_embeddings(args, ontology_path)
     languages = _filtered_csv(args.languages, anchor_ontology.languages, "languages")
     task_types = _filtered_csv(
         args.task_types, _leaf_values(anchor_ontology.capabilities.leaves), "task_types"
@@ -84,13 +100,17 @@ def cmd_anchor_generate(args: argparse.Namespace) -> int:
         language_features_per_prompt=args.language_features_per_prompt,
         input_generator_model=args.input_generator_model,
         target_model=args.target_model,
+        sampling_strategy=args.sampling_strategy,
+        ontology_embeddings=ontology_embeddings,
+        ontology_sha256=ontology_embeddings.ontology_sha256 if ontology_embeddings else None,
+        embedding_model=ontology_embeddings.embedding_model if ontology_embeddings else None,
+        embedding_distance=ontology_embeddings.distance if ontology_embeddings else None,
     )
     prompts = generate_anchor_prompts(
         knowledge=anchor_ontology.knowledge,
         language=anchor_ontology.language_features,
         capability=anchor_ontology.capabilities,
         conversation=anchor_ontology.conversation_types,
-        safety=anchor_ontology.safety_boundaries,
         config=prompt_config,
     )
     write_jsonl(prompts, args.output)
@@ -218,7 +238,9 @@ def cmd_anchor_build_dataset(args: argparse.Namespace) -> int:
     from ard.anchor.api_client import chat_api_config_from_env
     from ard.anchor.pipeline import build_anchor_dataset_api
 
-    anchor_ontology = load_anchor_ontology(_ontology_path(args))
+    ontology_path = _ontology_path(args)
+    anchor_ontology = load_anchor_ontology(ontology_path)
+    ontology_embeddings = _load_sampling_embeddings(args, ontology_path)
     languages = _filtered_csv(args.languages, anchor_ontology.languages, "languages")
     task_types = _filtered_csv(
         args.task_types, _leaf_values(anchor_ontology.capabilities.leaves), "task_types"
@@ -231,7 +253,6 @@ def cmd_anchor_build_dataset(args: argparse.Namespace) -> int:
         language=anchor_ontology.language_features,
         capability=anchor_ontology.capabilities,
         conversation=anchor_ontology.conversation_types,
-        safety=anchor_ontology.safety_boundaries,
         languages=languages,
         task_types=task_types,
         input_generator_config=chat_api_config_from_env(
@@ -254,10 +275,93 @@ def cmd_anchor_build_dataset(args: argparse.Namespace) -> int:
         overwrite_output=args.overwrite_output,
         min_target_answer_chars=args.min_target_answer_chars,
         max_target_answer_chars=args.max_target_answer_chars,
+        sampling_strategy=args.sampling_strategy,
+        ontology_embeddings=ontology_embeddings,
+        ontology_sha256=ontology_embeddings.ontology_sha256 if ontology_embeddings else None,
+        embedding_model=ontology_embeddings.embedding_model if ontology_embeddings else None,
+        embedding_distance=ontology_embeddings.distance if ontology_embeddings else None,
         logger=None if args.quiet else _print_log,
     )
     print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
     return 0 if (not args.require_exact_count or result.final_count >= result.target_count) else 2
+
+
+def cmd_ontology_embed(args: argparse.Namespace) -> int:
+    from ard.anchor.embeddings import (
+        BOOTSTRAP_EMBEDDING_MODEL,
+        DEFAULT_EMBEDDING_MODEL,
+        build_ontology_embeddings,
+        hash_embed_texts,
+        write_ontology_embeddings,
+    )
+
+    ontology_path = _ontology_path(args)
+    model_name = args.model or DEFAULT_EMBEDDING_MODEL
+    if args.backend == "hash":
+        embeddings = build_ontology_embeddings(
+            ontology_path=ontology_path,
+            embed_fn=lambda texts: hash_embed_texts(texts, dimensions=args.dimensions),
+            embedding_model=BOOTSTRAP_EMBEDDING_MODEL,
+        )
+    elif args.backend == "local":
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            raise SystemExit(
+                "Local embedding backend requires `sentence-transformers`. "
+                "Install with `uv sync --extra embed`."
+            ) from exc
+
+        model = SentenceTransformer(model_name)
+        embeddings = build_ontology_embeddings(
+            ontology_path=ontology_path,
+            embed_fn=lambda texts: [
+                [float(value) for value in vector]
+                for vector in model.encode(
+                    texts,
+                    batch_size=args.batch_size,
+                    normalize_embeddings=True,
+                    show_progress_bar=False,
+                )
+            ],
+            embedding_model=model_name,
+        )
+    else:
+        from ard.anchor.api_client import create_embeddings, embedding_api_config_from_env
+
+        api_config = embedding_api_config_from_env(args.api_env_file, model_name)
+
+        def embed_api_batches(texts: list[str]) -> list[list[float]]:
+            vectors: list[list[float]] = []
+            for start in range(0, len(texts), args.batch_size):
+                vectors.extend(
+                    create_embeddings(
+                        api_config,
+                        texts[start : start + args.batch_size],
+                        timeout=args.timeout,
+                    )
+                )
+            return vectors
+
+        embeddings = build_ontology_embeddings(
+            ontology_path=ontology_path,
+            embed_fn=embed_api_batches,
+            embedding_model=api_config.model_name,
+        )
+    write_ontology_embeddings(embeddings, args.output)
+    print(
+        json.dumps(
+            {
+                "output": args.output,
+                "items": len(embeddings.items),
+                "embedding_model": embeddings.embedding_model,
+                "embedding_dimension": embeddings.embedding_dimension,
+                "ontology_sha256": embeddings.ontology_sha256,
+            },
+            ensure_ascii=False,
+        )
+    )
+    return 0
 
 
 def cmd_eval_forgetting(args: argparse.Namespace) -> int:
@@ -321,10 +425,29 @@ def build_parser() -> argparse.ArgumentParser:
     anchor_generate.add_argument("--task-types")
     anchor_generate.add_argument("--language-features-per-prompt", type=int, default=2)
     anchor_generate.add_argument(
+        "--sampling-strategy",
+        choices=["farthest", "balanced", "random"],
+        default="farthest",
+    )
+    anchor_generate.add_argument("--ontology-embeddings")
+    anchor_generate.add_argument(
         "--input-generator-model", default="unspecified_input_generator_model"
     )
     anchor_generate.add_argument("--target-model", default="unspecified_target_model")
     anchor_generate.set_defaults(func=cmd_anchor_generate)
+
+    ontology_embed = subparsers.add_parser(
+        "ontology-embed", help="Generate embedding sidecar for an ARD ontology."
+    )
+    _add_ontology_arg(ontology_embed)
+    ontology_embed.add_argument("--output", "-o", required=True)
+    ontology_embed.add_argument("--backend", choices=["local", "api", "hash"], default="local")
+    ontology_embed.add_argument("--model")
+    ontology_embed.add_argument("--api-env-file")
+    ontology_embed.add_argument("--batch-size", type=int, default=32)
+    ontology_embed.add_argument("--timeout", type=float, default=60)
+    ontology_embed.add_argument("--dimensions", type=int, default=64)
+    ontology_embed.set_defaults(func=cmd_ontology_embed)
 
     anchor_generate_inputs = subparsers.add_parser(
         "anchor-generate-inputs",
@@ -411,6 +534,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_ontology_arg(anchor_build)
     anchor_build.add_argument("--languages")
     anchor_build.add_argument("--task-types")
+    anchor_build.add_argument(
+        "--sampling-strategy",
+        choices=["farthest", "balanced", "random"],
+        default="farthest",
+    )
+    anchor_build.add_argument("--ontology-embeddings")
     anchor_build.add_argument(
         "--input-generator-max-tokens",
         type=int,

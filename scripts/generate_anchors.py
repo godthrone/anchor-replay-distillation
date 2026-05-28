@@ -243,6 +243,8 @@ def main() -> int:
         "ARD_ONTOLOGY_PATH": "--ontology",
         "ARD_LANGUAGES": "--languages",
         "ARD_TASK_TYPES": "--task-types",
+        "ARD_SAMPLING_STRATEGY": "--sampling-strategy",
+        "ARD_ONTOLOGY_EMBEDDINGS_PATH": "--ontology-embeddings",
         "ARD_INPUT_GENERATOR_MAX_TOKENS": "--input-generator-max-tokens",
         "ARD_TARGET_MAX_TOKENS": "--target-max-tokens",
         "ARD_MIN_TARGET_ANSWER_CHARS": "--min-target-answer-chars",

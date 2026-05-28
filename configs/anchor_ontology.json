@@ -2,17 +2,205 @@
   "languages": [
     "English",
     "简体中文",
-    "bilingual_zh_en"
+    "Español",
+    "日本語"
   ],
   "knowledge_domains": {
+    "science_exploration": {
+      "frontier_questions": [
+        "origin of the universe",
+        "origin of life",
+        "limits of scientific measurement",
+        "dark matter hypotheses",
+        "deep ocean unknowns",
+        "planetary habitability",
+        "complex systems emergence",
+        "consciousness research"
+      ],
+      "research_practice": [
+        "hypothesis formation",
+        "experiment design",
+        "evidence interpretation",
+        "replication challenges",
+        "field observation",
+        "scientific controversy mapping"
+      ]
+    },
+    "art_aesthetics": {
+      "art_forms": [
+        "painting interpretation",
+        "music structure",
+        "film language",
+        "architecture experience",
+        "dance notation",
+        "theater staging",
+        "installation art"
+      ],
+      "aesthetic_questions": [
+        "taste formation",
+        "beauty and ugliness",
+        "symbolism in art",
+        "avant-garde movements",
+        "craft versus concept",
+        "audience reception"
+      ]
+    },
+    "philosophy_worldviews": {
+      "classic_questions": [
+        "free will",
+        "personal identity",
+        "meaning of life",
+        "mind and body",
+        "knowledge and skepticism",
+        "ethics and consequences",
+        "time and change"
+      ],
+      "comparative_worldviews": [
+        "stoicism",
+        "existentialism",
+        "pragmatism",
+        "daoist thought",
+        "buddhist philosophy",
+        "indigenous worldviews"
+      ]
+    },
+    "religion_myth_folklore": {
+      "comparative_religion": [
+        "ritual practice",
+        "sacred texts",
+        "pilgrimage traditions",
+        "monastic life",
+        "religious symbolism",
+        "festival calendars"
+      ],
+      "myth_and_folklore": [
+        "creation myths",
+        "hero journeys",
+        "trickster figures",
+        "local legends",
+        "oral storytelling",
+        "monster folklore"
+      ]
+    },
+    "esoterica_belief_systems": {
+      "cultural_practices": [
+        "astrology as cultural practice",
+        "divination traditions",
+        "alchemy history",
+        "feng shui concepts",
+        "dream interpretation traditions",
+        "numerology culture"
+      ],
+      "belief_analysis": [
+        "symbolic interpretation",
+        "syncretic belief systems",
+        "mysticism in literature",
+        "urban occult subcultures",
+        "extraordinary claim analysis",
+        "ritual object meanings"
+      ]
+    },
+    "society_events": {
+      "social_dynamics": [
+        "public opinion shifts",
+        "rumor spread",
+        "crowd behavior",
+        "institutional trust",
+        "generational change",
+        "migration narratives",
+        "community resilience"
+      ],
+      "events_and_memory": [
+        "disaster memory",
+        "public ceremonies",
+        "sports and identity",
+        "protest repertoires",
+        "media framing",
+        "collective mourning"
+      ]
+    },
+    "history_civilization": {
+      "civilizational_patterns": [
+        "urbanization",
+        "trade networks",
+        "empire administration",
+        "technological diffusion",
+        "agricultural transitions",
+        "writing systems",
+        "maritime exchange"
+      ],
+      "historical_reasoning": [
+        "source criticism",
+        "counterfactual history",
+        "periodization",
+        "historical causality",
+        "memory and monuments",
+        "archival interpretation"
+      ]
+    },
+    "culture_anthropology": {
+      "cultural_practice": [
+        "food taboos",
+        "gift exchange",
+        "kinship systems",
+        "coming-of-age rituals",
+        "naming customs",
+        "hospitality norms",
+        "body language"
+      ],
+      "cross_cultural_interpretation": [
+        "translation of customs",
+        "cultural misunderstanding",
+        "subculture signals",
+        "diaspora identity",
+        "tourism encounters",
+        "workplace culture"
+      ]
+    },
+    "human_oddities": {
+      "unusual_cases": [
+        "strange historical anecdotes",
+        "unusual inventions",
+        "rare hobbies",
+        "unexpected statistics",
+        "odd legal cases",
+        "bizarre coincidences",
+        "curious museum objects"
+      ],
+      "everyday_absurdity": [
+        "awkward social situations",
+        "misleading labels",
+        "counterintuitive habits",
+        "strange customer requests",
+        "unexpected failure modes",
+        "funny naming collisions"
+      ]
+    },
+    "future_speculation": {
+      "long_term_scenarios": [
+        "future cities",
+        "space settlement",
+        "climate adaptation",
+        "AI and labor",
+        "post-scarcity imaginaries",
+        "bioengineering futures",
+        "education in 2050"
+      ],
+      "scenario_methods": [
+        "trend extrapolation",
+        "wild cards",
+        "backcasting",
+        "risk narratives",
+        "technology adoption curves",
+        "second-order effects"
+      ]
+    },
     "software_engineering": {
       "programming": [
         "Python debugging",
         "JavaScript async code",
         "SQL query design",
         "Rust ownership and lifetimes",
-        "Java concurrency",
-        "Go services",
         "regular expressions",
         "API client design"
       ],
@@ -21,25 +209,7 @@
         "testing strategy",
         "code review",
         "refactoring plan",
-        "dependency management",
-        "backward compatibility"
-      ]
-    },
-    "systems_devops": {
-      "operations": [
-        "Linux troubleshooting",
-        "Docker deployment",
-        "Kubernetes rollout",
-        "CI/CD pipeline failure",
-        "observability and alerting",
-        "network connectivity",
-        "storage capacity"
-      ],
-      "security_operations": [
-        "secret rotation",
-        "least privilege access",
-        "incident triage",
-        "log investigation"
+        "dependency management"
       ]
     },
     "data_ai_ml": {
@@ -55,8 +225,7 @@
         "training data quality",
         "classification error analysis",
         "embedding search",
-        "prompt evaluation",
-        "LLM hallucination diagnosis"
+        "prompt evaluation"
       ]
     },
     "math_logic": {
@@ -70,99 +239,54 @@
       "math": [
         "percentage calculation",
         "unit conversion",
-        "table interpretation",
         "probability",
         "algebra",
-        "optimization",
         "statistical inference"
       ]
     },
-    "science_engineering": {
-      "physical_science": [
-        "basic physics explanation",
-        "chemistry concept",
-        "astronomy fact check",
-        "energy and power calculation"
-      ],
-      "engineering": [
-        "mechanical tradeoff",
-        "electrical circuit intuition",
-        "materials constraint",
-        "environmental impact"
-      ]
-    },
-    "business_operations": {
-      "service": [
-        "customer ticket triage",
-        "incident summary",
-        "field maintenance report",
-        "support escalation",
-        "root cause summary"
-      ],
-      "process": [
-        "meeting action items",
-        "risk assessment",
-        "status update",
-        "project planning",
-        "stakeholder communication",
-        "policy rollout"
-      ]
-    },
     "finance_economics": {
-      "personal_finance_safety": [
+      "personal_finance": [
         "budget comparison",
         "loan term explanation",
-        "risk disclosure",
-        "non-advisory investment education"
+        "household tradeoffs",
+        "insurance concepts"
       ],
-      "business_finance": [
+      "economic_life": [
         "invoice reconciliation",
         "revenue variance",
         "cost benefit analysis",
-        "economic tradeoff explanation"
+        "inflation experience",
+        "market narratives"
       ]
     },
-    "law_policy_safety": {
-      "legal_information_safety": [
+    "law_policy_institutions": {
+      "legal_systems": [
         "contract clause explanation",
         "privacy policy summary",
         "employment policy question",
-        "non-advisory legal information"
+        "court procedure overview"
       ],
-      "policy_and_compliance": [
+      "public_institutions": [
         "data retention policy",
         "access control policy",
         "regulatory checklist",
-        "compliance risk summary"
+        "institutional accountability",
+        "public service design"
       ]
     },
-    "medicine_health_safety": {
-      "health_information_safety": [
-        "symptom information boundary",
-        "medication safety disclaimer",
-        "when to seek professional care",
+    "medicine_health": {
+      "health_information": [
+        "symptom terminology",
+        "medication label interpretation",
+        "appointment preparation",
         "wellness education"
       ],
-      "clinical_operations": [
-        "appointment preparation",
+      "health_systems": [
         "patient instruction rewrite",
         "medical terminology explanation",
-        "triage boundary clarification"
-      ]
-    },
-    "humanities_world_knowledge": {
-      "world_knowledge": [
-        "history explanation",
-        "geography comparison",
-        "civic concept",
-        "culture and etiquette",
-        "current-affairs uncertainty handling"
-      ],
-      "humanities": [
-        "literary analysis",
-        "philosophy argument",
-        "education tutoring",
-        "media literacy"
+        "clinical workflow",
+        "public health communication",
+        "caregiver coordination"
       ]
     },
     "language_writing_translation": {
@@ -177,9 +301,9 @@
       "cross_lingual": [
         "English to Chinese translation",
         "Chinese to English translation",
-        "bilingual terminology",
-        "translation with cultural context",
-        "multilingual summary"
+        "Spanish terminology",
+        "Japanese terminology",
+        "translation with cultural context"
       ]
     },
     "agent_tool_use": {
@@ -228,8 +352,8 @@
     "agentic_behavior": [
       "tool_use",
       "ask_clarification",
-      "refusal_safety",
-      "uncertainty_handling"
+      "uncertainty_handling",
+      "structured_response"
     ]
   },
   "conversation_types": {
@@ -246,26 +370,9 @@
       "iterative_revision_3_turn",
       "constraint_update_4_turn"
     ],
-    "tool_and_safety": [
+    "tool_context": [
       "tool_assisted_multi_turn",
-      "refusal_or_boundary_multi_turn"
-    ]
-  },
-  "safety_boundaries": {
-    "normal": [
-      "standard_helpful_answer",
-      "ask_clarification_when_missing_info",
-      "state_uncertainty_when_needed"
-    ],
-    "regulated_domain": [
-      "medical_information_not_diagnosis",
-      "legal_information_not_legal_advice",
-      "financial_education_not_investment_advice"
-    ],
-    "boundary": [
-      "safe_completion",
-      "refuse_unsafe_request",
-      "redirect_to_safe_alternative"
+      "source_review_multi_turn"
     ]
   },
   "language_features": {
@@ -308,7 +415,7 @@
       "direct_answer",
       "explain_then_answer",
       "ask_before_answering",
-      "safe_non_authoritative_guidance"
+      "structured_analysis"
     ]
   }
 }

@@ -20,6 +20,17 @@ class ChatAPIConfig:
         return self.api_base.rstrip("/") + "/chat/completions"
 
 
+@dataclass(slots=True)
+class EmbeddingAPIConfig:
+    api_base: str
+    model_name: str
+    api_key: str
+
+    @property
+    def embeddings_url(self) -> str:
+        return self.api_base.rstrip("/") + "/embeddings"
+
+
 def load_api_env_file(path: str | Path | None) -> dict[str, str]:
     values: dict[str, str] = {}
     if path is None:
@@ -61,6 +72,37 @@ def chat_api_config_from_env(
     if missing:
         raise ValueError(f"Missing API configuration: {', '.join(missing)}")
     return ChatAPIConfig(
+        api_base=str(api_base),
+        model_name=str(resolved_model),
+        api_key=str(api_key),
+    )
+
+
+def embedding_api_config_from_env(
+    env_file: str | Path | None = None,
+    model_name: str | None = None,
+    env_prefix: str = "ARD_EMBEDDING",
+) -> EmbeddingAPIConfig:
+    file_values = load_api_env_file(env_file)
+    api_base_key = f"{env_prefix}_API_BASE"
+    model_name_key = f"{env_prefix}_MODEL_NAME"
+    api_key_key = f"{env_prefix}_API_KEY"
+    api_base = file_values.get(api_base_key) or os.environ.get(api_base_key)
+    env_model = file_values.get(model_name_key) or os.environ.get(model_name_key)
+    api_key = file_values.get(api_key_key) or os.environ.get(api_key_key)
+    resolved_model = model_name or env_model
+    missing = [
+        name
+        for name, value in {
+            api_base_key: api_base,
+            model_name_key: resolved_model,
+            api_key_key: api_key,
+        }.items()
+        if not value
+    ]
+    if missing:
+        raise ValueError(f"Missing embedding API configuration: {', '.join(missing)}")
+    return EmbeddingAPIConfig(
         api_base=str(api_base),
         model_name=str(resolved_model),
         api_key=str(api_key),
@@ -111,3 +153,42 @@ def chat_completion(
     if not isinstance(content, str) or not content.strip():
         raise RuntimeError("chat completions response did not contain message content")
     return content.strip()
+
+
+def create_embeddings(
+    config: EmbeddingAPIConfig,
+    texts: list[str],
+    timeout: float = 60,
+) -> list[list[float]]:
+    payload = {
+        "model": config.model_name,
+        "input": texts,
+    }
+    request = urllib.request.Request(
+        config.embeddings_url,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {config.api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            response_payload: dict[str, Any] = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"embeddings request failed with HTTP {exc.code}: {body}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"embeddings request failed: {exc.reason}") from exc
+
+    data = response_payload.get("data")
+    if not isinstance(data, list) or len(data) != len(texts):
+        raise RuntimeError("embeddings response did not contain one vector per input")
+    vectors: list[list[float]] = []
+    for item in sorted(data, key=lambda record: int(record.get("index", 0))):
+        embedding = item.get("embedding") if isinstance(item, dict) else None
+        if not isinstance(embedding, list):
+            raise RuntimeError("embeddings response item did not contain an embedding list")
+        vectors.append([float(value) for value in embedding])
+    return vectors

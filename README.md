@@ -2,76 +2,38 @@
 
 English | [简体中文](README_zh.md)
 
-Anchor Replay Distillation (ARD) helps you generate ready-to-use chat data for
+Anchor Replay Distillation (ARD) generates research-neutral chat data for
 supervised fine-tuning. You configure two OpenAI-compatible models:
-`ARD_INPUT_GENERATOR_*` writes realistic user requests, and `ARD_TARGET_*`
-answers those requests as the model you want to train, evaluate, or preserve.
-The result is an SFT-ready `anchor_bank.jsonl` that you can mix into a
-fine-tuning dataset to reduce forgetting of general skills such as question
-answering, reasoning, translation, coding, and safety behavior.
+`ARD_INPUT_GENERATOR_*` writes realistic user-side requests from sampled anchor
+specs, and `ARD_TARGET_*` answers those requests as the model you want to train,
+evaluate, or preserve.
 
-The default workflow is intentionally simple: one command creates `.venv`,
-installs dependencies, calls the APIs, and writes the generated data.
-This repository focuses on data generation; it does not include a model training
-or fine-tuning runner.
+The result is an SFT-ready `anchor_bank.jsonl` that can be mixed into another
+fine-tuning dataset to reduce forgetting of broad capabilities such as question
+answering, reasoning, translation, coding, writing, tool use, and general world
+knowledge. ARD is a data-generation utility; it does not include a training
+runner.
 
 ## Quick Start
 
-1. Install uv and verify the toolchain.
-
-This project requires Python 3.11 or newer, but you do not need to install Python or
-`pipx` first when using uv's standalone installer. uv can install and manage the
-project Python for you.
-
-Windows PowerShell:
-
-If PowerShell reports that the execution policy blocks the installer, enable
-user-level signed scripts first. This does not require administrator privileges:
-
-```powershell
-Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
-```
-
-Then run the uv installer:
-
-```powershell
-irm https://astral.sh/uv/install.ps1 | iex
-```
-
-If you prefer a temporary policy change for this terminal session only, use
-`Set-ExecutionPolicy Bypass -Scope Process -Force` before the installer instead.
-
-macOS/Linux:
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-Close and reopen the terminal if `uv` is not found immediately, then verify:
+1. Install uv and verify Python 3.11+:
 
 ```bash
 uv --version
 uv run --no-project --python 3.11 python --version
 ```
 
-The Python check should report Python 3.11 or newer without installing this
-project's dependencies. If no compatible Python is installed yet, uv may download
-one automatically. You can also install the project Python explicitly:
+If uv is not installed, see https://docs.astral.sh/uv/. On Windows PowerShell,
+you may need `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser` before
+running uv's installer.
 
-```bash
-uv python install 3.11
-```
-
-If you already have Python and `pipx`, `pipx install uv` is also fine. See the
-official uv installation guide for more options: https://docs.astral.sh/uv/
-
-2. Configure the API:
+2. Configure the APIs:
 
 ```bash
 cp .env-example .env
 ```
 
-Open `.env` and fill in:
+Fill in the required values:
 
 ```env
 ARD_INPUT_GENERATOR_API_BASE=https://example.com/v1
@@ -83,12 +45,8 @@ ARD_TARGET_MODEL_NAME=deepseek-v4-flash
 ARD_TARGET_API_KEY=replace-me
 ```
 
-`ARD_INPUT_GENERATOR_*` is the stronger input generator model that turns anchor specs into realistic user messages. `ARD_TARGET_*` is the model you are training, evaluating, or preserving; its answers become the SFT target.
-
-`.env` contains secrets and must not be committed. `.env-example` is the committed template.
-
-All user-facing generation settings live in `.env`. The default seed is
-`ARD_SEED=42`; change it when you want a different reproducible sample mix.
+`.env` contains secrets and must not be committed. `.env-example` is the
+committed template.
 
 3. Generate the default dataset:
 
@@ -96,68 +54,57 @@ All user-facing generation settings live in `.env`. The default seed is
 uv run python scripts/generate_anchors.py
 ```
 
-The script runs `uv sync --extra dev`, then attempts 10 candidate anchors by default under a timestamped run directory:
-
-```text
-outputs/ard_anchor_dataset_YYYYMMDD_HHMMSS_n10_seed42/
-```
+The script runs `uv sync --extra dev`, then attempts 10 candidate anchors by
+default under a timestamped `outputs/ard_anchor_dataset_*` directory.
 
 Main outputs:
 
 - `anchor_bank.jsonl`: final SFT-ready data
-- `manifest.json`: distribution, seed, and model metadata
+- `manifest.json`: distribution, seed, model, and sampling metadata
 - `input_generation_stats.json` / `target_answer_stats.json`: generation stats
-- `batch_*/`: intermediate prompts/generated-inputs/target-answers for debugging
+- `batch_*/`: intermediate prompts, generated inputs, and target answers
 
-For the expected JSONL shape without any real API output, see
+For the expected JSONL shape without real API output, see
 [examples/anchor_bank.sample.jsonl](examples/anchor_bank.sample.jsonl).
 
-During generation, logs include timestamps, progress percentage, throughput, and
-ETA. Input generation and target answer logs are interleaved because both model
-stages run as a pipeline.
-
-The default uses attempt-count semantics: `ARD_TARGET_COUNT=10` means ARD attempts 10 candidates, so `anchor_bank.jsonl` may contain fewer than 10 records after filtering. Filtering is intended to remove only clearly bad samples; set `ARD_EXACT_FINAL_COUNT_ENABLED=true` only when you need the final kept row count to reach `ARD_TARGET_COUNT`.
+All repository text artifacts and generated JSON/JSONL outputs are written as
+UTF-8. Non-ASCII language content is kept directly readable rather than escaped
+as `\uXXXX`, except for JSON-required escaping such as newlines and backslashes.
 
 ## Output Format
 
 `anchor_bank.jsonl` is newline-delimited JSON. Each line is one SFT-ready chat
-sample. Check `messages` to understand whether the sample is single-turn or
-multi-turn, and check `anchor_meta` to understand its language, capability,
-task type, safety boundary, and sampling bucket.
+sample. `messages` shows the single-turn or multi-turn chat context, and
+`anchor_meta` records the research-neutral sampling dimensions.
 
 | Field | Meaning |
 | --- | --- |
 | `id` | Stable anchor sample ID. |
-| `messages` | Chat input context. Single-turn samples contain one user message; multi-turn samples contain prior user/assistant turns plus the final user request. |
-| `target_answer` | The target model answer used as the SFT supervision text. |
+| `messages` | Chat input context. |
+| `target_answer` | Target model answer used as SFT supervision text. |
 | `target_model` | Model that produced `target_answer`. |
-| `input_generator_model` | Strong model that generated the realistic user input. |
+| `input_generator_model` | Model that generated realistic user-side input. |
 | `anchor_meta` | Sampling metadata and capability labels. |
 
 Key `anchor_meta` fields:
 
 | Field | Meaning |
 | --- | --- |
-| `language` | Output/input language bucket, such as `English`, `简体中文`, or `bilingual_zh_en`. |
-| `knowledge_domain` | Knowledge or work domain sampled for the anchor. |
-| `capability` | Capability being preserved, such as explanation, comparison, reasoning, tool choice, or uncertainty handling. |
+| `language` | Language bucket, such as `English`, `简体中文`, `Español`, or `日本語`. |
+| `knowledge_domain` | Knowledge or research domain sampled for the anchor. |
+| `capability` | Capability label, such as explanation, comparison, reasoning, tool choice, or writing. |
 | `task_type` | Task label used for filtering or balancing. |
-| `conversation_type` | Conversation pattern, such as `single_turn`, `troubleshooting_3_turn`, or `constraint_update_4_turn`. |
+| `conversation_type` | Conversation pattern, such as `single_turn` or `constraint_update_4_turn`. |
 | `is_multi_turn` | Whether `messages` includes multiple conversation turns. |
-| `safety_boundary` | Expected safety/authority behavior, such as standard answer, clarification, refusal, or safe redirect. |
+| `sampling_strategy` | `farthest`, `balanced`, or `random`. |
+| `ontology_sha256` | Hash used to validate ontology embedding sidecars when applicable. |
 | `seed` | Seed used for reproducible sampling. |
 
 ## Changing Defaults
 
-For runtime settings, `.env` is the main configuration surface. `.env-example`
-lists every supported `ARD_*` environment variable, including the default seed
-`ARD_SEED=42`. Runtime settings stay in `.env` and CLI flags; all sampling
-choices for generated questions live in one JSON file:
-`configs/anchor_ontology.json`. Copy and edit that file when you
-want ARD to generate data for your own domains, languages, capabilities,
-conversation types, safety boundaries, or language features.
-
-Edit `.env` to customize common parameters:
+Runtime settings live in `.env` and CLI flags. The ontology lives in
+`configs/anchor_ontology.json`; the default precomputed embedding sidecar lives
+in `configs/anchor_ontology_embeddings.json`.
 
 ```env
 ARD_TARGET_COUNT=10
@@ -168,6 +115,8 @@ ARD_SEED=42
 ARD_OUTPUT_DIR=
 ARD_OVERWRITE_OUTPUT=false
 ARD_ONTOLOGY_PATH=configs/anchor_ontology.json
+ARD_ONTOLOGY_EMBEDDINGS_PATH=configs/anchor_ontology_embeddings.json
+ARD_SAMPLING_STRATEGY=farthest
 ARD_LANGUAGES=
 ARD_TASK_TYPES=
 ARD_TEMPERATURE=0.7
@@ -182,42 +131,74 @@ ARD_INPUT_GENERATOR_MAX_TOKENS=
 ARD_TARGET_MAX_TOKENS=
 ```
 
-`ARD_INPUT_GENERATOR_CONCURRENCY` and `ARD_TARGET_CONCURRENCY` control the two API stages independently. The defaults assume a provider/model tier that allows high request concurrency; lower them if your API provider rate-limits or times out. The end-to-end builder is pipelined: once one input is generated, its target answer can start immediately without waiting for all inputs to finish.
-
-Leave `ARD_OUTPUT_DIR` blank to avoid overwriting previous runs. If you set a fixed
-`ARD_OUTPUT_DIR`, ARD refuses to write into a non-empty directory unless
-`ARD_OVERWRITE_OUTPUT=true`.
-
 `ARD_LANGUAGES` and `ARD_TASK_TYPES` are comma-separated runtime filters. Leave
-them blank to use the full ontology defaults, or narrow a run like this:
+them blank to use ontology defaults, or narrow a run like this:
 
 ```env
-ARD_LANGUAGES=English,简体中文,bilingual_zh_en
+ARD_LANGUAGES=English,简体中文,Español,日本語
 ARD_TASK_TYPES=qa,explanation,reasoning,coding,debugging
 ```
 
-Leave `ARD_MAX_TARGET_ANSWER_CHARS` blank to keep long target answers. Strict requirement: do not set `ARD_INPUT_GENERATOR_MAX_TOKENS` or `ARD_TARGET_MAX_TOKENS` by default. When they are blank, ARD does not send `max_tokens` or any equivalent token cap to large-model API calls, letting the provider/model use its default output budget. Fill them only when you intentionally want to override that default.
+Leave `ARD_MAX_TARGET_ANSWER_CHARS` blank to keep long target answers.
+
+Strict API requirement: do not set `ARD_INPUT_GENERATOR_MAX_TOKENS` or
+`ARD_TARGET_MAX_TOKENS` by default. When they are blank, ARD does not send
+`max_tokens`, letting the provider/model use its default output budget.
 
 ## Sampling Ontology
 
-ARD samples from a single JSON file: `configs/anchor_ontology.json`. The
-file is plain nested JSON. Dictionaries create paths, lists contain leaf values,
-and each leaf becomes a possible sampling choice.
+ARD samples from `configs/anchor_ontology.json`. Dictionaries create paths,
+lists contain leaf values, and each leaf becomes a possible sampling choice.
 
 Top-level sections:
 
-| Section | Meaning | Default top-level values |
-| --- | --- | --- |
-| `languages` | Output language buckets. | `English`, `简体中文`, `bilingual_zh_en` |
-| `knowledge_domains` | Knowledge/work domains. | `software_engineering`, `systems_devops`, `data_ai_ml`, `math_logic`, `science_engineering`, `business_operations`, `finance_economics`, `law_policy_safety`, `medicine_health_safety`, `humanities_world_knowledge`, `language_writing_translation`, `agent_tool_use` |
-| `capabilities` | Capability/task labels. | `knowledge_response`, `reasoning`, `coding_and_data`, `language_work`, `agentic_behavior` |
-| `conversation_types` | Single-turn and multi-turn shapes. | `single_turn`, `clarification`, `troubleshooting`, `revision`, `tool_and_safety` |
-| `safety_boundaries` | Safety and authority-boundary behavior. | `normal`, `regulated_domain`, `boundary` |
-| `language_features` | Style, format, difficulty, context length, noise, and answer expectation. | `style`, `format`, `difficulty`, `context_length`, `noise`, `answer_expectation` |
+| Section | Meaning |
+| --- | --- |
+| `languages` | Output language buckets. |
+| `knowledge_domains` | Broad research and work domains, including science exploration, art, philosophy, religion/folklore, esoterica as cultural phenomena, society, history, culture, unusual phenomena, future speculation, technical work, finance, law, medicine, writing, and tool use. |
+| `capabilities` | Capability/task labels. |
+| `conversation_types` | Single-turn and multi-turn shapes. |
+| `language_features` | Style, format, difficulty, context length, noise, and answer expectation. |
 
-To customize the sampling space, copy `configs/anchor_ontology.json`,
-edit the copy, then set `ARD_ONTOLOGY_PATH` to that file. To only narrow one run,
-use `ARD_LANGUAGES` or `ARD_TASK_TYPES` without editing the ontology.
+The default `farthest` strategy reads `configs/anchor_ontology_embeddings.json`
+and validates its `ontology_sha256` against `configs/anchor_ontology.json`. It
+then uses cosine farthest point sampling over `knowledge_domains`, and balances
+language, capability, conversation type, and language features. If you change
+ontology nodes, regenerate the sidecar with `ard ontology-embed` or use
+`--sampling-strategy balanced` until a matching sidecar exists.
+
+To regenerate an embedding sidecar for a custom ontology:
+
+```bash
+uv run --extra embed ard ontology-embed \
+  --ontology configs/anchor_ontology.json \
+  --output configs/anchor_ontology_embeddings.json \
+  --backend local \
+  --model Qwen/Qwen3-Embedding-0.6B
+```
+
+An OpenAI-compatible embedding API backend is also available:
+
+```bash
+uv run ard ontology-embed \
+  --ontology configs/custom_ontology.json \
+  --output configs/custom_ontology_embeddings.json \
+  --backend api \
+  --api-env-file .env
+```
+
+The committed sidecar was generated with `Qwen/Qwen3-Embedding-0.6B`, contains
+1024-dimensional embeddings, and is ready for normal users without downloading
+an embedding model. Regenerate it with Qwen or an API backend after changing
+ontology nodes.
+
+## Validation Snapshot
+
+The current checked-in ontology and Qwen sidecar have been validated with an
+end-to-end run using `ARD_TARGET_COUNT=1000` and the default `farthest`
+strategy. The run attempted 1000 anchors, kept 1000 generated inputs, produced
+986 final target-answer rows, and recorded 14 target API timeout/failure cases.
+The full generated `outputs/` directory remains ignored and is not committed.
 
 ## Development Checks
 
@@ -230,34 +211,31 @@ uv run pytest -q
 
 ## Environment Variables
 
-All runtime configuration lives in `.env`. `.env-example` is the short template;
-this section is the complete reference.
-
-| Variable | Default | Meaning / when to change |
+| Variable | Default | Meaning |
 | --- | --- | --- |
-| `ARD_INPUT_GENERATOR_API_BASE` | required | OpenAI-compatible base URL for the strong input generator model. |
-| `ARD_INPUT_GENERATOR_MODEL_NAME` | required | Strong model used to create realistic user requests. |
-| `ARD_INPUT_GENERATOR_API_KEY` | required | API key for the input generator model. Never commit `.env`. |
+| `ARD_INPUT_GENERATOR_API_BASE` | required | OpenAI-compatible base URL for the input generator model. |
+| `ARD_INPUT_GENERATOR_MODEL_NAME` | required | Model used to create realistic user requests. |
+| `ARD_INPUT_GENERATOR_API_KEY` | required | API key for the input generator model. |
 | `ARD_TARGET_API_BASE` | required | OpenAI-compatible base URL for the target model. |
-| `ARD_TARGET_MODEL_NAME` | required | Model you are training, evaluating, or preserving; its answers become SFT targets. |
-| `ARD_TARGET_API_KEY` | required | API key for the target model. Never commit `.env`. |
-| `ARD_TARGET_COUNT` | `10` | Number of candidate inputs to attempt. This is not an exact final row guarantee because filtering may drop bad samples. |
-| `ARD_EXACT_FINAL_COUNT_ENABLED` | `false` | Set `true` only when you require the final kept row count to reach `ARD_TARGET_COUNT`. Default `false` keeps API calls predictable. |
-| `ARD_EXACT_FINAL_COUNT_BATCH_SIZE` | `10` | Extra candidate batch size used only when exact-final-count mode is enabled. |
-| `ARD_EXACT_FINAL_COUNT_MAX_BATCHES` | `3` | Maximum batches to try only when exact-final-count mode is enabled. |
-| `ARD_SEED` | `42` | Sampling seed. Change it to get a different but reproducible sample mix. |
-| `ARD_OUTPUT_DIR` | blank | Leave blank to create a timestamped directory under `outputs/`. Set a fixed path when you want a stable output location. |
-| `ARD_OVERWRITE_OUTPUT` | `false` | Set `true` only when you intentionally want to write into a non-empty output directory. |
-| `ARD_ONTOLOGY_PATH` | `configs/anchor_ontology.json` | Single ontology JSON containing languages, domains, capabilities, conversation types, safety boundaries, and language features. |
-| `ARD_LANGUAGES` | blank | Optional comma-separated language filter, for example `English,简体中文`. Blank uses the ontology defaults. |
-| `ARD_TASK_TYPES` | blank | Optional comma-separated task filter, for example `qa,explanation,reasoning`. Blank uses the ontology defaults. |
-| `ARD_TEMPERATURE` | `0.7` | Sampling temperature for both model calls. |
-| `ARD_TOP_P` | `0.95` | Top-p sampling value for both model calls. |
-| `ARD_TIMEOUT` | `60` | Per-request timeout in seconds. Increase this if the provider often returns long answers slowly. |
-| `ARD_MAX_RETRIES` | `2` | API retry count for failed calls. |
-| `ARD_INPUT_GENERATOR_CONCURRENCY` | `100` | Parallelism for input generation requests. Lower this if your provider rate-limits or times out. |
-| `ARD_TARGET_CONCURRENCY` | `100` | Parallelism for target answer requests. Lower this if your provider rate-limits or times out. |
+| `ARD_TARGET_MODEL_NAME` | required | Model whose answers become SFT targets. |
+| `ARD_TARGET_API_KEY` | required | API key for the target model. |
+| `ARD_TARGET_COUNT` | `10` | Candidate inputs to attempt. Filtering may leave fewer rows. |
+| `ARD_EXACT_FINAL_COUNT_ENABLED` | `false` | Try extra batches until final kept rows reach `ARD_TARGET_COUNT`. |
+| `ARD_SEED` | `42` | Sampling seed. |
+| `ARD_OUTPUT_DIR` | blank | Blank creates a timestamped directory under `outputs/`. |
+| `ARD_OVERWRITE_OUTPUT` | `false` | Allow writing into a non-empty output directory. |
+| `ARD_ONTOLOGY_PATH` | `configs/anchor_ontology.json` | Ontology JSON. |
+| `ARD_ONTOLOGY_EMBEDDINGS_PATH` | `configs/anchor_ontology_embeddings.json` | Embedding sidecar used by `farthest`. |
+| `ARD_SAMPLING_STRATEGY` | `farthest` | `farthest`, `balanced`, or `random`. |
+| `ARD_LANGUAGES` | blank | Optional comma-separated language filter. |
+| `ARD_TASK_TYPES` | blank | Optional comma-separated task filter. |
+| `ARD_TEMPERATURE` | `0.7` | Sampling temperature for model calls. |
+| `ARD_TOP_P` | `0.95` | Top-p sampling value for model calls. |
+| `ARD_TIMEOUT` | `60` | Per-request timeout in seconds. |
+| `ARD_MAX_RETRIES` | `2` | API retry count. |
+| `ARD_INPUT_GENERATOR_CONCURRENCY` | `100` | Input generation request parallelism. |
+| `ARD_TARGET_CONCURRENCY` | `100` | Target answer request parallelism. |
 | `ARD_MIN_TARGET_ANSWER_CHARS` | `8` | Drop answers shorter than this many characters. |
-| `ARD_MAX_TARGET_ANSWER_CHARS` | blank | Optional max answer length filter. Blank means long answers are kept. |
-| `ARD_INPUT_GENERATOR_MAX_TOKENS` | blank | Optional explicit token cap for input generation. Blank means ARD does not send `max_tokens`. |
-| `ARD_TARGET_MAX_TOKENS` | blank | Optional explicit token cap for target answers. Blank means ARD does not send `max_tokens`. |
+| `ARD_MAX_TARGET_ANSWER_CHARS` | blank | Optional max answer length filter. |
+| `ARD_INPUT_GENERATOR_MAX_TOKENS` | blank | Optional explicit token cap for input generation. |
+| `ARD_TARGET_MAX_TOKENS` | blank | Optional explicit token cap for target answers. |

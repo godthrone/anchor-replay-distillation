@@ -13,7 +13,6 @@ ANCHOR_ONTOLOGY_SECTIONS = {
     "knowledge_domains",
     "capabilities",
     "conversation_types",
-    "safety_boundaries",
     "language_features",
 }
 
@@ -30,7 +29,6 @@ class AnchorOntology:
     language_features: Ontology
     capabilities: Ontology
     conversation_types: Ontology
-    safety_boundaries: Ontology
 
 
 def _extract_leaves(node: Any, path: list[str] | None = None) -> list[dict[str, Any]]:
@@ -100,5 +98,4 @@ def load_anchor_ontology(path: str | Path = DEFAULT_ONTOLOGY_PATH) -> AnchorOnto
         language_features=_section_as_ontology(data, "language_features"),
         capabilities=_section_as_ontology(data, "capabilities"),
         conversation_types=_section_as_ontology(data, "conversation_types"),
-        safety_boundaries=_section_as_ontology(data, "safety_boundaries"),
     )
