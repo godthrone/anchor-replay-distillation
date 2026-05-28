@@ -55,7 +55,7 @@ def test_anchor_generation_is_deterministic(tmp_path):
 
 
 def test_anchor_ontology_file_exposes_all_sampling_dimensions():
-    ontology = load_anchor_ontology(Path("data/anchor_seed/anchor_ontology.json"))
+    ontology = load_anchor_ontology(Path("configs/anchor_ontology.json"))
 
     assert ontology.languages == ["English", "简体中文", "bilingual_zh_en"]
     assert ontology.knowledge.leaves
@@ -80,7 +80,7 @@ def test_anchor_ontology_rejects_missing_required_sections(tmp_path):
 
 
 def test_extended_anchor_sampling_is_deterministic_and_balanced():
-    ontology = load_anchor_ontology(Path("data/anchor_seed/anchor_ontology.json"))
+    ontology = load_anchor_ontology(Path("configs/anchor_ontology.json"))
     config = AnchorGenerationConfig(
         count=100,
         seed=11,
@@ -128,7 +128,7 @@ def test_extended_anchor_sampling_is_deterministic_and_balanced():
 
 
 def test_task_type_filter_limits_capability_sampling():
-    ontology = load_anchor_ontology(Path("data/anchor_seed/anchor_ontology.json"))
+    ontology = load_anchor_ontology(Path("configs/anchor_ontology.json"))
     config = AnchorGenerationConfig(
         count=20,
         seed=13,
@@ -149,7 +149,7 @@ def test_task_type_filter_limits_capability_sampling():
 
 
 def test_prompt_shape_instructions_for_single_and_multi_turn():
-    ontology = load_anchor_ontology(Path("data/anchor_seed/anchor_ontology.json"))
+    ontology = load_anchor_ontology(Path("configs/anchor_ontology.json"))
     config = AnchorGenerationConfig(
         count=20,
         seed=3,
@@ -179,7 +179,7 @@ def test_prompt_shape_instructions_for_single_and_multi_turn():
 
 
 def test_safety_specs_add_safe_boundary_language():
-    ontology = load_anchor_ontology(Path("data/anchor_seed/anchor_ontology.json"))
+    ontology = load_anchor_ontology(Path("configs/anchor_ontology.json"))
     config = AnchorGenerationConfig(
         count=20,
         seed=5,

@@ -151,8 +151,9 @@ Key `anchor_meta` fields:
 
 For runtime settings, `.env` is the main configuration surface. `.env-example`
 lists every supported `ARD_*` environment variable, including the default seed
-`ARD_SEED=42`. All sampling choices for generated questions live in one JSON
-file: `data/anchor_seed/anchor_ontology.json`. Copy and edit that file when you
+`ARD_SEED=42`. Runtime settings stay in `.env` and CLI flags; all sampling
+choices for generated questions live in one JSON file:
+`configs/anchor_ontology.json`. Copy and edit that file when you
 want ARD to generate data for your own domains, languages, capabilities,
 conversation types, safety boundaries, or language features.
 
@@ -166,8 +167,7 @@ ARD_EXACT_FINAL_COUNT_MAX_BATCHES=3
 ARD_SEED=42
 ARD_OUTPUT_DIR=
 ARD_OVERWRITE_OUTPUT=false
-ARD_CONFIG_PATH=configs/anchor_generation.yaml
-ARD_ONTOLOGY_PATH=data/anchor_seed/anchor_ontology.json
+ARD_ONTOLOGY_PATH=configs/anchor_ontology.json
 ARD_LANGUAGES=
 ARD_TASK_TYPES=
 ARD_TEMPERATURE=0.7
@@ -200,7 +200,7 @@ Leave `ARD_MAX_TARGET_ANSWER_CHARS` blank to keep long target answers. Strict re
 
 ## Sampling Ontology
 
-ARD samples from a single JSON file: `data/anchor_seed/anchor_ontology.json`. The
+ARD samples from a single JSON file: `configs/anchor_ontology.json`. The
 file is plain nested JSON. Dictionaries create paths, lists contain leaf values,
 and each leaf becomes a possible sampling choice.
 
@@ -215,7 +215,7 @@ Top-level sections:
 | `safety_boundaries` | Safety and authority-boundary behavior. | `normal`, `regulated_domain`, `boundary` |
 | `language_features` | Style, format, difficulty, context length, noise, and answer expectation. | `style`, `format`, `difficulty`, `context_length`, `noise`, `answer_expectation` |
 
-To customize the sampling space, copy `data/anchor_seed/anchor_ontology.json`,
+To customize the sampling space, copy `configs/anchor_ontology.json`,
 edit the copy, then set `ARD_ONTOLOGY_PATH` to that file. To only narrow one run,
 use `ARD_LANGUAGES` or `ARD_TASK_TYPES` without editing the ontology.
 
@@ -248,8 +248,7 @@ this section is the complete reference.
 | `ARD_SEED` | `42` | Sampling seed. Change it to get a different but reproducible sample mix. |
 | `ARD_OUTPUT_DIR` | blank | Leave blank to create a timestamped directory under `outputs/`. Set a fixed path when you want a stable output location. |
 | `ARD_OVERWRITE_OUTPUT` | `false` | Set `true` only when you intentionally want to write into a non-empty output directory. |
-| `ARD_CONFIG_PATH` | `configs/anchor_generation.yaml` | Base generation config. Most users should keep the default. |
-| `ARD_ONTOLOGY_PATH` | `data/anchor_seed/anchor_ontology.json` | Single ontology JSON containing languages, domains, capabilities, conversation types, safety boundaries, and language features. |
+| `ARD_ONTOLOGY_PATH` | `configs/anchor_ontology.json` | Single ontology JSON containing languages, domains, capabilities, conversation types, safety boundaries, and language features. |
 | `ARD_LANGUAGES` | blank | Optional comma-separated language filter, for example `English,简体中文`. Blank uses the ontology defaults. |
 | `ARD_TASK_TYPES` | blank | Optional comma-separated task filter, for example `qa,explanation,reasoning`. Blank uses the ontology defaults. |
 | `ARD_TEMPERATURE` | `0.7` | Sampling temperature for both model calls. |

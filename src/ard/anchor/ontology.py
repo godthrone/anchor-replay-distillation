@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_ONTOLOGY_PATH = "data/anchor_seed/anchor_ontology.json"
+DEFAULT_ONTOLOGY_PATH = "configs/anchor_ontology.json"
 
 ANCHOR_ONTOLOGY_SECTIONS = {
     "languages",
