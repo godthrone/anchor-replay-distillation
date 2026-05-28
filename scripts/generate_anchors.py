@@ -189,9 +189,6 @@ def main() -> int:
     target_concurrency = get_int(env_values, "ARD_TARGET_CONCURRENCY", 4)
     exact_final_count_enabled = get_bool(env_values, "ARD_EXACT_FINAL_COUNT_ENABLED", False)
 
-    config_path = PROJECT_ROOT / get_value(
-        env_values, "ARD_CONFIG_PATH", "configs/anchor_generation.yaml"
-    )
     configured_output_dir = get_optional(env_values, "ARD_OUTPUT_DIR")
     output_dir = (
         PROJECT_ROOT / configured_output_dir
@@ -199,8 +196,6 @@ def main() -> int:
         else default_output_dir(target_count, seed)
     )
     overwrite_output = get_bool(env_values, "ARD_OVERWRITE_OUTPUT", False)
-    if not config_path.exists():
-        fail(f"Config file does not exist: {config_path}")
 
     process_env = os.environ.copy()
     process_env.update(env_values)
@@ -218,8 +213,6 @@ def main() -> int:
         "run",
         "ard",
         "anchor-build-dataset",
-        "--config",
-        str(config_path),
         "--api-env-file",
         str(ENV_PATH),
         "--output-dir",

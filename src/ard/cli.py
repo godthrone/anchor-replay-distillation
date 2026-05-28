@@ -7,15 +7,6 @@ from pathlib import Path
 from typing import Any
 
 
-def _read_yaml(path: str | None) -> dict[str, Any]:
-    if not path:
-        return {}
-    import yaml
-
-    with Path(path).open("r", encoding="utf-8") as handle:
-        return yaml.safe_load(handle) or {}
-
-
 def _csv(value: str | None) -> list[str] | None:
     if value is None:
         return None
@@ -80,31 +71,19 @@ def cmd_anchor_generate(args: argparse.Namespace) -> int:
     from ard.anchor import AnchorGenerationConfig, generate_anchor_prompts, load_anchor_ontology
     from ard.anchor.bank import write_jsonl
 
-    config_data = _read_yaml(args.config)
-    generation_cfg = config_data.get("generation", {})
     anchor_ontology = load_anchor_ontology(_ontology_path(args))
-    output_path = args.output or generation_cfg.get("output_path")
-    if not output_path:
-        raise SystemExit("--output is required")
-
     languages = _filtered_csv(args.languages, anchor_ontology.languages, "languages")
     task_types = _filtered_csv(
         args.task_types, _leaf_values(anchor_ontology.capabilities.leaves), "task_types"
     )
     prompt_config = AnchorGenerationConfig(
-        count=args.count if args.count is not None else int(generation_cfg.get("count", 100)),
-        seed=args.seed if args.seed is not None else int(generation_cfg.get("seed", 42)),
+        count=args.count,
+        seed=args.seed,
         languages=languages,
         task_types=task_types,
-        language_features_per_prompt=(
-            args.language_features_per_prompt
-            if args.language_features_per_prompt is not None
-            else int(generation_cfg.get("language_features_per_prompt", 2))
-        ),
-        input_generator_model=args.input_generator_model
-        or str(generation_cfg.get("input_generator_model", "unspecified_input_generator_model")),
-        target_model=args.target_model
-        or str(generation_cfg.get("target_model", "unspecified_target_model")),
+        language_features_per_prompt=args.language_features_per_prompt,
+        input_generator_model=args.input_generator_model,
+        target_model=args.target_model,
     )
     prompts = generate_anchor_prompts(
         knowledge=anchor_ontology.knowledge,
@@ -114,8 +93,8 @@ def cmd_anchor_generate(args: argparse.Namespace) -> int:
         safety=anchor_ontology.safety_boundaries,
         config=prompt_config,
     )
-    write_jsonl(prompts, output_path)
-    print(f"Wrote {len(prompts)} anchor prompts to {output_path}")
+    write_jsonl(prompts, args.output)
+    print(f"Wrote {len(prompts)} anchor prompts to {args.output}")
     return 0
 
 
@@ -239,8 +218,6 @@ def cmd_anchor_build_dataset(args: argparse.Namespace) -> int:
     from ard.anchor.api_client import chat_api_config_from_env
     from ard.anchor.pipeline import build_anchor_dataset_api
 
-    config_data = _read_yaml(args.config)
-    generation_cfg = config_data.get("generation", {})
     anchor_ontology = load_anchor_ontology(_ontology_path(args))
     languages = _filtered_csv(args.languages, anchor_ontology.languages, "languages")
     task_types = _filtered_csv(
@@ -249,7 +226,7 @@ def cmd_anchor_build_dataset(args: argparse.Namespace) -> int:
     result = build_anchor_dataset_api(
         output_dir=args.output_dir,
         target_count=args.target_count,
-        seed=args.seed if args.seed is not None else int(generation_cfg.get("seed", 42)),
+        seed=args.seed,
         knowledge=anchor_ontology.knowledge,
         language=anchor_ontology.language_features,
         capability=anchor_ontology.capabilities,
@@ -336,16 +313,17 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     anchor_generate = subparsers.add_parser("anchor-generate", help="Generate anchor meta prompts.")
-    anchor_generate.add_argument("--config", default="configs/anchor_generation.yaml")
     _add_ontology_arg(anchor_generate)
-    anchor_generate.add_argument("--output", "-o")
-    anchor_generate.add_argument("--count", type=int)
-    anchor_generate.add_argument("--seed", type=int)
+    anchor_generate.add_argument("--output", "-o", required=True)
+    anchor_generate.add_argument("--count", type=int, default=1000)
+    anchor_generate.add_argument("--seed", type=int, default=42)
     anchor_generate.add_argument("--languages")
     anchor_generate.add_argument("--task-types")
-    anchor_generate.add_argument("--language-features-per-prompt", type=int)
-    anchor_generate.add_argument("--input-generator-model")
-    anchor_generate.add_argument("--target-model")
+    anchor_generate.add_argument("--language-features-per-prompt", type=int, default=2)
+    anchor_generate.add_argument(
+        "--input-generator-model", default="unspecified_input_generator_model"
+    )
+    anchor_generate.add_argument("--target-model", default="unspecified_target_model")
     anchor_generate.set_defaults(func=cmd_anchor_generate)
 
     anchor_generate_inputs = subparsers.add_parser(
@@ -422,13 +400,12 @@ def build_parser() -> argparse.ArgumentParser:
     anchor_build = subparsers.add_parser(
         "anchor-build-dataset", help="Build a two-hop API ARD dataset end to end."
     )
-    anchor_build.add_argument("--config", default="configs/anchor_generation.yaml")
     anchor_build.add_argument("--api-env-file")
     anchor_build.add_argument("--output-dir", required=True)
     anchor_build.add_argument("--target-count", type=int, default=100)
     anchor_build.add_argument("--batch-size", type=int, default=50)
     anchor_build.add_argument("--max-batches", type=int, default=5)
-    anchor_build.add_argument("--seed", type=int)
+    anchor_build.add_argument("--seed", type=int, default=42)
     anchor_build.add_argument("--input-generator-model")
     anchor_build.add_argument("--target-model")
     _add_ontology_arg(anchor_build)

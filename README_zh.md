@@ -126,7 +126,7 @@ outputs/ard_anchor_dataset_YYYYMMDD_HHMMSS_n10_seed42/
 
 ## 修改默认参数
 
-运行参数以 `.env` 为主要配置入口。`.env-example` 列出了所有支持的 `ARD_*` 环境变量，包括默认 seed `ARD_SEED=42`。生成问题时所有可采样范围都在一个 JSON 文件里：`data/anchor_seed/anchor_ontology.json`。如果你希望 ARD 生成自己的领域、语言、能力、对话形态、安全边界或语言风格，复制并编辑这个文件，再把 `ARD_ONTOLOGY_PATH` 指向你的副本即可。
+运行参数以 `.env` 和 CLI 参数为主要配置入口。`.env-example` 列出了所有支持的 `ARD_*` 环境变量，包括默认 seed `ARD_SEED=42`。生成问题时所有可采样范围都在一个 JSON 文件里：`configs/anchor_ontology.json`。如果你希望 ARD 生成自己的领域、语言、能力、对话形态、安全边界或语言风格，复制并编辑这个文件，再把 `ARD_ONTOLOGY_PATH` 指向你的副本即可。
 
 常用参数：
 
@@ -138,8 +138,7 @@ ARD_EXACT_FINAL_COUNT_MAX_BATCHES=3
 ARD_SEED=42
 ARD_OUTPUT_DIR=
 ARD_OVERWRITE_OUTPUT=false
-ARD_CONFIG_PATH=configs/anchor_generation.yaml
-ARD_ONTOLOGY_PATH=data/anchor_seed/anchor_ontology.json
+ARD_ONTOLOGY_PATH=configs/anchor_ontology.json
 ARD_LANGUAGES=
 ARD_TASK_TYPES=
 ARD_TEMPERATURE=0.7
@@ -169,7 +168,7 @@ ARD_TASK_TYPES=qa,explanation,reasoning,coding,debugging
 
 ## 采样 Ontology
 
-ARD 从单一 JSON 文件采样：`data/anchor_seed/anchor_ontology.json`。文件格式是普通嵌套 JSON：dict 表示路径，list 里的字符串表示叶子节点，每个叶子节点都是一个可采样选项。
+ARD 从单一 JSON 文件采样：`configs/anchor_ontology.json`。文件格式是普通嵌套 JSON：dict 表示路径，list 里的字符串表示叶子节点，每个叶子节点都是一个可采样选项。
 
 顶层 section：
 
@@ -182,7 +181,7 @@ ARD 从单一 JSON 文件采样：`data/anchor_seed/anchor_ontology.json`。文�
 | `safety_boundaries` | 安全和权威边界行为。 | `normal`, `regulated_domain`, `boundary` |
 | `language_features` | 风格、格式、难度、上下文长度、噪声、回答预期。 | `style`, `format`, `difficulty`, `context_length`, `noise`, `answer_expectation` |
 
-如果要定制采样空间，复制 `data/anchor_seed/anchor_ontology.json`，编辑副本，然后把 `ARD_ONTOLOGY_PATH` 指向该文件。如果只想缩小某次运行范围，用 `ARD_LANGUAGES` 或 `ARD_TASK_TYPES` 即可，不需要编辑 ontology。
+如果要定制采样空间，复制 `configs/anchor_ontology.json`，编辑副本，然后把 `ARD_ONTOLOGY_PATH` 指向该文件。如果只想缩小某次运行范围，用 `ARD_LANGUAGES` 或 `ARD_TASK_TYPES` 即可，不需要编辑 ontology。
 
 ## 开发检查
 
@@ -212,8 +211,7 @@ uv run pytest -q
 | `ARD_SEED` | `42` | 采样 seed。修改它可以得到另一组可复现的样本分布。 |
 | `ARD_OUTPUT_DIR` | 留空 | 留空时自动在 `outputs/` 下创建时间戳目录。需要固定输出位置时再填写。 |
 | `ARD_OVERWRITE_OUTPUT` | `false` | 只有明确要写入非空输出目录时才设为 `true`。 |
-| `ARD_CONFIG_PATH` | `configs/anchor_generation.yaml` | 基础生成配置。大多数用户保持默认即可。 |
-| `ARD_ONTOLOGY_PATH` | `data/anchor_seed/anchor_ontology.json` | 单一 ontology JSON，包含语言、领域、能力、对话形态、安全边界和语言特征。 |
+| `ARD_ONTOLOGY_PATH` | `configs/anchor_ontology.json` | 单一 ontology JSON，包含语言、领域、能力、对话形态、安全边界和语言特征。 |
 | `ARD_LANGUAGES` | 留空 | 可选语言过滤，逗号分隔，例如 `English,简体中文`。留空使用 ontology 默认值。 |
 | `ARD_TASK_TYPES` | 留空 | 可选任务类型过滤，逗号分隔，例如 `qa,explanation,reasoning`。留空使用 ontology 默认值。 |
 | `ARD_TEMPERATURE` | `0.7` | 两个模型调用使用的采样 temperature。 |
