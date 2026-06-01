@@ -2,13 +2,16 @@
 
 [English](README.md) | 简体中文
 
-Anchor Replay Distillation（ARD）用于生成研究中性的、可直接用于监督微调
-（SFT）的聊天数据。你配置两个 OpenAI-compatible 模型：
-`ARD_INPUT_GENERATOR_*` 根据采样到的 anchor spec 写出真实用户侧请求，
-`ARD_TARGET_*` 以目标模型身份回答这些请求，产出 SFT target。
+Anchor Replay Distillation（ARD）是一个用于生成 SFT 锚点回放数据集的工具。
+它从 ontology 中采样广泛的能力和知识锚点，让 input-generator 模型写出真实的用户请求，
+再让 target 模型生成需要被保留的监督答案。
 
-本仓库专注数据生成，不包含模型训练或微调运行器。ARD 的目标是覆盖和保留
-模型的一般能力，而不是在训练框架内注入服务级合规、拒绝或价值对齐策略。
+生成的 `anchor_bank.jsonl` 可以混入其他微调数据集中，用来帮助目标模型在继续训练时保留
+推理、写作、翻译、代码、工具使用和通用知识等已有能力。ARD 只负责数据生成：
+不包含训练器、模型权重，也不在框架层加入服务级策略或合规逻辑。
+
+默认情况下，ARD 使用 ontology-guided farthest sampling，并直接读取仓库提交的
+Qwen embedding sidecar；普通用户不需要下载 embedding 模型，除非他们修改 ontology。
 
 ## 快速开始
 
