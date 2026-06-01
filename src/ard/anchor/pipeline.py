@@ -7,7 +7,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable
 
-from ard.anchor.api_client import ChatAPIConfig, chat_completion
+from ard.anchor.api_client import ChatAPIConfig, chat_completion, target_chat_completion
 from ard.anchor.bank import (
     AnchorPrompt,
     GeneratedInputAnchor,
@@ -23,7 +23,7 @@ from ard.anchor.sampler import AnchorGenerationConfig, SamplingStrategy, generat
 from ard.anchor.embeddings import OntologyEmbeddings
 from ard.anchor.target import TargetAnswerStats, answer_one_generated_input_api
 
-ChatFn = Callable[..., str]
+ChatFn = Callable[..., Any]
 LogFn = Callable[[str], None]
 
 
@@ -207,6 +207,9 @@ def _run_streaming_batch(
                     continue
 
                 answered.append((idx, answered_item))
+                target_stats.record_reasoning_status(
+                    str(answered_item.anchor_meta.get("target_reasoning_status", "absent"))
+                )
                 if logger:
                     logger(
                         "stage=target_answer "
@@ -294,12 +297,7 @@ def build_anchor_dataset_api(
         "parse_failed_count": 0,
         "api_failed_count": 0,
     }
-    target_answer_stats_total = {
-        "input_count": 0,
-        "kept_count": 0,
-        "failed_count": 0,
-        "api_failed_count": 0,
-    }
+    target_answer_stats_total = TargetAnswerStats().to_dict()
     filter_stats_total = {
         "input_count": 0,
         "kept_count": 0,
@@ -380,7 +378,7 @@ def build_anchor_dataset_api(
             input_generator_concurrency=input_generator_concurrency,
             target_concurrency=target_concurrency,
             input_generation_chat_fn=input_generation_chat_fn or chat_completion,
-            target_answer_chat_fn=target_answer_chat_fn or chat_completion,
+            target_answer_chat_fn=target_answer_chat_fn or target_chat_completion,
             logger=logger,
             start=batch_start,
         )

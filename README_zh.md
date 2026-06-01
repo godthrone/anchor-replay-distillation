@@ -79,6 +79,20 @@ uv run python scripts/generate_anchors.py
 | `input_generator_model` | 生成真实用户侧输入的模型。 |
 | `anchor_meta` | 采样元数据和能力标签。 |
 
+对于 reasoning/think 模型，`target_answer` 会保留目标模型的训练输出格式。当 API
+同时返回独立的 `reasoning_content` 和 `content` 时，ARD 会保存为：
+
+```text
+<think>
+reasoning_content
+</think>
+
+content
+```
+
+如果 `content` 本身已经包含 `<think>...</think>`，则原样保留，不重复包裹；如果模型
+没有返回 reasoning 字段，则照常保存最终回答。
+
 关键 `anchor_meta` 字段：
 
 | 字段 | 含义 |
@@ -91,6 +105,7 @@ uv run python scripts/generate_anchors.py
 | `is_multi_turn` | `messages` 是否包含多轮对话。 |
 | `sampling_strategy` | `farthest`、`balanced` 或 `random`。 |
 | `ontology_sha256` | 使用 embedding sidecar 时校验 ontology 的哈希。 |
+| `target_reasoning_status` | target think 覆盖状态：`separate`、`inline`、`only` 或 `absent`。 |
 | `seed` | 可复现采样 seed。 |
 
 ## 修改默认参数
