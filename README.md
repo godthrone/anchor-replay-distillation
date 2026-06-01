@@ -86,6 +86,22 @@ sample. `messages` shows the single-turn or multi-turn chat context, and
 | `input_generator_model` | Model that generated realistic user-side input. |
 | `anchor_meta` | Sampling metadata and capability labels. |
 
+For reasoning models, `target_answer` preserves the target model's training
+output format. When an API returns separate `reasoning_content` and `content`,
+ARD stores them as:
+
+```text
+<think>
+reasoning_content
+</think>
+
+content
+```
+
+If `content` already contains an inline `<think>...</think>` block, ARD keeps it
+unchanged. If a model returns no reasoning field, the final answer is saved as
+usual.
+
 Key `anchor_meta` fields:
 
 | Field | Meaning |
@@ -98,6 +114,7 @@ Key `anchor_meta` fields:
 | `is_multi_turn` | Whether `messages` includes multiple conversation turns. |
 | `sampling_strategy` | `farthest`, `balanced`, or `random`. |
 | `ontology_sha256` | Hash used to validate ontology embedding sidecars when applicable. |
+| `target_reasoning_status` | `separate`, `inline`, `only`, or `absent` for target think coverage. |
 | `seed` | Seed used for reproducible sampling. |
 
 ## Changing Defaults
