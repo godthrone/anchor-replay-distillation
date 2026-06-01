@@ -8,7 +8,12 @@ from typing import Any, Callable
 
 import torch
 
-from ard.anchor.api_client import ChatAPIConfig, chat_completion
+from ard.anchor.api_client import (
+    ChatAPIConfig,
+    ChatCompletionResult,
+    format_target_answer,
+    target_chat_completion,
+)
 from ard.anchor.bank import (
     TargetAnswerAnchor,
     read_anchor_prompts,
@@ -25,9 +30,23 @@ class TargetAnswerStats:
     kept_count: int = 0
     failed_count: int = 0
     api_failed_count: int = 0
+    reasoning_separate_count: int = 0
+    reasoning_inline_count: int = 0
+    reasoning_absent_count: int = 0
+    reasoning_only_count: int = 0
 
     def to_dict(self) -> dict[str, int]:
         return asdict(self)
+
+    def record_reasoning_status(self, status: str) -> None:
+        if status == "separate":
+            self.reasoning_separate_count += 1
+        elif status == "inline":
+            self.reasoning_inline_count += 1
+        elif status == "only":
+            self.reasoning_only_count += 1
+        else:
+            self.reasoning_absent_count += 1
 
 
 def ensure_tokenizer_ready(tokenizer: Any) -> None:
@@ -121,7 +140,9 @@ def answer_anchor_prompts(
                 messages=item.messages,
                 target_answer=answer,
                 target_model=model_path,
-                anchor_meta=item.anchor_meta,
+                anchor_meta={**item.anchor_meta, "target_reasoning_status": "inline"}
+                if "<think" in answer.lower()
+                else {**item.anchor_meta, "target_reasoning_status": "absent"},
                 input_generator_model=item.anchor_meta.get("input_generator_model", ""),
             )
         )
@@ -137,9 +158,9 @@ def answer_one_generated_input_api(
     temperature: float = 0.7,
     top_p: float = 0.95,
     timeout: float = 60,
-    chat_fn: Any = chat_completion,
+    chat_fn: Any = target_chat_completion,
 ) -> TargetAnswerAnchor:
-    answer = chat_fn(
+    raw_answer = chat_fn(
         config=api_config,
         messages=item.messages,
         max_tokens=max_tokens,
@@ -147,12 +168,18 @@ def answer_one_generated_input_api(
         top_p=top_p,
         timeout=timeout,
     )
+    result = (
+        raw_answer
+        if isinstance(raw_answer, ChatCompletionResult)
+        else format_target_answer(str(raw_answer), None)
+    )
     meta = dict(item.anchor_meta)
     meta["target_model"] = api_config.model_name
+    meta["target_reasoning_status"] = result.reasoning_status
     return TargetAnswerAnchor(
         id=item.id,
         messages=item.messages,
-        target_answer=answer,
+        target_answer=result.text,
         target_model=api_config.model_name,
         anchor_meta=meta,
         input_generator_model=item.input_generator_model,
@@ -169,7 +196,7 @@ def answer_generated_inputs_api(
     timeout: float = 60,
     limit: int | None = None,
     stats_output: str | Path | None = None,
-    chat_fn: Any = chat_completion,
+    chat_fn: Any = target_chat_completion,
     logger: LogFn | None = None,
 ) -> list[TargetAnswerAnchor]:
     generated_inputs = read_generated_input_anchors(input_path)
@@ -204,6 +231,9 @@ def answer_generated_inputs_api(
                 )
             continue
         answered.append(answered_item)
+        stats.record_reasoning_status(
+            str(answered_item.anchor_meta.get("target_reasoning_status", "absent"))
+        )
         if logger:
             logger(
                 "stage=target_answer "

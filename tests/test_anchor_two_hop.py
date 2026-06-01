@@ -5,7 +5,7 @@ from argparse import Namespace
 
 import pytest
 
-from ard.anchor.api_client import ChatAPIConfig, chat_api_config_from_env
+from ard.anchor.api_client import ChatAPIConfig, ChatCompletionResult, chat_api_config_from_env
 from ard.anchor import api_client
 from ard.anchor.bank import AnchorPrompt, GeneratedInputAnchor, write_jsonl
 from ard.anchor.ontology import load_anchor_ontology
@@ -75,7 +75,7 @@ def test_api_env_file_parsing_and_no_key_serialization(tmp_path):
     assert "secret-key" not in output_path.read_text(encoding="utf-8")
 
 
-def test_chat_completion_falls_back_to_reasoning_content(monkeypatch):
+def test_chat_completion_uses_content_not_reasoning_content(monkeypatch):
     captured = {}
 
     class FakeResponse:
@@ -92,8 +92,8 @@ def test_chat_completion_falls_back_to_reasoning_content(monkeypatch):
                         {
                             "message": {
                                 "role": "assistant",
-                                "content": "",
-                                "reasoning_content": "fallback answer",
+                                "content": "visible content",
+                                "reasoning_content": "hidden reasoning",
                             }
                         }
                     ]
@@ -111,8 +111,87 @@ def test_chat_completion_falls_back_to_reasoning_content(monkeypatch):
         [{"role": "user", "content": "q"}],
     )
 
-    assert content == "fallback answer"
+    assert content == "visible content"
     assert "max_tokens" not in captured["payload"]
+
+
+def test_chat_completion_rejects_reasoning_without_content(monkeypatch):
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": "",
+                                "reasoning_content": "hidden reasoning",
+                            }
+                        }
+                    ]
+                }
+            ).encode("utf-8")
+
+    monkeypatch.setattr(
+        api_client.urllib.request, "urlopen", lambda *_args, **_kwargs: FakeResponse()
+    )
+
+    with pytest.raises(RuntimeError, match="message content"):
+        api_client.chat_completion(
+            ChatAPIConfig("https://api.example.com", "model", "secret"),
+            [{"role": "user", "content": "q"}],
+        )
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_text", "expected_status"),
+    [
+        (
+            {"content": "final answer", "reasoning_content": "step by step"},
+            "<think>\nstep by step\n</think>\n\nfinal answer",
+            "separate",
+        ),
+        (
+            {
+                "content": "<think>native steps</think>\nfinal answer",
+                "reasoning_content": "ignored",
+            },
+            "<think>native steps</think>\nfinal answer",
+            "inline",
+        ),
+        ({"content": "final answer"}, "final answer", "absent"),
+        ({"content": "", "reasoning_content": "step only"}, "<think>\nstep only\n</think>", "only"),
+    ],
+)
+def test_target_chat_completion_preserves_reasoning(
+    monkeypatch, message, expected_text, expected_status
+):
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps({"choices": [{"message": message}]}).encode("utf-8")
+
+    monkeypatch.setattr(
+        api_client.urllib.request, "urlopen", lambda *_args, **_kwargs: FakeResponse()
+    )
+
+    result = api_client.target_chat_completion(
+        ChatAPIConfig("https://api.example.com", "model", "secret"),
+        [{"role": "user", "content": "q"}],
+    )
+
+    assert result == ChatCompletionResult(expected_text, expected_status)
 
 
 def test_parse_input_generator_messages_single_turn_text():
@@ -205,6 +284,44 @@ def test_anchor_answer_api_writes_final_anchor_shape(tmp_path, monkeypatch):
     assert record["input_generator_model"] == "input-generator"
     assert record["target_model"] == "target"
     assert "secret-key" not in output_path.read_text(encoding="utf-8")
+
+
+def test_anchor_answer_api_writes_reasoning_target_and_stats(tmp_path):
+    input_path = tmp_path / "generated_inputs.jsonl"
+    output_path = tmp_path / "anchor_bank.jsonl"
+    stats_path = tmp_path / "target_answer_stats.json"
+    write_jsonl(
+        [
+            GeneratedInputAnchor(
+                id="a",
+                messages=[{"role": "user", "content": "Solve it."}],
+                input_generator_model="input-generator",
+            )
+        ],
+        input_path,
+    )
+
+    answer_generated_inputs_api(
+        api_config=ChatAPIConfig(
+            api_base="https://api.example.com",
+            model_name="target",
+            api_key="secret-key",
+        ),
+        input_path=input_path,
+        output_path=output_path,
+        stats_output=stats_path,
+        chat_fn=lambda **_kwargs: ChatCompletionResult(
+            "<think>\nreason carefully\n</think>\n\nfinal answer",
+            "separate",
+        ),
+    )
+
+    record = json.loads(output_path.read_text(encoding="utf-8").strip())
+    stats = json.loads(stats_path.read_text(encoding="utf-8"))
+    assert record["target_answer"] == "<think>\nreason carefully\n</think>\n\nfinal answer"
+    assert record["anchor_meta"]["target_reasoning_status"] == "separate"
+    assert stats["reasoning_separate_count"] == 1
+    assert stats["reasoning_absent_count"] == 0
 
 
 def test_anchor_generate_inputs_cli_uses_input_generator_stage(tmp_path, monkeypatch):
@@ -401,6 +518,41 @@ def test_build_anchor_dataset_streams_target_answers_before_all_inputs_finish(tm
     assert target_log_positions[0] < input_log_positions[-1]
     assert manifest["generation_config"]["input_generator_concurrency"] == 2
     assert manifest["generation_config"]["target_concurrency"] == 2
+
+
+def test_build_anchor_dataset_manifest_counts_reasoning_outputs(tmp_path):
+    ontology = _write_test_anchor_ontology(
+        tmp_path,
+        knowledge={"general": {"topic": ["alpha"]}},
+    )
+
+    result = build_anchor_dataset_api(
+        output_dir=tmp_path / "dataset",
+        target_count=1,
+        seed=1,
+        knowledge=ontology.knowledge,
+        language=ontology.language_features,
+        capability=ontology.capabilities,
+        conversation=ontology.conversation_types,
+        languages=["English"],
+        task_types=["qa"],
+        input_generator_config=ChatAPIConfig(
+            "https://api.example.com", "input-generator", "secret"
+        ),
+        target_config=ChatAPIConfig("https://api.example.com", "target", "secret"),
+        input_generation_chat_fn=lambda *_args: "unique input",
+        target_answer_chat_fn=lambda **_kwargs: ChatCompletionResult(
+            "<think>\nfirst reason\n</think>\n\nthen answer",
+            "separate",
+        ),
+    )
+
+    record = json.loads((tmp_path / "dataset" / "anchor_bank.jsonl").read_text(encoding="utf-8"))
+    manifest = json.loads((tmp_path / "dataset" / "manifest.json").read_text(encoding="utf-8"))
+
+    assert result.final_count == 1
+    assert record["target_answer"].startswith("<think>\nfirst reason")
+    assert manifest["target_answer_stats"]["reasoning_separate_count"] == 1
 
 
 def test_cli_logger_prefixes_timestamp(capsys):
