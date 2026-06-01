@@ -31,6 +31,12 @@ class EmbeddingAPIConfig:
         return self.api_base.rstrip("/") + "/embeddings"
 
 
+@dataclass(slots=True)
+class ChatCompletionResult:
+    text: str
+    reasoning_status: str = "absent"
+
+
 def load_api_env_file(path: str | Path | None) -> dict[str, str]:
     values: dict[str, str] = {}
     if path is None:
@@ -109,14 +115,14 @@ def embedding_api_config_from_env(
     )
 
 
-def chat_completion(
+def _post_chat_completion(
     config: ChatAPIConfig,
     messages: list[dict[str, str]],
     max_tokens: int | None = None,
     temperature: float = 0.7,
     top_p: float = 0.95,
     timeout: float = 60,
-) -> str:
+) -> dict[str, Any]:
     payload = {
         "model": config.model_name,
         "messages": messages,
@@ -142,17 +148,94 @@ def chat_completion(
         raise RuntimeError(f"chat completions request failed with HTTP {exc.code}: {body}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"chat completions request failed: {exc.reason}") from exc
+    return response_payload
 
+
+def _first_chat_message(response_payload: dict[str, Any]) -> dict[str, Any]:
     choices = response_payload.get("choices")
     if not isinstance(choices, list) or not choices:
         raise RuntimeError("chat completions response did not contain choices")
     message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    if not isinstance(message, dict):
+        raise RuntimeError("chat completions response did not contain message content")
+    return message
+
+
+def chat_completion(
+    config: ChatAPIConfig,
+    messages: list[dict[str, str]],
+    max_tokens: int | None = None,
+    temperature: float = 0.7,
+    top_p: float = 0.95,
+    timeout: float = 60,
+) -> str:
+    message = _first_chat_message(
+        _post_chat_completion(
+            config=config,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            timeout=timeout,
+        )
+    )
     content = message.get("content") if isinstance(message, dict) else None
-    if (not isinstance(content, str) or not content.strip()) and isinstance(message, dict):
-        content = message.get("reasoning_content")
     if not isinstance(content, str) or not content.strip():
         raise RuntimeError("chat completions response did not contain message content")
     return content.strip()
+
+
+def _contains_think_tag(text: str) -> bool:
+    return "<think" in text.lower()
+
+
+def format_target_answer(
+    content: str | None,
+    reasoning_content: str | None,
+) -> ChatCompletionResult:
+    final = content.strip() if isinstance(content, str) else ""
+    reasoning = reasoning_content.strip() if isinstance(reasoning_content, str) else ""
+    if final and _contains_think_tag(final):
+        return ChatCompletionResult(text=final, reasoning_status="inline")
+    if reasoning and final:
+        return ChatCompletionResult(
+            text=f"<think>\n{reasoning}\n</think>\n\n{final}",
+            reasoning_status="separate",
+        )
+    if reasoning:
+        return ChatCompletionResult(
+            text=f"<think>\n{reasoning}\n</think>",
+            reasoning_status="only",
+        )
+    if final:
+        return ChatCompletionResult(text=final, reasoning_status="absent")
+    raise RuntimeError("chat completions response did not contain message content")
+
+
+def target_chat_completion(
+    config: ChatAPIConfig,
+    messages: list[dict[str, str]],
+    max_tokens: int | None = None,
+    temperature: float = 0.7,
+    top_p: float = 0.95,
+    timeout: float = 60,
+) -> ChatCompletionResult:
+    message = _first_chat_message(
+        _post_chat_completion(
+            config=config,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            timeout=timeout,
+        )
+    )
+    content = message.get("content")
+    reasoning_content = message.get("reasoning_content")
+    return format_target_answer(
+        content if isinstance(content, str) else None,
+        reasoning_content if isinstance(reasoning_content, str) else None,
+    )
 
 
 def create_embeddings(
