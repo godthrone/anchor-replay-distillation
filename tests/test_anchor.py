@@ -452,3 +452,166 @@ def test_system_persona_multiple_runs_produces_varied_output():
     personas = [item.anchor_meta.get("system_persona") for item in prompts]
     # With 100 samples and 4 options, all should appear at least once
     assert set(personas) == {"none", "one_sentence", "appropriate", "detailed"}
+
+
+# ── ARDConfig tests ──
+
+
+def test_ard_config_load_minimal(tmp_path):
+    """ARDConfig.load() reads a minimal .env file with defaults."""
+    from ard.config import ARDConfig
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ARD_INPUT_GENERATOR_API_BASE=https://api.example.com/v1\n"
+        "ARD_INPUT_GENERATOR_MODEL_NAME=deepseek-v4-flash\n"
+        "ARD_INPUT_GENERATOR_API_KEY=sk-test\n"
+        "ARD_TARGET_API_BASE=https://api.example.com/v1\n"
+        "ARD_TARGET_MODEL_NAME=qwen\n"
+        "ARD_TARGET_API_KEY=sk-test-target\n"
+    )
+    config = ARDConfig.load(env_file)
+    assert config.target_count == 10
+    assert config.temperature == 0.7
+    assert config.target_temperature == 0.0
+    assert config.seed == 42
+    assert config.sampling_strategy == "farthest"
+    assert config.input_generator_config.model_name == "deepseek-v4-flash"
+    assert config.target_config.model_name == "qwen"
+
+
+def test_ard_config_load_all_fields(tmp_path):
+    """ARDConfig.load() reads all fields from .env."""
+    from ard.config import ARDConfig
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ARD_INPUT_GENERATOR_API_BASE=https://api.example.com/v1\n"
+        "ARD_INPUT_GENERATOR_MODEL_NAME=ig-model\n"
+        "ARD_INPUT_GENERATOR_API_KEY=sk-ig\n"
+        "ARD_TARGET_API_BASE=https://api.example.com/v1\n"
+        "ARD_TARGET_MODEL_NAME=t-model\n"
+        "ARD_TARGET_API_KEY=sk-t\n"
+        "ARD_TARGET_COUNT=50\n"
+        "ARD_SEED=123\n"
+        "ARD_EXACT_FINAL_COUNT_ENABLED=true\n"
+        "ARD_EXACT_FINAL_COUNT_BATCH_SIZE=20\n"
+        "ARD_EXACT_FINAL_COUNT_MAX_BATCHES=5\n"
+        "ARD_TEMPERATURE=0.9\n"
+        "ARD_TARGET_TEMPERATURE=0.1\n"
+        "ARD_TOP_P=0.8\n"
+        "ARD_TIMEOUT=120\n"
+        "ARD_MAX_RETRIES=3\n"
+        "ARD_INPUT_GENERATOR_CONCURRENCY=50\n"
+        "ARD_TARGET_CONCURRENCY=30\n"
+        "ARD_SYSTEM_PERSONAS=none,detailed\n"
+        "ARD_TARGET_REASONING_EFFORT=none\n"
+        "ARD_SAMPLING_STRATEGY=balanced\n"
+    )
+    config = ARDConfig.load(env_file)
+    assert config.target_count == 50
+    assert config.seed == 123
+    assert config.exact_final_count_enabled is True
+    assert config.exact_final_count_batch_size == 20
+    assert config.exact_final_count_max_batches == 5
+    assert config.temperature == 0.9
+    assert config.target_temperature == 0.1
+    assert config.top_p == 0.8
+    assert config.timeout == 120
+    assert config.max_retries == 3
+    assert config.input_generator_concurrency == 50
+    assert config.target_concurrency == 30
+    assert config.sampling_strategy == "balanced"
+    assert config.system_personas == "none,detailed"
+    assert config.system_personas_list == ["none", "detailed"]
+    assert config.target_reasoning_effort == "none"
+    assert config.target_config.reasoning_effort == "none"
+    assert config.target_config.temperature == 0.1
+
+
+def test_ard_config_bool_variants(tmp_path):
+    """ARDConfig accepts various boolean representations."""
+    from ard.config import ARDConfig
+
+    for raw, expected in [
+        ("true", True),
+        ("false", False),
+        ("1", True),
+        ("0", False),
+        ("yes", True),
+        ("no", False),
+    ]:
+        env_file = tmp_path / f"env_{raw}"
+        env_file.write_text(
+            "ARD_INPUT_GENERATOR_API_BASE=https://api.example.com/v1\n"
+            "ARD_INPUT_GENERATOR_MODEL_NAME=m\n"
+            "ARD_INPUT_GENERATOR_API_KEY=k\n"
+            "ARD_TARGET_API_BASE=https://api.example.com/v1\n"
+            "ARD_TARGET_MODEL_NAME=m\n"
+            "ARD_TARGET_API_KEY=k\n"
+            f"ARD_EXACT_FINAL_COUNT_ENABLED={raw}\n"
+        )
+        config = ARDConfig.load(env_file)
+        assert config.exact_final_count_enabled == expected, f"{raw} -> {expected}"
+
+
+def test_ard_config_missing_required(tmp_path):
+    """ARDConfig.load() fails when a required API key is missing."""
+    from ard.config import ARDConfig
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ARD_INPUT_GENERATOR_API_BASE=https://api.example.com/v1\n"
+        "ARD_INPUT_GENERATOR_MODEL_NAME=m\n"
+        "# Missing ARD_INPUT_GENERATOR_API_KEY\n"
+        "ARD_TARGET_API_BASE=https://api.example.com/v1\n"
+        "ARD_TARGET_MODEL_NAME=m\n"
+        "ARD_TARGET_API_KEY=k\n"
+    )
+    try:
+        ARDConfig.load(env_file)
+        assert False, "Should have raised SystemExit"
+    except SystemExit:
+        pass
+
+
+def test_ard_config_input_generator_config():
+    """input_generator_config property builds ChatAPIConfig correctly."""
+    from ard.config import ARDConfig
+
+    config = ARDConfig(
+        input_generator_api_base="https://api.example.com",
+        input_generator_model_name="my-model",
+        input_generator_api_key="sk-key",
+        temperature=0.7,
+    )
+    ig = config.input_generator_config
+    assert ig.api_base == "https://api.example.com"
+    assert ig.model_name == "my-model"
+    assert ig.api_key == "sk-key"
+    assert ig.temperature == 0.7
+    assert ig.reasoning_effort is None  # input gen doesn't use reasoning
+
+
+def test_ard_generate_no_args_accepted():
+    """ard generate rejects any extra arguments."""
+    from ard.cli import build_parser
+
+    p = build_parser()
+    # Valid: no extra args
+    args = p.parse_args(["generate"])
+    assert args.func is not None
+
+    # Invalid: extra flag
+    try:
+        p.parse_args(["generate", "--foo"])
+        assert False, "Should have rejected --foo"
+    except SystemExit:
+        pass
+
+    # Invalid: extra positional
+    try:
+        p.parse_args(["generate", "bar"])
+        assert False, "Should have rejected positional arg"
+    except SystemExit:
+        pass

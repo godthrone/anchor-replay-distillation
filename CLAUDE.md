@@ -84,9 +84,13 @@ Ontology → Sampler → Anchor Prompts → Input Generator API → Generated In
 - **Exact-count mode** — when `require_exact_count=True`, the pipeline runs multiple batches, refilling until the target count of valid answers is reached (up to `max_batches`). By default, runs a single batch.
 - **No max_tokens by default** — the API client omits `max_tokens` from requests unless explicitly set, letting the provider control output length.
 
-### Scripts
+### Entry Point
 
-- `scripts/generate_anchors.py` — the primary end-to-end script. Validates `.env`, syncs deps, runs `ard anchor-build-dataset`, then validates outputs (row counts, no API key leaks in outputs, manifest consistency). This is the recommended entry point for dataset generation.
+- `ard generate` — the one-shot CLI command. Reads every setting from `.env`, accepts zero CLI arguments, runs the full pipeline, and validates outputs (row counts, no API key leaks, manifest consistency). No `scripts/` wrapper needed.
+
+### Configuration
+
+- `src/ard/config.py` — `ARDConfig` loads all settings from `.env` with validation. This is the single source of truth; no parameters come from CLI flags or other sources.
 
 ### Tests
 
@@ -99,7 +103,7 @@ Tests live in `tests/` and run with `pytest`. Key patterns:
 
 ## Important Constraints
 
-1. **API keys must never appear in outputs** — validate step in `scripts/generate_anchors.py` checks for key leaks in generated files
+1. **API keys must never appear in outputs** — `cmd_generate` validates output files for key leaks
 2. **Output directory safety** — refuses to write into a non-empty output dir unless `--overwrite-output` is set
 3. **Embedding sidecar staleness** — if ontology changes, `farthest` strategy raises an error directing to regenerate with `ard ontology-embed`
 4. **No `max_tokens` in default API calls** — per user memory, setting `max_tokens` can cause output truncation with thinking models

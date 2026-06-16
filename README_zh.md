@@ -51,8 +51,12 @@ ARD_TARGET_API_KEY=replace-me
 3. 生成默认数据集：
 
 ```bash
-uv run python scripts/generate_anchors.py
+uv sync --extra dev
+uv run ard generate
 ```
+
+`ard generate` **不接受任何 CLI 参数**。所有设置都从 `.env` 读取。
+编辑 `.env` 即可修改目标数量、采样策略、温度等 — 无需命令行参数。
 
 默认会在 `outputs/ard_anchor_dataset_*` 下尝试生成 10 个候选 anchor。
 
@@ -113,8 +117,10 @@ content
 
 ## 修改默认参数
 
-运行参数放在 `.env` 和 CLI 参数里。ontology 文件是
-`configs/anchor_ontology.json`，默认预计算 embedding sidecar 是
+所有设置都在 `.env` — 唯一的配置文件，没有 CLI 参数。编辑 `.env` 后重新运行
+`uv run ard generate` 即可。
+
+ontology 文件是 `configs/anchor_ontology.json`，默认预计算 embedding sidecar 是
 `configs/anchor_ontology_embeddings.json`。
 
 ```env
@@ -131,6 +137,7 @@ ARD_SAMPLING_STRATEGY=farthest
 ARD_LANGUAGES=
 ARD_TASK_TYPES=
 ARD_TEMPERATURE=0.7
+ARD_TARGET_TEMPERATURE=0.0
 ARD_TOP_P=0.95
 ARD_TIMEOUT=60
 ARD_MAX_RETRIES=2
