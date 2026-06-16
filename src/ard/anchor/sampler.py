@@ -52,6 +52,7 @@ class AnchorGenerationConfig:
     ontology_sha256: str | None = None
     embedding_model: str | None = None
     embedding_distance: str | None = None
+    system_personas: list[str] | None = None
 
 
 def _group_by_top_level(leaves: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -265,6 +266,7 @@ def generate_anchor_prompts(
     capability_top_counts: Counter[str] = Counter()
     conversation_leaf_counts: Counter[str] = Counter()
     conversation_top_counts: Counter[str] = Counter()
+    system_persona_counts: Counter[str] = Counter()
     language_counts: Counter[str] = Counter()
     feature_counts: Counter[str] = Counter()
     prompts: list[AnchorPrompt] = []
@@ -301,6 +303,13 @@ def generate_anchor_prompts(
 
         capability_name = str(capability_leaf["leaf"])
         conversation_type = str(conversation_leaf["leaf"])
+
+        if config.system_personas:
+            system_persona = rng.choice(config.system_personas)
+            system_persona_counts[system_persona] += 1
+        else:
+            system_persona = "none"
+
         prompt = build_anchor_prompt(
             knowledge_leaf=knowledge_leaf,
             language_features=language_features,
@@ -330,6 +339,7 @@ def generate_anchor_prompts(
             "input_generator_model": config.input_generator_model,
             "target_model": config.target_model,
             "source": "two_hop_anchor_generator",
+            "system_persona": system_persona,
             "seed": config.seed,
         }
         prompts.append(AnchorPrompt.from_prompt(prompt=prompt, meta=meta, salt=str(config.seed)))

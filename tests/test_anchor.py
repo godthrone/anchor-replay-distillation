@@ -357,3 +357,98 @@ def test_anchor_filter_can_drop_long_answers_when_limit_is_explicit():
 
     assert kept == []
     assert stats.dropped_too_long == 1
+
+
+def test_system_persona_is_sampled_and_stored_in_meta():
+    ontology = load_anchor_ontology(Path("configs/anchor_ontology.json"))
+    config = AnchorGenerationConfig(
+        count=20,
+        seed=3,
+        languages=["English"],
+        task_types=[str(leaf["leaf"]) for leaf in ontology.capabilities.leaves],
+        system_personas=["none", "one_sentence", "appropriate", "detailed"],
+    )
+
+    prompts = generate_anchor_prompts(
+        ontology.knowledge,
+        ontology.language_features,
+        ontology.capabilities,
+        ontology.conversation_types,
+        config,
+    )
+
+    personas = {item.anchor_meta.get("system_persona") for item in prompts}
+    assert personas <= {"none", "one_sentence", "appropriate", "detailed"}
+    assert len(personas) >= 1
+    assert all("system_persona" in item.anchor_meta for item in prompts)
+
+
+def test_system_persona_none_by_default_when_not_configured():
+    ontology = load_anchor_ontology(Path("configs/anchor_ontology.json"))
+    config = AnchorGenerationConfig(
+        count=5,
+        seed=3,
+        languages=["English"],
+        task_types=["qa"],
+        system_personas=None,
+    )
+
+    prompts = generate_anchor_prompts(
+        ontology.knowledge,
+        ontology.language_features,
+        ontology.capabilities,
+        ontology.conversation_types,
+        config,
+    )
+
+    assert all(item.anchor_meta.get("system_persona") == "none" for item in prompts)
+
+
+def test_system_persona_not_in_prompt_text():
+    ontology = load_anchor_ontology(Path("configs/anchor_ontology.json"))
+    config = AnchorGenerationConfig(
+        count=5,
+        seed=3,
+        languages=["English"],
+        task_types=["qa"],
+        system_personas=["one_sentence", "detailed"],
+    )
+
+    prompts = generate_anchor_prompts(
+        ontology.knowledge,
+        ontology.language_features,
+        ontology.capabilities,
+        ontology.conversation_types,
+        config,
+    )
+
+    for item in prompts:
+        text = item.messages[0]["content"]
+        assert "## Role" not in text
+        assert "## Expertise" not in text
+        assert "## Guidelines" not in text
+        assert "## Constraints" not in text
+        assert "one_sentence" not in text.lower()
+
+
+def test_system_persona_multiple_runs_produces_varied_output():
+    ontology = load_anchor_ontology(Path("configs/anchor_ontology.json"))
+    config = AnchorGenerationConfig(
+        count=100,
+        seed=3,
+        languages=["English"],
+        task_types=["qa"],
+        system_personas=["none", "one_sentence", "appropriate", "detailed"],
+    )
+
+    prompts = generate_anchor_prompts(
+        ontology.knowledge,
+        ontology.language_features,
+        ontology.capabilities,
+        ontology.conversation_types,
+        config,
+    )
+
+    personas = [item.anchor_meta.get("system_persona") for item in prompts]
+    # With 100 samples and 4 options, all should appear at least once
+    assert set(personas) == {"none", "one_sentence", "appropriate", "detailed"}

@@ -42,6 +42,9 @@ def build_anchor_manifest(
     conversation_types = Counter(
         anchor.anchor_meta.get("conversation_type", "unknown") for anchor in anchors
     )
+    system_personas = Counter(
+        anchor.anchor_meta.get("system_persona", "none") for anchor in anchors
+    )
     filter_stats_payload = _filter_stats_payload(filter_stats)
     filter_input_count = (
         int(filter_stats_payload.get("input_count", 0)) if filter_stats_payload else 0
@@ -70,6 +73,7 @@ def build_anchor_manifest(
             "by_task_type": dict(tasks),
             "by_language": dict(languages),
             "by_conversation_type": dict(conversation_types),
+            "by_system_persona": dict(system_personas),
         },
         "filter_stats": filter_stats_payload,
         "input_generation_stats": input_generation_stats,

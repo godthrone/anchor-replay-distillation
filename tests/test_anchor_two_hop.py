@@ -9,7 +9,12 @@ from ard.anchor.api_client import ChatAPIConfig, ChatCompletionResult, chat_api_
 from ard.anchor import api_client
 from ard.anchor.bank import AnchorPrompt, GeneratedInputAnchor, write_jsonl
 from ard.anchor.ontology import load_anchor_ontology
-from ard.anchor.input_generator import parse_input_generator_messages, generate_anchor_inputs
+from ard.anchor.input_generator import (
+    generate_anchor_inputs,
+    generate_one_anchor_input,
+    generate_system_prompt,
+    parse_input_generator_messages,
+)
 from ard.anchor.pipeline import build_anchor_dataset_api
 from ard.anchor.target import answer_generated_inputs_api
 
@@ -783,3 +788,470 @@ def test_ontology_embed_command_writes_hash_sidecar(tmp_path):
         "language_features",
     }
     assert ontology.knowledge.leaves
+
+
+# ---------------------------------------------------------------------------
+# system persona tests
+# ---------------------------------------------------------------------------
+
+
+def test_generate_system_prompt_one_sentence():
+    item = AnchorPrompt(
+        id="a",
+        messages=[{"role": "user", "content": "make a question"}],
+        anchor_meta={
+            "system_persona": "one_sentence",
+            "language": "English",
+            "knowledge_domain": "software_engineering -> programming -> Python debugging",
+            "capability": "coding",
+            "task_type": "coding",
+            "conversation_type": "single_turn",
+        },
+    )
+    config = ChatAPIConfig("https://api.example.com", "model", "secret")
+
+    def fake_chat(_config, messages, *_args):
+        return "You are a Python debugging expert."
+
+    result = generate_system_prompt(
+        item=item,
+        api_config=config,
+        temperature=0.7,
+        top_p=0.95,
+        timeout=60,
+        max_retries=0,
+        chat_fn=fake_chat,
+    )
+
+    assert result == "You are a Python debugging expert."
+
+
+def test_generate_system_prompt_detailed_markdown():
+    item = AnchorPrompt(
+        id="a",
+        messages=[{"role": "user", "content": "q"}],
+        anchor_meta={
+            "system_persona": "detailed",
+            "language": "English",
+            "knowledge_domain": "math_logic -> math -> algebra",
+            "capability": "math_solving",
+            "task_type": "math_solving",
+            "conversation_type": "single_turn",
+        },
+    )
+    config = ChatAPIConfig("https://api.example.com", "model", "secret")
+
+    def fake_chat(_config, messages, *_args):
+        prompt = messages[0]["content"]
+        assert "## Role" in prompt
+        return "## Role\nMath tutor\n\n## Expertise\nAlgebra\n\n## Guidelines\nBe precise\n\n## Constraints\nNone"
+
+    result = generate_system_prompt(
+        item=item,
+        api_config=config,
+        temperature=0.7,
+        top_p=0.95,
+        timeout=60,
+        max_retries=0,
+        chat_fn=fake_chat,
+    )
+
+    assert result is not None
+    assert "## Role" in result
+
+
+def test_generate_system_prompt_none_returns_none():
+    item = AnchorPrompt(
+        id="a",
+        messages=[{"role": "user", "content": "q"}],
+        anchor_meta={"system_persona": "none"},
+    )
+    config = ChatAPIConfig("https://api.example.com", "model", "secret")
+
+    result = generate_system_prompt(
+        item=item,
+        api_config=config,
+        temperature=0.7,
+        top_p=0.95,
+        timeout=60,
+        max_retries=0,
+        chat_fn=lambda *_args: "should not be called",
+    )
+
+    assert result is None
+
+
+def test_generate_system_prompt_unknown_persona_returns_none():
+    item = AnchorPrompt(
+        id="a",
+        messages=[{"role": "user", "content": "q"}],
+        anchor_meta={"system_persona": "unknown_type"},
+    )
+    config = ChatAPIConfig("https://api.example.com", "model", "secret")
+
+    result = generate_system_prompt(
+        item=item,
+        api_config=config,
+        temperature=0.7,
+        top_p=0.95,
+        timeout=60,
+        max_retries=0,
+        chat_fn=lambda *_args: "should not be called",
+    )
+
+    assert result is None
+
+
+def test_generate_system_prompt_failure_returns_none():
+    item = AnchorPrompt(
+        id="a",
+        messages=[{"role": "user", "content": "q"}],
+        anchor_meta={
+            "system_persona": "one_sentence",
+            "language": "English",
+            "knowledge_domain": "general",
+            "capability": "qa",
+            "task_type": "qa",
+            "conversation_type": "single_turn",
+        },
+    )
+    config = ChatAPIConfig("https://api.example.com", "model", "secret")
+
+    def always_fail(*_args):
+        raise RuntimeError("API error")
+
+    result = generate_system_prompt(
+        item=item,
+        api_config=config,
+        temperature=0.7,
+        top_p=0.95,
+        timeout=60,
+        max_retries=2,
+        chat_fn=always_fail,
+    )
+
+    assert result is None
+
+
+def test_generate_one_anchor_input_injects_system_message():
+    item = AnchorPrompt(
+        id="a",
+        messages=[{"role": "user", "content": "make a coding question"}],
+        anchor_meta={
+            "system_persona": "one_sentence",
+            "language": "English",
+            "knowledge_domain": "software_engineering -> programming -> Python",
+            "capability": "coding",
+            "task_type": "coding",
+            "conversation_type": "single_turn",
+        },
+    )
+    config = ChatAPIConfig("https://api.example.com", "model", "secret")
+
+    call_count = {"count": 0}
+
+    def fake_chat(_config, messages, *_args):
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            return "What are Python decorators?"
+        return "You are a Python expert."
+
+    result = generate_one_anchor_input(
+        item=item,
+        api_config=config,
+        max_tokens=None,
+        temperature=0.7,
+        top_p=0.95,
+        timeout=60,
+        max_retries=0,
+        chat_fn=fake_chat,
+    )
+
+    assert call_count["count"] == 2
+    assert result.messages[0]["role"] == "system"
+    assert result.messages[0]["content"] == "You are a Python expert."
+    assert len(result.messages) == 2
+    assert result.anchor_meta["system_persona"] == "one_sentence"
+
+
+def test_generate_one_anchor_input_no_system_for_none_persona():
+    item = AnchorPrompt(
+        id="a",
+        messages=[{"role": "user", "content": "make a question"}],
+        anchor_meta={
+            "system_persona": "none",
+            "language": "English",
+            "knowledge_domain": "general",
+            "capability": "qa",
+            "task_type": "qa",
+            "conversation_type": "single_turn",
+        },
+    )
+    config = ChatAPIConfig("https://api.example.com", "model", "secret")
+
+    def fake_chat(_config, messages, *_args):
+        return "What is async await?"
+
+    result = generate_one_anchor_input(
+        item=item,
+        api_config=config,
+        max_tokens=None,
+        temperature=0.7,
+        top_p=0.95,
+        timeout=60,
+        max_retries=0,
+        chat_fn=fake_chat,
+    )
+
+    assert result.messages[0]["role"] == "user"
+    assert result.anchor_meta["system_persona"] == "none"
+
+
+def test_generate_one_anchor_input_preserves_original_messages():
+    item = AnchorPrompt(
+        id="a",
+        messages=[{"role": "user", "content": "make a question"}],
+        anchor_meta={
+            "system_persona": "one_sentence",
+            "language": "English",
+            "knowledge_domain": "general",
+            "capability": "qa",
+            "task_type": "qa",
+            "conversation_type": "single_turn",
+        },
+    )
+    config = ChatAPIConfig("https://api.example.com", "model", "secret")
+
+    call_count = {"count": 0}
+
+    def fake_chat(_config, messages, *_args):
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            return "What is a closure?"
+        return "You are a helpful assistant."
+
+    result = generate_one_anchor_input(
+        item=item,
+        api_config=config,
+        max_tokens=None,
+        temperature=0.7,
+        top_p=0.95,
+        timeout=60,
+        max_retries=0,
+        chat_fn=fake_chat,
+    )
+
+    # Original item.messages should be unchanged
+    assert item.messages == [{"role": "user", "content": "make a question"}]
+    # Result messages should include system prompt
+    assert len(result.messages) == 2
+
+
+def test_generate_one_anchor_input_fallback_to_none_on_system_failure():
+    item = AnchorPrompt(
+        id="a",
+        messages=[{"role": "user", "content": "make a question"}],
+        anchor_meta={
+            "system_persona": "detailed",
+            "language": "English",
+            "knowledge_domain": "general",
+            "capability": "qa",
+            "task_type": "qa",
+            "conversation_type": "single_turn",
+        },
+    )
+    config = ChatAPIConfig("https://api.example.com", "model", "secret")
+
+    call_count = {"count": 0}
+
+    def fake_chat(_config, messages, *_args):
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            return "What is a monad?"
+        raise RuntimeError("system prompt generation failed")
+
+    result = generate_one_anchor_input(
+        item=item,
+        api_config=config,
+        max_tokens=None,
+        temperature=0.7,
+        top_p=0.95,
+        timeout=60,
+        max_retries=1,
+        chat_fn=fake_chat,
+    )
+
+    # max_retries=1: user gen (1 call) + system gen (2 attempts = 1 + 1 retry, both fail)
+    assert call_count["count"] == 3
+    # Messages should be user-only since system prompt failed
+    assert len(result.messages) == 1
+    assert result.messages[0]["role"] == "user"
+    # Meta should record "none" since fallback occurred
+    assert result.anchor_meta["system_persona"] == "none"
+
+
+def test_system_persona_flows_through_full_pipeline(tmp_path):
+    ontology = _write_test_anchor_ontology(
+        tmp_path,
+        knowledge={"general": {"topic": ["alpha", "beta"]}},
+        language_features={
+            "style": ["concise"],
+            "format": ["paragraph"],
+            "difficulty": ["basic"],
+            "context_length": ["short"],
+            "noise": ["clean"],
+            "answer_expectation": ["direct_answer"],
+        },
+    )
+
+    call_count = {"count": 0}
+
+    def fake_input_generation_chat(_config, messages, *_args):
+        call_count["count"] += 1
+        return f"unique input {call_count['count']}"
+
+    def fake_answer_chat(**kwargs):
+        return f"useful answer for {kwargs['messages'][-1]['content'][:20]}"
+
+    result = build_anchor_dataset_api(
+        output_dir=tmp_path / "dataset",
+        target_count=4,
+        seed=1,
+        knowledge=ontology.knowledge,
+        language=ontology.language_features,
+        capability=ontology.capabilities,
+        conversation=ontology.conversation_types,
+        languages=["English"],
+        task_types=["qa"],
+        input_generator_config=ChatAPIConfig("https://api.example.com", "input-gen", "secret"),
+        target_config=ChatAPIConfig("https://api.example.com", "target", "secret"),
+        system_personas=["none", "one_sentence", "appropriate", "detailed"],
+        input_generation_chat_fn=fake_input_generation_chat,
+        target_answer_chat_fn=fake_answer_chat,
+    )
+
+    assert result.final_count == 4
+
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "dataset" / "anchor_bank.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    manifest = json.loads((tmp_path / "dataset" / "manifest.json").read_text(encoding="utf-8"))
+
+    personas = [r["anchor_meta"].get("system_persona") for r in records]
+    assert set(personas) <= {"none", "one_sentence", "appropriate", "detailed"}
+    assert "by_system_persona" in manifest["counts"]
+
+
+def test_system_persona_manifest_counts_default_to_none(tmp_path):
+    ontology = _write_test_anchor_ontology(
+        tmp_path,
+        knowledge={"general": {"topic": ["alpha"]}},
+    )
+
+    build_anchor_dataset_api(
+        output_dir=tmp_path / "dataset",
+        target_count=1,
+        seed=1,
+        knowledge=ontology.knowledge,
+        language=ontology.language_features,
+        capability=ontology.capabilities,
+        conversation=ontology.conversation_types,
+        languages=["English"],
+        task_types=["qa"],
+        input_generator_config=ChatAPIConfig("https://api.example.com", "input-gen", "secret"),
+        target_config=ChatAPIConfig("https://api.example.com", "target", "secret"),
+        system_personas=None,
+        input_generation_chat_fn=lambda *_args: "unique input",
+        target_answer_chat_fn=lambda **_kwargs: "useful answer here",
+    )
+
+    manifest = json.loads((tmp_path / "dataset" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["counts"]["by_system_persona"] == {"none": 1}
+
+
+# --- reasoning_effort ---
+
+
+def test_reasoning_effort_is_passed_to_api_payload(monkeypatch):
+    """reasoning_effort='none' is included in the API request body."""
+    from ard.anchor import api_client as ac
+
+    captured_payload = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured_payload["body"] = json.loads(request.data.decode("utf-8"))
+        raise RuntimeError("stop after capture")
+
+    monkeypatch.setattr(ac.urllib.request, "urlopen", fake_urlopen)
+
+    config = ChatAPIConfig(
+        api_base="https://api.example.com",
+        model_name="test-model",
+        api_key="secret",
+        reasoning_effort="none",
+    )
+    try:
+        ac.chat_completion(config, [{"role": "user", "content": "hi"}])
+    except RuntimeError:
+        pass
+
+    assert captured_payload["body"]["reasoning_effort"] == "none"
+
+
+def test_reasoning_effort_none_omitted_from_payload(monkeypatch):
+    """When reasoning_effort is None, it is not included in the API request."""
+    from ard.anchor import api_client as ac
+
+    captured_payload = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured_payload["body"] = json.loads(request.data.decode("utf-8"))
+        raise RuntimeError("stop after capture")
+
+    monkeypatch.setattr(ac.urllib.request, "urlopen", fake_urlopen)
+
+    config = ChatAPIConfig(
+        api_base="https://api.example.com",
+        model_name="test-model",
+        api_key="secret",
+        reasoning_effort=None,
+    )
+    try:
+        ac.chat_completion(config, [{"role": "user", "content": "hi"}])
+    except RuntimeError:
+        pass
+
+    assert "reasoning_effort" not in captured_payload["body"]
+
+
+def test_chat_api_config_from_env_reads_reasoning_effort(monkeypatch, tmp_path):
+    """chat_api_config_from_env reads ARD_TARGET_REASONING_EFFORT from env file."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ARD_TARGET_API_BASE=https://api.example.com\n"
+        "ARD_TARGET_MODEL_NAME=test-model\n"
+        "ARD_TARGET_API_KEY=secret\n"
+        "ARD_TARGET_REASONING_EFFORT=none\n",
+        encoding="utf-8",
+    )
+    config = chat_api_config_from_env(env_file=str(env_file))
+    assert config.reasoning_effort == "none"
+
+
+def test_chat_api_config_from_env_reasoning_defaults_to_none(monkeypatch, tmp_path):
+    """When ARD_TARGET_REASONING_EFFORT is not set, reasoning_effort defaults to None."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ARD_TARGET_API_BASE=https://api.example.com\n"
+        "ARD_TARGET_MODEL_NAME=test-model\n"
+        "ARD_TARGET_API_KEY=secret\n",
+        encoding="utf-8",
+    )
+    # Ensure env var not set in os.environ
+    monkeypatch.delenv("ARD_TARGET_REASONING_EFFORT", raising=False)
+    config = chat_api_config_from_env(env_file=str(env_file))
+    assert config.reasoning_effort is None

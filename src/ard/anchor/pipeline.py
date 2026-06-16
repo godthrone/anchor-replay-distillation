@@ -74,7 +74,8 @@ def _run_streaming_batch(
     target_config: ChatAPIConfig,
     input_generator_max_tokens: int | None,
     target_max_tokens: int | None,
-    temperature: float,
+    input_temperature: float,
+    target_temperature: float,
     top_p: float,
     timeout: float,
     max_retries: int,
@@ -120,7 +121,7 @@ def _run_streaming_batch(
                 item=item,
                 api_config=input_generator_config,
                 max_tokens=input_generator_max_tokens,
-                temperature=temperature,
+                temperature=input_temperature,
                 top_p=top_p,
                 timeout=timeout,
                 max_retries=max_retries,
@@ -178,7 +179,7 @@ def _run_streaming_batch(
                         item=generated_item,
                         api_config=target_config,
                         max_tokens=target_max_tokens,
-                        temperature=temperature,
+                        temperature=target_temperature,
                         top_p=top_p,
                         timeout=timeout,
                         chat_fn=target_answer_chat_fn,
@@ -245,6 +246,7 @@ def build_anchor_dataset_api(
     input_generator_max_tokens: int | None = None,
     target_max_tokens: int | None = None,
     temperature: float = 0.7,
+    target_temperature: float = 0.0,
     top_p: float = 0.95,
     timeout: float = 60,
     max_retries: int = 2,
@@ -262,6 +264,7 @@ def build_anchor_dataset_api(
     input_generation_chat_fn: ChatFn | None = None,
     target_answer_chat_fn: ChatFn | None = None,
     logger: LogFn | None = None,
+    system_personas: list[str] | None = None,
 ) -> DatasetBuildResult:
     if target_count <= 0:
         raise ValueError("target_count must be positive")
@@ -348,6 +351,7 @@ def build_anchor_dataset_api(
             ontology_sha256=ontology_sha256,
             embedding_model=embedding_model,
             embedding_distance=embedding_distance,
+            system_personas=system_personas,
         )
         prompts = generate_anchor_prompts(
             knowledge=knowledge,
@@ -371,7 +375,8 @@ def build_anchor_dataset_api(
             target_config=target_config,
             input_generator_max_tokens=input_generator_max_tokens,
             target_max_tokens=target_max_tokens,
-            temperature=temperature,
+            input_temperature=temperature,
+            target_temperature=target_temperature,
             top_p=top_p,
             timeout=timeout,
             max_retries=max_retries,

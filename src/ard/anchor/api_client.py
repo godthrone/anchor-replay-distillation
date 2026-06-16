@@ -14,6 +14,8 @@ class ChatAPIConfig:
     api_base: str
     model_name: str
     api_key: str
+    reasoning_effort: str | None = None
+    temperature: float | None = None  # None means use caller default
 
     @property
     def chat_completions_url(self) -> str:
@@ -65,6 +67,11 @@ def chat_api_config_from_env(
     api_base = file_values.get(api_base_key) or os.environ.get(api_base_key)
     env_model = file_values.get(model_name_key) or os.environ.get(model_name_key)
     api_key = file_values.get(api_key_key) or os.environ.get(api_key_key)
+    reasoning_key = f"{env_prefix}_REASONING_EFFORT"
+    reasoning_effort = file_values.get(reasoning_key) or os.environ.get(reasoning_key) or None
+    temperature_key = f"{env_prefix}_TEMPERATURE"
+    temperature_str = file_values.get(temperature_key) or os.environ.get(temperature_key) or None
+    temperature = float(temperature_str) if temperature_str else None
     resolved_model = model_name or env_model
     missing = [
         name
@@ -81,6 +88,8 @@ def chat_api_config_from_env(
         api_base=str(api_base),
         model_name=str(resolved_model),
         api_key=str(api_key),
+        reasoning_effort=reasoning_effort if reasoning_effort else None,
+        temperature=temperature,
     )
 
 
@@ -123,14 +132,18 @@ def _post_chat_completion(
     top_p: float = 0.95,
     timeout: float = 60,
 ) -> dict[str, Any]:
+    # Use config-level temperature override if set, otherwise fall back to parameter default
+    effective_temperature = config.temperature if config.temperature is not None else temperature
     payload = {
         "model": config.model_name,
         "messages": messages,
-        "temperature": temperature,
+        "temperature": effective_temperature,
         "top_p": top_p,
     }
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens
+    if config.reasoning_effort is not None:
+        payload["reasoning_effort"] = config.reasoning_effort
     request = urllib.request.Request(
         config.chat_completions_url,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
