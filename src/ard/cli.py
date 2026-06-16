@@ -3,8 +3,11 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 import json
+import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+
+from ard.anchor.sampler import SamplingStrategy
 
 
 SYSTEM_PERSONA_OPTIONS = ["none", "one_sentence", "appropriate", "detailed"]
@@ -314,6 +317,118 @@ def cmd_anchor_build_dataset(args: argparse.Namespace) -> int:
     return 0 if (not args.require_exact_count or result.final_count >= result.target_count) else 2
 
 
+def cmd_generate(_args: argparse.Namespace) -> int:
+    """One-shot dataset generation — all settings from .env, no CLI arguments accepted."""
+    # Strict: error on any extra arguments
+    if len(sys.argv) > 2:
+        raise SystemExit(
+            "ard generate accepts no arguments. "
+            "All settings come from .env — edit that file instead.\n"
+            "Usage: uv run ard generate"
+        )
+
+    from ard.anchor import load_anchor_ontology
+    from ard.anchor.embeddings import load_ontology_embeddings
+    from ard.anchor.pipeline import build_anchor_dataset_api
+    from ard.config import ARDConfig
+
+    config = ARDConfig.load()
+    ontology_path = config.resolve_path(config.ontology_path)
+    anchor_ontology = load_anchor_ontology(str(ontology_path))
+    ontology_embeddings = None
+    if config.sampling_strategy == "farthest":
+        embeddings_path = config.resolve_path(config.ontology_embeddings_path)
+        ontology_embeddings = load_ontology_embeddings(str(embeddings_path), str(ontology_path))
+    languages = _filtered_csv(config.languages or None, anchor_ontology.languages, "languages")
+    task_types = _filtered_csv(
+        config.task_types or None,
+        _leaf_values(anchor_ontology.capabilities.leaves),
+        "task_types",
+    )
+    system_personas = config.system_personas_list
+    if system_personas is not None:
+        unknown = sorted(set(system_personas) - set(SYSTEM_PERSONA_OPTIONS))
+        if unknown:
+            raise SystemExit(
+                f"Unknown system persona options in ARD_SYSTEM_PERSONAS: {', '.join(unknown)}. "
+                f"Valid options: {', '.join(SYSTEM_PERSONA_OPTIONS)}"
+            )
+
+    output_dir = config.resolve_output_dir()
+    result = build_anchor_dataset_api(
+        output_dir=output_dir,
+        target_count=config.target_count,
+        seed=config.seed,
+        knowledge=anchor_ontology.knowledge,
+        language=anchor_ontology.language_features,
+        capability=anchor_ontology.capabilities,
+        conversation=anchor_ontology.conversation_types,
+        languages=languages,
+        task_types=task_types,
+        input_generator_config=config.input_generator_config,
+        target_config=config.target_config,
+        batch_size=config.exact_final_count_batch_size,
+        max_batches=config.exact_final_count_max_batches,
+        input_generator_max_tokens=config.input_generator_max_tokens or None,
+        target_max_tokens=config.target_max_tokens or None,
+        temperature=config.temperature,
+        target_temperature=config.target_temperature,
+        top_p=config.top_p,
+        timeout=config.timeout,
+        max_retries=config.max_retries,
+        input_generator_concurrency=config.input_generator_concurrency,
+        target_concurrency=config.target_concurrency,
+        require_exact_count=config.exact_final_count_enabled,
+        overwrite_output=config.overwrite_output,
+        min_target_answer_chars=config.min_target_answer_chars,
+        max_target_answer_chars=config.max_target_answer_chars or None,
+        sampling_strategy=cast(SamplingStrategy, config.sampling_strategy),
+        ontology_embeddings=ontology_embeddings,
+        ontology_sha256=ontology_embeddings.ontology_sha256 if ontology_embeddings else None,
+        embedding_model=ontology_embeddings.embedding_model if ontology_embeddings else None,
+        embedding_distance=ontology_embeddings.distance if ontology_embeddings else None,
+        system_personas=system_personas,
+    )
+
+    # Validate outputs (no API key leaks)
+    _validate_generated_outputs(output_dir, config)
+
+    print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+    ok = not config.exact_final_count_enabled or result.final_count >= result.target_count
+    return 0 if ok else 2
+
+
+def _validate_generated_outputs(output_dir: Path, config: Any) -> None:
+    """Check generated outputs: files exist, row counts plausible, no API key leaks."""
+    anchor_bank_path = output_dir / "anchor_bank.jsonl"
+    manifest_path = output_dir / "manifest.json"
+    input_stats = output_dir / "input_generation_stats.json"
+    target_stats = output_dir / "target_answer_stats.json"
+
+    for required_file in (anchor_bank_path, manifest_path, input_stats, target_stats):
+        if not required_file.exists():
+            raise SystemExit(f"Expected output file was not created: {required_file}")
+
+    anchor_count = sum(
+        1 for _ in anchor_bank_path.read_text(encoding="utf-8").splitlines() if _.strip()
+    )
+    if config.exact_final_count_enabled and anchor_count != config.target_count:
+        raise SystemExit(
+            f"Expected {config.target_count} anchors, found {anchor_count} in {anchor_bank_path}."
+        )
+    if anchor_count > config.target_count:
+        raise SystemExit(
+            f"Expected at most {config.target_count} anchors, found {anchor_count} in {anchor_bank_path}."
+        )
+
+    api_keys = (config.input_generator_api_key, config.target_api_key)
+    for output_file in (anchor_bank_path, manifest_path, input_stats, target_stats):
+        content = output_file.read_text(encoding="utf-8")
+        for key in api_keys:
+            if key and key in content:
+                raise SystemExit(f"API key leaked into output file: {output_file}")
+
+
 def cmd_ontology_embed(args: argparse.Namespace) -> int:
     from ard.anchor.embeddings import (
         BOOTSTRAP_EMBEDDING_MODEL,
@@ -599,6 +714,13 @@ def build_parser() -> argparse.ArgumentParser:
         "Options: none, one_sentence, appropriate, detailed. Default: all four.",
     )
     anchor_build.set_defaults(func=cmd_anchor_build_dataset)
+
+    generate = subparsers.add_parser(
+        "generate",
+        help="One-shot dataset generation (all settings from .env).",
+    )
+    generate.set_defaults(func=cmd_generate)
+    # Intentionally zero arguments — any extra arg will be rejected by argparse.
 
     eval_forgetting = subparsers.add_parser(
         "eval-forgetting", help="Compare anchor eval completions to target answers."

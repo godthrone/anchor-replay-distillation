@@ -55,8 +55,13 @@ committed template.
 3. Generate the default dataset:
 
 ```bash
-uv run python scripts/generate_anchors.py
+uv sync --extra dev
+uv run ard generate
 ```
+
+`ard generate` accepts **zero** CLI arguments. Every setting is read from `.env`.
+Edit `.env` to change the target count, sampling strategy, temperatures, or any
+other knob — no command-line flags needed.
 
 The script runs `uv sync --extra dev`, then attempts 10 candidate anchors by
 default under a timestamped `outputs/ard_anchor_dataset_*` directory.
@@ -123,9 +128,11 @@ Key `anchor_meta` fields:
 
 ## Changing Defaults
 
-Runtime settings live in `.env` and CLI flags. The ontology lives in
-`configs/anchor_ontology.json`; the default precomputed embedding sidecar lives
-in `configs/anchor_ontology_embeddings.json`.
+All settings live in `.env` — the single configuration file. There are no CLI
+flags. Edit `.env`, then re-run `uv run ard generate`.
+
+The ontology lives in `configs/anchor_ontology.json`; the default precomputed
+embedding sidecar lives in `configs/anchor_ontology_embeddings.json`.
 
 ```env
 ARD_TARGET_COUNT=10
@@ -141,6 +148,7 @@ ARD_SAMPLING_STRATEGY=farthest
 ARD_LANGUAGES=
 ARD_TASK_TYPES=
 ARD_TEMPERATURE=0.7
+ARD_TARGET_TEMPERATURE=0.0
 ARD_TOP_P=0.95
 ARD_TIMEOUT=60
 ARD_MAX_RETRIES=2
@@ -252,7 +260,8 @@ uv run pytest -q
 | `ARD_SAMPLING_STRATEGY` | `farthest` | `farthest`, `balanced`, or `random`. |
 | `ARD_LANGUAGES` | blank | Optional comma-separated language filter. |
 | `ARD_TASK_TYPES` | blank | Optional comma-separated task filter. |
-| `ARD_TEMPERATURE` | `0.7` | Sampling temperature for model calls. |
+| `ARD_TEMPERATURE` | `0.7` | Input generator temperature (prompt diversity). |
+| `ARD_TARGET_TEMPERATURE` | `0.0` | Target model temperature (0.0 = greedy for faithful replay). |
 | `ARD_TOP_P` | `0.95` | Top-p sampling value for model calls. |
 | `ARD_TIMEOUT` | `60` | Per-request timeout in seconds. |
 | `ARD_MAX_RETRIES` | `2` | API retry count. |
