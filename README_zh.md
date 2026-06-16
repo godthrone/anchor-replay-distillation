@@ -140,6 +140,8 @@ ARD_MIN_TARGET_ANSWER_CHARS=8
 ARD_MAX_TARGET_ANSWER_CHARS=
 ARD_INPUT_GENERATOR_MAX_TOKENS=
 ARD_TARGET_MAX_TOKENS=
+ARD_SYSTEM_PERSONAS=
+ARD_TARGET_REASONING_EFFORT=
 ```
 
 `ARD_LANGUAGES` 和 `ARD_TASK_TYPES` 是逗号分隔过滤器，留空使用 ontology 默认值：
@@ -151,6 +153,9 @@ ARD_TASK_TYPES=qa,explanation,reasoning,coding,debugging
 
 严格 API 要求：默认不要设置 `ARD_INPUT_GENERATOR_MAX_TOKENS` 或
 `ARD_TARGET_MAX_TOKENS`。留空时 ARD 不会向大模型 API 发送 `max_tokens`。
+
+`ARD_SYSTEM_PERSONAS` 控制输入生成时的系统 persona 风格，逗号分隔：`none`（无系统提示）、`one_sentence`（简短一句话）、`appropriate`（默认适中）、`detailed`（详细描述）。留空启用全部四种。
+`ARD_TARGET_REASONING_EFFORT` 设为 `none` 可禁用目标模型的思考/推理输出（vllm 0.22+ 支持）。
 
 ## 采样 Ontology
 

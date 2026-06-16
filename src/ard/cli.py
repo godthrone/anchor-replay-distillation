@@ -7,6 +7,9 @@ from pathlib import Path
 from typing import Any
 
 
+SYSTEM_PERSONA_OPTIONS = ["none", "one_sentence", "appropriate", "detailed"]
+
+
 def _csv(value: str | None) -> list[str] | None:
     if value is None:
         return None
@@ -92,6 +95,17 @@ def cmd_anchor_generate(args: argparse.Namespace) -> int:
     task_types = _filtered_csv(
         args.task_types, _leaf_values(anchor_ontology.capabilities.leaves), "task_types"
     )
+    if args.system_personas:
+        selected = [s.strip() for s in args.system_personas.split(",")]
+        unknown = sorted(set(selected) - set(SYSTEM_PERSONA_OPTIONS))
+        if unknown:
+            raise SystemExit(
+                f"Unknown system persona options: {', '.join(unknown)}. "
+                f"Valid options: {', '.join(SYSTEM_PERSONA_OPTIONS)}"
+            )
+        system_personas = selected
+    else:
+        system_personas = SYSTEM_PERSONA_OPTIONS[:]
     prompt_config = AnchorGenerationConfig(
         count=args.count,
         seed=args.seed,
@@ -105,6 +119,7 @@ def cmd_anchor_generate(args: argparse.Namespace) -> int:
         ontology_sha256=ontology_embeddings.ontology_sha256 if ontology_embeddings else None,
         embedding_model=ontology_embeddings.embedding_model if ontology_embeddings else None,
         embedding_distance=ontology_embeddings.distance if ontology_embeddings else None,
+        system_personas=system_personas,
     )
     prompts = generate_anchor_prompts(
         knowledge=anchor_ontology.knowledge,
@@ -245,6 +260,17 @@ def cmd_anchor_build_dataset(args: argparse.Namespace) -> int:
     task_types = _filtered_csv(
         args.task_types, _leaf_values(anchor_ontology.capabilities.leaves), "task_types"
     )
+    if args.system_personas:
+        selected = [s.strip() for s in args.system_personas.split(",")]
+        unknown = sorted(set(selected) - set(SYSTEM_PERSONA_OPTIONS))
+        if unknown:
+            raise SystemExit(
+                f"Unknown system persona options: {', '.join(unknown)}. "
+                f"Valid options: {', '.join(SYSTEM_PERSONA_OPTIONS)}"
+            )
+        system_personas = selected
+    else:
+        system_personas = SYSTEM_PERSONA_OPTIONS[:]
     result = build_anchor_dataset_api(
         output_dir=args.output_dir,
         target_count=args.target_count,
@@ -266,6 +292,7 @@ def cmd_anchor_build_dataset(args: argparse.Namespace) -> int:
         input_generator_max_tokens=args.input_generator_max_tokens,
         target_max_tokens=args.target_max_tokens,
         temperature=args.temperature,
+        target_temperature=args.target_temperature,
         top_p=args.top_p,
         timeout=args.timeout,
         max_retries=args.max_retries,
@@ -280,6 +307,7 @@ def cmd_anchor_build_dataset(args: argparse.Namespace) -> int:
         ontology_sha256=ontology_embeddings.ontology_sha256 if ontology_embeddings else None,
         embedding_model=ontology_embeddings.embedding_model if ontology_embeddings else None,
         embedding_distance=ontology_embeddings.distance if ontology_embeddings else None,
+        system_personas=system_personas,
         logger=None if args.quiet else _print_log,
     )
     print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
@@ -434,6 +462,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--input-generator-model", default="unspecified_input_generator_model"
     )
     anchor_generate.add_argument("--target-model", default="unspecified_target_model")
+    anchor_generate.add_argument(
+        "--system-personas",
+        help="Comma-separated system persona options to include in the sampling pool. "
+        "Options: none, one_sentence, appropriate, detailed. Default: all four.",
+    )
     anchor_generate.set_defaults(func=cmd_anchor_generate)
 
     ontology_embed = subparsers.add_parser(
@@ -549,6 +582,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--target-max-tokens", type=int, help="Explicit override only; omitted by default."
     )
     anchor_build.add_argument("--temperature", type=float, default=0.7)
+    anchor_build.add_argument("--target-temperature", type=float, default=0.0)
     anchor_build.add_argument("--top-p", type=float, default=0.95)
     anchor_build.add_argument("--timeout", type=float, default=60)
     anchor_build.add_argument("--max-retries", type=int, default=2)
@@ -559,6 +593,11 @@ def build_parser() -> argparse.ArgumentParser:
     anchor_build.add_argument("--min-target-answer-chars", type=int, default=8)
     anchor_build.add_argument("--max-target-answer-chars", type=_optional_int)
     anchor_build.add_argument("--quiet", action="store_true")
+    anchor_build.add_argument(
+        "--system-personas",
+        help="Comma-separated system persona options to include in the sampling pool. "
+        "Options: none, one_sentence, appropriate, detailed. Default: all four.",
+    )
     anchor_build.set_defaults(func=cmd_anchor_build_dataset)
 
     eval_forgetting = subparsers.add_parser(

@@ -182,6 +182,7 @@ def main() -> int:
     exact_final_count_max_batches = get_int(env_values, "ARD_EXACT_FINAL_COUNT_MAX_BATCHES", 3)
     seed = get_int(env_values, "ARD_SEED", 42, minimum=0)
     temperature = get_float(env_values, "ARD_TEMPERATURE", 0.7)
+    target_temperature = get_float(env_values, "ARD_TARGET_TEMPERATURE", 0.0)
     top_p = get_float(env_values, "ARD_TOP_P", 0.95)
     timeout = get_float(env_values, "ARD_TIMEOUT", 60)
     max_retries = get_int(env_values, "ARD_MAX_RETRIES", 2, minimum=0)
@@ -227,6 +228,8 @@ def main() -> int:
         str(seed),
         "--temperature",
         str(temperature),
+        "--target-temperature",
+        str(target_temperature),
         "--top-p",
         str(top_p),
         "--timeout",
@@ -249,6 +252,7 @@ def main() -> int:
         "ARD_TARGET_MAX_TOKENS": "--target-max-tokens",
         "ARD_MIN_TARGET_ANSWER_CHARS": "--min-target-answer-chars",
         "ARD_MAX_TARGET_ANSWER_CHARS": "--max-target-answer-chars",
+        "ARD_SYSTEM_PERSONAS": "--system-personas",
     }
     for env_key, cli_arg in optional_cli_args.items():
         value = get_optional(env_values, env_key)

@@ -150,6 +150,8 @@ ARD_MIN_TARGET_ANSWER_CHARS=8
 ARD_MAX_TARGET_ANSWER_CHARS=
 ARD_INPUT_GENERATOR_MAX_TOKENS=
 ARD_TARGET_MAX_TOKENS=
+ARD_SYSTEM_PERSONAS=
+ARD_TARGET_REASONING_EFFORT=
 ```
 
 `ARD_LANGUAGES` and `ARD_TASK_TYPES` are comma-separated runtime filters. Leave
@@ -260,3 +262,5 @@ uv run pytest -q
 | `ARD_MAX_TARGET_ANSWER_CHARS` | blank | Optional max answer length filter. |
 | `ARD_INPUT_GENERATOR_MAX_TOKENS` | blank | Optional explicit token cap for input generation. |
 | `ARD_TARGET_MAX_TOKENS` | blank | Optional explicit token cap for target answers. |
+| `ARD_SYSTEM_PERSONAS` | blank | Comma-separated system persona options: `none`, `one_sentence`, `appropriate`, `detailed`. Blank = all four. |
+| `ARD_TARGET_REASONING_EFFORT` | blank | Set to `none` to disable thinking/reasoning in target model responses. |
