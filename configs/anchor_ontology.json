@@ -417,5 +417,23 @@
       "ask_before_answering",
       "structured_analysis"
     ]
+  },
+  "visual_domains": {
+    "object_recognition": {
+      "description": "识别图中的物体、人物、场景",
+      "sub_domains": ["everyday_objects", "animals", "plants", "vehicles", "buildings", "food", "clothing"]
+    },
+    "spatial_reasoning": {
+      "description": "理解空间关系、位置、方向",
+      "sub_domains": ["relative_position", "depth_estimation", "occlusion", "distance_judgment"]
+    },
+    "scene_understanding": {
+      "description": "理解整体场景、活动、氛围",
+      "sub_domains": ["indoor_scenes", "outdoor_scenes", "urban_scenes", "natural_landscapes", "crowd_scenes"]
+    },
+    "text_reading": {
+      "description": "OCR、文字识别、文档理解",
+      "sub_domains": ["printed_text", "handwriting", "signs", "screenshots", "documents"]
+    }
   }
 }

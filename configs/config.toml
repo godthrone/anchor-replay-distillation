@@ -1,0 +1,35 @@
+# ARD — Anchor Replay Distillation
+# Base configuration. All fields are defined here.
+# Secret fields (API keys, endpoints) are left empty — fill them in config.override.toml
+# See configs/config.override.sample.toml for an example.
+
+[input_generator]
+api_base = ""
+model_name = ""
+api_key = ""
+temperature = 0.8
+max_tokens = 4096
+timeout = 120.0
+max_retries = 3
+
+[target]
+api_base = ""
+model_name = ""
+api_key = ""
+temperature = 0.0
+max_tokens = 4096
+timeout = 120.0
+max_retries = 3
+
+[generation]
+target_count = 100
+seed = 42
+languages = []
+task_types = []
+
+[ontology]
+path = "configs/anchor_ontology.json"
+
+[output]
+dir = ""
+overwrite = false

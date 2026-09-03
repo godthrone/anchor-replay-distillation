@@ -1,4 +1,4 @@
+"""Allow running as `python -m ard`."""
 from ard.cli import main
 
-if __name__ == "__main__":
-    main()
+main()

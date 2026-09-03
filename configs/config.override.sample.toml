@@ -1,0 +1,38 @@
+# ARD — Override configuration template.
+# Copy this file to configs/config.override.toml and fill in secret values.
+# config.override.toml is gitignored — never commit real secrets.
+#
+# Only override fields that need to differ from the base config.
+# You CANNOT add new fields not present in config.toml.
+
+[input_generator]
+# API endpoint for the input generation LLM (e.g., vLLM OpenAI-compatible)
+api_base = "http://10.1.xxx.xxx:8000/v1"
+# Model name as registered in the API
+model_name = "qwen3-27b"
+# API key if required by the endpoint
+api_key = "REPLACE_ME"
+
+[target]
+# API endpoint for the target/reference LLM
+api_base = "http://10.1.xxx.xxx:8000/v1"
+# Model name for the target LLM
+model_name = "qwen3-27b"
+# API key if required by the endpoint
+api_key = "REPLACE_ME"
+
+[generation]
+# Number of anchor samples to generate
+target_count = 1000
+# Random seed for reproducibility
+seed = 42
+# Languages to include (subset of: English, 简体中文, Español, 日本語)
+languages = ["English", "简体中文"]
+# Task types from the ontology capabilities
+task_types = ["qa", "reasoning", "coding"]
+
+[output]
+# Output directory (relative to project root)
+dir = "outputs/ard_run_001"
+# Whether to overwrite existing output
+overwrite = false
