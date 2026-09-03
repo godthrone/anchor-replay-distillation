@@ -8,13 +8,13 @@ ARG NO_PROXY
 
 # Layer 1: dependencies
 COPY uv.lock pyproject.toml .python-version README.md LICENSE ./
-RUN pip install uv && uv sync --no-install-project --frozen --no-dev
+RUN --mount=type=cache,target=/root/.cache/uv pip install uv && uv sync --no-install-project --frozen --no-dev
 
 # Layer 2: source code
 COPY src ./src
 COPY configs ./configs
 ARG VERSION=0.0.0
 ENV SETUPTOOLS_SCM_PRETEND_VERSION=${VERSION}
-RUN uv sync --frozen --no-dev
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
 
 ENTRYPOINT ["uv", "run", "ard"]

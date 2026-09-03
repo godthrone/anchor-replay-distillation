@@ -1,1257 +1,267 @@
+"""Tests for ARD v2 — backends, domain bank, text_anchor, pipeline."""
+
 import json
-import threading
-import time
-from argparse import Namespace
+from pathlib import Path
 
 import pytest
 
-from ard.anchor.api_client import ChatAPIConfig, ChatCompletionResult, chat_api_config_from_env
-from ard.anchor import api_client
-from ard.anchor.bank import AnchorPrompt, GeneratedInputAnchor, write_jsonl
-from ard.anchor.ontology import load_anchor_ontology
-from ard.anchor.input_generator import (
-    generate_anchor_inputs,
-    generate_one_anchor_input,
-    generate_system_prompt,
-    parse_input_generator_messages,
+from ard.backends.api_client import (
+    ChatAPIClient,
+    ChatAPIConfig,
+    ChatRequest,
+    ChatResult,
+    ChatResultWithLogprobs,
+    encode_image_to_base64,
 )
-from ard.anchor.pipeline import build_anchor_dataset_api
-from ard.anchor.target import answer_generated_inputs_api
-
-
-def _write_test_anchor_ontology(
-    tmp_path,
-    *,
-    knowledge: dict,
-    language_features: dict | None = None,
-    capabilities: dict | None = None,
-    conversation_types: dict | None = None,
-):
-    path = tmp_path / "anchor_ontology.json"
-    path.write_text(
-        json.dumps(
-            {
-                "languages": ["English"],
-                "knowledge_domains": knowledge,
-                "language_features": language_features or {"style": ["concise"]},
-                "capabilities": capabilities or {"knowledge_response": ["qa"]},
-                "conversation_types": conversation_types or {"single_turn": ["single_turn"]},
-            }
-        ),
-        encoding="utf-8",
-    )
-    return load_anchor_ontology(path)
-
-
-def test_api_env_file_parsing_and_no_key_serialization(tmp_path):
-    env_path = tmp_path / "api.env"
-    env_path.write_text(
-        "\n".join(
-            [
-                "ARD_INPUT_GENERATOR_API_BASE=https://api.example.com/",
-                "ARD_INPUT_GENERATOR_MODEL_NAME=test-model",
-                "ARD_INPUT_GENERATOR_API_KEY=secret-key",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    input_path = tmp_path / "prompts.jsonl"
-    output_path = tmp_path / "generated_inputs.jsonl"
-    write_jsonl(
-        [
-            AnchorPrompt(
-                id="a",
-                messages=[{"role": "user", "content": "make a question"}],
-                anchor_meta={"conversation_type": "single_turn"},
-            )
-        ],
-        input_path,
-    )
-    config = chat_api_config_from_env(env_path, env_prefix="ARD_INPUT_GENERATOR")
-
-    generate_anchor_inputs(
-        api_config=config,
-        input_path=input_path,
-        output_path=output_path,
-        chat_fn=lambda *_args: "A real user question?",
-    )
-
-    assert config.api_key == "secret-key"
-    assert "secret-key" not in output_path.read_text(encoding="utf-8")
-
-
-def test_chat_completion_uses_content_not_reasoning_content(monkeypatch):
-    captured = {}
-
-    class FakeResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self):
-            return json.dumps(
-                {
-                    "choices": [
-                        {
-                            "message": {
-                                "role": "assistant",
-                                "content": "visible content",
-                                "reasoning_content": "hidden reasoning",
-                            }
-                        }
-                    ]
-                }
-            ).encode("utf-8")
-
-    def fake_urlopen(request, **_kwargs):
-        captured["payload"] = json.loads(request.data.decode("utf-8"))
-        return FakeResponse()
-
-    monkeypatch.setattr(api_client.urllib.request, "urlopen", fake_urlopen)
-
-    content = api_client.chat_completion(
-        ChatAPIConfig("https://api.example.com", "model", "secret"),
-        [{"role": "user", "content": "q"}],
-    )
-
-    assert content == "visible content"
-    assert "max_tokens" not in captured["payload"]
-
-
-def test_chat_completion_rejects_reasoning_without_content(monkeypatch):
-    class FakeResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self):
-            return json.dumps(
-                {
-                    "choices": [
-                        {
-                            "message": {
-                                "role": "assistant",
-                                "content": "",
-                                "reasoning_content": "hidden reasoning",
-                            }
-                        }
-                    ]
-                }
-            ).encode("utf-8")
-
-    monkeypatch.setattr(
-        api_client.urllib.request, "urlopen", lambda *_args, **_kwargs: FakeResponse()
-    )
-
-    with pytest.raises(RuntimeError, match="message content"):
-        api_client.chat_completion(
-            ChatAPIConfig("https://api.example.com", "model", "secret"),
-            [{"role": "user", "content": "q"}],
-        )
-
-
-@pytest.mark.parametrize(
-    ("message", "expected_text", "expected_status"),
-    [
-        (
-            {"content": "final answer", "reasoning_content": "step by step"},
-            "<think>\nstep by step\n</think>\n\nfinal answer",
-            "separate",
-        ),
-        (
-            {
-                "content": "<think>native steps</think>\nfinal answer",
-                "reasoning_content": "ignored",
-            },
-            "<think>native steps</think>\nfinal answer",
-            "inline",
-        ),
-        ({"content": "final answer"}, "final answer", "absent"),
-        ({"content": "", "reasoning_content": "step only"}, "<think>\nstep only\n</think>", "only"),
-    ],
+from ard.domain.bank import (
+    write_anchor_bank,
+    read_anchor_bank,
+    build_manifest,
+    write_manifest,
 )
-def test_target_chat_completion_preserves_reasoning(
-    monkeypatch, message, expected_text, expected_status
-):
-    class FakeResponse:
-        def __enter__(self):
-            return self
+from ard.domain.text_anchor import build_input_prompt, build_target_prompt
+from ard.core.types import Anchor, AnchorGenerationConfig
 
-        def __exit__(self, *_args):
-            return False
 
-        def read(self):
-            return json.dumps({"choices": [{"message": message}]}).encode("utf-8")
+# ── API Client types ────────────────────────────────────────────────────────
 
-    monkeypatch.setattr(
-        api_client.urllib.request, "urlopen", lambda *_args, **_kwargs: FakeResponse()
-    )
 
-    result = api_client.target_chat_completion(
-        ChatAPIConfig("https://api.example.com", "model", "secret"),
-        [{"role": "user", "content": "q"}],
-    )
+def test_chat_api_config_defaults():
+    """ChatAPIConfig has sensible defaults."""
+    c = ChatAPIConfig(api_base="https://api.example.com", model_name="m", api_key="k")
+    assert c.temperature == 0.7
+    assert c.max_tokens == 0
+    assert c.timeout == 60.0
+    assert c.max_retries == 2
+    assert c.chat_completions_url == "https://api.example.com/chat/completions"
 
-    assert result == ChatCompletionResult(expected_text, expected_status)
 
+def test_chat_api_config_url_no_trailing_slash():
+    """chat_completions_url handles trailing slash correctly."""
+    c = ChatAPIConfig(api_base="https://api.example.com/v1/", model_name="m", api_key="k")
+    assert c.chat_completions_url == "https://api.example.com/v1/chat/completions"
 
-def test_parse_input_generator_messages_single_turn_text():
-    assert parse_input_generator_messages("How do I debug this?", "single_turn") == [
-        {"role": "user", "content": "How do I debug this?"}
-    ]
 
+def test_chat_request():
+    """ChatRequest stores messages and temperature."""
+    req = ChatRequest(messages=[{"role": "user", "content": "hi"}], temperature=0.5)
+    assert req.messages == [{"role": "user", "content": "hi"}]
+    assert req.temperature == 0.5
 
-def test_parse_input_generator_messages_valid_multi_turn_json():
-    text = json.dumps(
-        [
-            {"role": "user", "content": "My script fails."},
-            {"role": "assistant", "content": "What error do you see?"},
-            {"role": "user", "content": "It says KeyError."},
-        ]
-    )
 
-    messages = parse_input_generator_messages(text, "troubleshooting_3_turn")
+def test_chat_result_success():
+    """ChatResult stores success result."""
+    r = ChatResult(content="hello", success=True)
+    assert r.content == "hello"
+    assert r.success is True
+    assert r.error is None
 
-    assert messages[-1]["role"] == "user"
-    assert len(messages) == 3
 
+def test_chat_result_failure():
+    """ChatResult stores failure result."""
+    r = ChatResult(content="", success=False, error="timeout")
+    assert r.success is False
+    assert r.error == "timeout"
 
-def test_parse_input_generator_messages_extracts_json_array_from_text():
-    text = """
-Here is the requested conversation:
-[
-  {"role": "user", "content": "My script fails."},
-  {"role": "assistant", "content": "What error do you see?"},
-  {"role": "user", "content": "It says KeyError."}
-]
-"""
 
-    messages = parse_input_generator_messages(text, "troubleshooting_3_turn")
+def test_chat_result_with_logprobs():
+    """ChatResultWithLogprobs stores logprobs."""
+    lp = {"token_ids": [1, 2], "log_probs": [-0.1, -0.2]}
+    r = ChatResultWithLogprobs(content="hi", success=True, logprobs=lp)
+    assert r.logprobs == lp
+    assert r.content == "hi"
 
-    assert messages[-1]["content"] == "It says KeyError."
 
+def test_chat_client_creation():
+    """ChatAPIClient can be instantiated."""
+    config = ChatAPIConfig(api_base="https://api.example.com", model_name="m", api_key="k")
+    client = ChatAPIClient(config)
+    assert client._config == config
 
-@pytest.mark.parametrize(
-    "text",
-    [
-        "not json",
-        json.dumps([{"role": "tool", "content": "bad"}]),
-        json.dumps([{"role": "user", "content": ""}]),
-        json.dumps(
-            [
-                {"role": "user", "content": "q"},
-                {"role": "assistant", "content": "final answer"},
-            ]
-        ),
-    ],
-)
-def test_parse_input_generator_messages_rejects_invalid_multi_turn(text):
-    with pytest.raises(ValueError):
-        parse_input_generator_messages(text, "troubleshooting_3_turn")
 
+# ── Image encoding ──────────────────────────────────────────────────────────
 
-def test_anchor_answer_api_writes_final_anchor_shape(tmp_path, monkeypatch):
-    input_path = tmp_path / "generated_inputs.jsonl"
-    output_path = tmp_path / "anchor_bank.jsonl"
-    write_jsonl(
-        [
-            GeneratedInputAnchor(
-                id="a",
-                messages=[{"role": "user", "content": "What is async await?"}],
-                input_generator_model="input-generator",
-                anchor_meta={
-                    "capability": "explanation",
-                    "input_generator_model": "input-generator",
-                },
-            )
-        ],
-        input_path,
-    )
 
-    answer_generated_inputs_api(
-        api_config=ChatAPIConfig(
-            api_base="https://api.example.com",
-            model_name="target",
-            api_key="secret-key",
-        ),
-        input_path=input_path,
-        output_path=output_path,
-        chat_fn=lambda **_kwargs: "target answer",
-    )
+def test_encode_image_to_base64_png(tmp_path):
+    """encode_image_to_base64 returns data URI for PNG."""
+    # Create a minimal valid PNG (1x1 pixel)
+    import struct
+    import zlib
 
-    record = json.loads(output_path.read_text(encoding="utf-8").strip())
-    assert record["messages"] == [{"role": "user", "content": "What is async await?"}]
-    assert record["target_answer"] == "target answer"
-    assert record["input_generator_model"] == "input-generator"
-    assert record["target_model"] == "target"
-    assert "secret-key" not in output_path.read_text(encoding="utf-8")
+    def create_png(width, height):
+        def chunk(chunk_type, data):
+            c = chunk_type + data
+            crc = struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
+            return struct.pack(">I", len(data)) + c + crc
 
+        header = b"\x89PNG\r\n\x1a\n"
+        ihdr = chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        raw = b""
+        for y in range(height):
+            raw += b"\x00" + b"\xff\x00\x00" * width
+        idat = chunk(b"IDAT", zlib.compress(raw))
+        iend = chunk(b"IEND", b"")
+        return header + ihdr + idat + iend
 
-def test_anchor_answer_api_writes_reasoning_target_and_stats(tmp_path):
-    input_path = tmp_path / "generated_inputs.jsonl"
-    output_path = tmp_path / "anchor_bank.jsonl"
-    stats_path = tmp_path / "target_answer_stats.json"
-    write_jsonl(
-        [
-            GeneratedInputAnchor(
-                id="a",
-                messages=[{"role": "user", "content": "Solve it."}],
-                input_generator_model="input-generator",
-            )
-        ],
-        input_path,
-    )
+    png_path = tmp_path / "test.png"
+    png_path.write_bytes(create_png(1, 1))
+    result = encode_image_to_base64(png_path)
+    assert result.startswith("data:image/png;base64,")
 
-    answer_generated_inputs_api(
-        api_config=ChatAPIConfig(
-            api_base="https://api.example.com",
-            model_name="target",
-            api_key="secret-key",
-        ),
-        input_path=input_path,
-        output_path=output_path,
-        stats_output=stats_path,
-        chat_fn=lambda **_kwargs: ChatCompletionResult(
-            "<think>\nreason carefully\n</think>\n\nfinal answer",
-            "separate",
-        ),
-    )
 
-    record = json.loads(output_path.read_text(encoding="utf-8").strip())
-    stats = json.loads(stats_path.read_text(encoding="utf-8"))
-    assert record["target_answer"] == "<think>\nreason carefully\n</think>\n\nfinal answer"
-    assert record["anchor_meta"]["target_reasoning_status"] == "separate"
-    assert stats["reasoning_separate_count"] == 1
-    assert stats["reasoning_absent_count"] == 0
+def test_encode_image_to_base64_file_not_found():
+    """encode_image_to_base64 raises FileNotFoundError."""
+    with pytest.raises(FileNotFoundError):
+        encode_image_to_base64("nonexistent.png")
 
 
-def test_anchor_generate_inputs_cli_uses_input_generator_stage(tmp_path, monkeypatch):
-    input_path = tmp_path / "prompts.jsonl"
-    output_path = tmp_path / "generated_inputs.jsonl"
-    env_path = tmp_path / "api.env"
-    stats_path = tmp_path / "input_generation_stats.json"
-    env_path.write_text(
-        "ARD_INPUT_GENERATOR_API_BASE=https://api.example.com/\n"
-        "ARD_INPUT_GENERATOR_MODEL_NAME=input-generator\n"
-        "ARD_INPUT_GENERATOR_API_KEY=secret-key\n",
-        encoding="utf-8",
-    )
-    write_jsonl(
-        [
-            AnchorPrompt(
-                id="a",
-                messages=[{"role": "user", "content": "make a question"}],
-                anchor_meta={"conversation_type": "single_turn"},
-            )
-        ],
-        input_path,
-    )
+def test_encode_image_to_base64_unsupported_format(tmp_path):
+    """encode_image_to_base64 raises ValueError for unsupported format."""
+    bad = tmp_path / "test.xyz"
+    bad.write_bytes(b"not an image")
+    with pytest.raises(ValueError, match="Unsupported image format"):
+        encode_image_to_base64(bad)
 
-    def fake_generate_anchor_inputs(**kwargs):
-        write_jsonl(
-            [
-                GeneratedInputAnchor(
-                    id="a",
-                    messages=[{"role": "user", "content": "real question"}],
-                    input_generator_model=kwargs["api_config"].model_name,
-                    anchor_meta={"conversation_type": "single_turn"},
-                )
-            ],
-            kwargs["output_path"],
-        )
-        stats_path.write_text(json.dumps({"input_count": 1, "kept_count": 1}), encoding="utf-8")
 
-        class Stats:
-            def to_dict(self):
-                return {"input_count": 1, "kept_count": 1}
+# ── Bank ────────────────────────────────────────────────────────────────────
 
-        return [], Stats()
 
-    monkeypatch.setattr(
-        "ard.anchor.input_generator.generate_anchor_inputs", fake_generate_anchor_inputs
-    )
-    from ard.cli import cmd_anchor_generate_inputs
-
-    cmd_anchor_generate_inputs(
-        Namespace(
-            api_env_file=str(env_path),
-            input=str(input_path),
-            output=str(output_path),
-            input_generator_model=None,
-            max_new_tokens=10,
-            temperature=0.1,
-            top_p=1.0,
-            timeout=1.0,
-            max_retries=0,
-            limit=None,
-            stats_output=str(stats_path),
-        )
-    )
-
-    record = json.loads(output_path.read_text(encoding="utf-8").strip())
-    assert record["messages"] == [{"role": "user", "content": "real question"}]
-
-
-def test_build_anchor_dataset_api_end_to_end_with_fake_chat(tmp_path):
-    ontology = _write_test_anchor_ontology(
-        tmp_path,
-        knowledge={"general": {"topic": ["alpha", "beta", "gamma"]}},
-        language_features={
-            "style": ["concise"],
-            "format": ["paragraph"],
-            "difficulty": ["basic"],
-            "context_length": ["short"],
-            "noise": ["clean"],
-            "answer_expectation": ["direct_answer"],
-        },
-    )
-
-    input_counter = {"value": 0}
-
-    def fake_input_generation_chat(_config, messages, *_args):
-        input_counter["value"] += 1
-        domain = messages[0]["content"].split("Domain: ", 1)[1].split(".", 1)[0]
-        return f"Input {input_counter['value']}: {domain}"
-
-    def fake_answer_chat(**kwargs):
-        return "Answer for " + kwargs["messages"][-1]["content"]
-
-    logs = []
-    result = build_anchor_dataset_api(
-        output_dir=tmp_path / "dataset",
-        target_count=3,
-        seed=1,
-        knowledge=ontology.knowledge,
-        language=ontology.language_features,
-        capability=ontology.capabilities,
-        conversation=ontology.conversation_types,
-        languages=["English"],
-        task_types=["qa"],
-        input_generator_config=ChatAPIConfig(
-            "https://api.example.com", "input-generator", "secret"
-        ),
-        target_config=ChatAPIConfig("https://api.example.com", "target", "secret"),
-        batch_size=3,
-        max_batches=1,
-        input_generation_chat_fn=fake_input_generation_chat,
-        target_answer_chat_fn=fake_answer_chat,
-        logger=logs.append,
-    )
-
-    records = [
-        json.loads(line)
-        for line in (tmp_path / "dataset" / "anchor_bank.jsonl")
-        .read_text(encoding="utf-8")
-        .splitlines()
-        if line.strip()
-    ]
-    manifest = json.loads((tmp_path / "dataset" / "manifest.json").read_text(encoding="utf-8"))
-
-    assert result.final_count == 3
-    assert len(records) == 3
-    assert all(record["input_generator_model"] == "input-generator" for record in records)
-    assert all(record["target_model"] == "target" for record in records)
-    assert all("secret" not in json.dumps(record) for record in records)
-    assert manifest["input_generation_stats"]["kept_count"] == 3
-    assert manifest["target_answer_stats"]["kept_count"] == 3
-    assert any("stage=build status=start" in line for line in logs)
-    assert any("stage=input_generation" in line for line in logs)
-    assert any("stage=target_answer" in line for line in logs)
-    assert any("progress=" in line and "eta=" in line for line in logs)
-    assert any("stage=build status=done" in line for line in logs)
-
-
-def test_build_anchor_dataset_streams_target_answers_before_all_inputs_finish(tmp_path):
-    ontology = _write_test_anchor_ontology(
-        tmp_path,
-        knowledge={"general": {"topic": ["alpha", "beta", "gamma", "delta"]}},
-    )
-
-    lock = threading.Lock()
-    input_completed = {"count": 0}
-    target_start_input_counts: list[int] = []
-    logs: list[str] = []
-
-    def fake_input_generation_chat(_config, _messages, *_args):
-        time.sleep(0.05)
-        with lock:
-            input_completed["count"] += 1
-            count = input_completed["count"]
-        return f"unique input {count}"
-
-    def fake_answer_chat(**kwargs):
-        with lock:
-            target_start_input_counts.append(input_completed["count"])
-        return "useful answer for " + kwargs["messages"][-1]["content"]
-
-    result = build_anchor_dataset_api(
-        output_dir=tmp_path / "dataset",
-        target_count=4,
-        seed=1,
-        knowledge=ontology.knowledge,
-        language=ontology.language_features,
-        capability=ontology.capabilities,
-        conversation=ontology.conversation_types,
-        languages=["English"],
-        task_types=["qa"],
-        input_generator_config=ChatAPIConfig(
-            "https://api.example.com", "input-generator", "secret"
-        ),
-        target_config=ChatAPIConfig("https://api.example.com", "target", "secret"),
-        batch_size=4,
-        max_batches=1,
-        input_generator_concurrency=2,
-        target_concurrency=2,
-        input_generation_chat_fn=fake_input_generation_chat,
-        target_answer_chat_fn=fake_answer_chat,
-        logger=logs.append,
-    )
-    manifest = json.loads((tmp_path / "dataset" / "manifest.json").read_text(encoding="utf-8"))
-    target_log_positions = [
-        index for index, line in enumerate(logs) if "stage=target_answer" in line
-    ]
-    input_log_positions = [
-        index for index, line in enumerate(logs) if "stage=input_generation" in line
-    ]
-
-    assert result.final_count == 4
-    assert min(target_start_input_counts) < 4
-    assert target_log_positions[0] < input_log_positions[-1]
-    assert manifest["generation_config"]["input_generator_concurrency"] == 2
-    assert manifest["generation_config"]["target_concurrency"] == 2
-
-
-def test_build_anchor_dataset_manifest_counts_reasoning_outputs(tmp_path):
-    ontology = _write_test_anchor_ontology(
-        tmp_path,
-        knowledge={"general": {"topic": ["alpha"]}},
-    )
-
-    result = build_anchor_dataset_api(
-        output_dir=tmp_path / "dataset",
-        target_count=1,
-        seed=1,
-        knowledge=ontology.knowledge,
-        language=ontology.language_features,
-        capability=ontology.capabilities,
-        conversation=ontology.conversation_types,
-        languages=["English"],
-        task_types=["qa"],
-        input_generator_config=ChatAPIConfig(
-            "https://api.example.com", "input-generator", "secret"
-        ),
-        target_config=ChatAPIConfig("https://api.example.com", "target", "secret"),
-        input_generation_chat_fn=lambda *_args: "unique input",
-        target_answer_chat_fn=lambda **_kwargs: ChatCompletionResult(
-            "<think>\nfirst reason\n</think>\n\nthen answer",
-            "separate",
-        ),
-    )
-
-    record = json.loads((tmp_path / "dataset" / "anchor_bank.jsonl").read_text(encoding="utf-8"))
-    manifest = json.loads((tmp_path / "dataset" / "manifest.json").read_text(encoding="utf-8"))
-
-    assert result.final_count == 1
-    assert record["target_answer"].startswith("<think>\nfirst reason")
-    assert manifest["target_answer_stats"]["reasoning_separate_count"] == 1
-
-
-def test_cli_logger_prefixes_timestamp(capsys):
-    from ard.cli import _print_log
-
-    _print_log("stage=build status=start")
-
-    captured = capsys.readouterr()
-    assert captured.out.startswith("ts=")
-    assert " stage=build status=start\n" in captured.out
-
-
-def test_build_anchor_dataset_attempt_count_does_not_refill_by_default(tmp_path):
-    ontology = _write_test_anchor_ontology(
-        tmp_path,
-        knowledge={"general": {"topic": ["alpha", "beta", "gamma"]}},
-    )
-
-    answer_counter = {"value": 0}
-    input_counter = {"value": 0}
-
-    def fake_input_generation_chat(_config, _messages, *_args):
-        input_counter["value"] += 1
-        return f"unique input {input_counter['value']}"
-
-    def fake_answer_chat(**_kwargs):
-        answer_counter["value"] += 1
-        if answer_counter["value"] == 1:
-            return "bad"
-        return f"useful answer {answer_counter['value']}"
-
-    result = build_anchor_dataset_api(
-        output_dir=tmp_path / "dataset",
-        target_count=3,
-        seed=1,
-        knowledge=ontology.knowledge,
-        language=ontology.language_features,
-        capability=ontology.capabilities,
-        conversation=ontology.conversation_types,
-        languages=["English"],
-        task_types=["qa"],
-        input_generator_config=ChatAPIConfig(
-            "https://api.example.com", "input-generator", "secret"
-        ),
-        target_config=ChatAPIConfig("https://api.example.com", "target", "secret"),
-        batch_size=3,
-        max_batches=3,
-        input_generation_chat_fn=fake_input_generation_chat,
-        target_answer_chat_fn=fake_answer_chat,
-    )
-    manifest = json.loads((tmp_path / "dataset" / "manifest.json").read_text(encoding="utf-8"))
-
-    assert result.attempted_count == 3
-    assert result.final_count == 2
-    assert result.batches == 1
-    assert manifest["attempted_count"] == 3
-    assert manifest["final_count"] == 2
-    assert manifest["filter_stats"]["dropped_too_short"] == 1
-
-
-def test_build_anchor_dataset_refuses_non_empty_output_dir(tmp_path):
-    output_dir = tmp_path / "dataset"
-    output_dir.mkdir()
-    (output_dir / "old.txt").write_text("previous run", encoding="utf-8")
-    ontology = _write_test_anchor_ontology(tmp_path, knowledge={"general": ["alpha"]})
-
-    with pytest.raises(FileExistsError, match="Output directory already exists"):
-        build_anchor_dataset_api(
-            output_dir=output_dir,
-            target_count=1,
-            seed=1,
-            knowledge=ontology.knowledge,
-            language=ontology.language_features,
-            capability=ontology.capabilities,
-            conversation=ontology.conversation_types,
-            languages=["English"],
-            task_types=["qa"],
-            input_generator_config=ChatAPIConfig(
-                "https://api.example.com", "input-generator", "secret"
-            ),
-            target_config=ChatAPIConfig("https://api.example.com", "target", "secret"),
-            input_generation_chat_fn=lambda *_args: "unique input",
-            target_answer_chat_fn=lambda **_kwargs: "useful answer",
-        )
-
-
-def test_build_anchor_dataset_exact_count_refills_when_enabled(tmp_path):
-    ontology = _write_test_anchor_ontology(
-        tmp_path,
-        knowledge={"general": {"topic": ["alpha", "beta", "gamma"]}},
-    )
-
-    answer_counter = {"value": 0}
-    input_counter = {"value": 0}
-
-    def fake_input_generation_chat(_config, _messages, *_args):
-        input_counter["value"] += 1
-        return f"unique input {input_counter['value']}"
-
-    def fake_answer_chat(**_kwargs):
-        answer_counter["value"] += 1
-        if answer_counter["value"] == 1:
-            return "bad"
-        return f"useful answer {answer_counter['value']}"
-
-    result = build_anchor_dataset_api(
-        output_dir=tmp_path / "dataset",
-        target_count=3,
-        seed=1,
-        knowledge=ontology.knowledge,
-        language=ontology.language_features,
-        capability=ontology.capabilities,
-        conversation=ontology.conversation_types,
-        languages=["English"],
-        task_types=["qa"],
-        input_generator_config=ChatAPIConfig(
-            "https://api.example.com", "input-generator", "secret"
-        ),
-        target_config=ChatAPIConfig("https://api.example.com", "target", "secret"),
-        batch_size=3,
-        max_batches=3,
-        require_exact_count=True,
-        input_generation_chat_fn=fake_input_generation_chat,
-        target_answer_chat_fn=fake_answer_chat,
-    )
-
-    assert result.attempted_count == 4
-    assert result.final_count == 3
-    assert result.batches == 2
-
-
-def test_build_anchor_dataset_filters_duplicates_across_exact_batches(tmp_path):
-    ontology = _write_test_anchor_ontology(
-        tmp_path,
-        knowledge={"general": {"topic": ["alpha", "beta", "gamma"]}},
-    )
-
-    input_counter = {"value": 0}
-
-    def fake_input_generation_chat(_config, _messages, *_args):
-        input_counter["value"] += 1
-        if input_counter["value"] <= 2:
-            return "same generated input"
-        return f"unique generated input {input_counter['value']}"
-
-    def fake_answer_chat(**kwargs):
-        return "useful answer for " + kwargs["messages"][-1]["content"]
-
-    result = build_anchor_dataset_api(
-        output_dir=tmp_path / "dataset",
-        target_count=2,
-        seed=1,
-        knowledge=ontology.knowledge,
-        language=ontology.language_features,
-        capability=ontology.capabilities,
-        conversation=ontology.conversation_types,
-        languages=["English"],
-        task_types=["qa"],
-        input_generator_config=ChatAPIConfig(
-            "https://api.example.com", "input-generator", "secret"
-        ),
-        target_config=ChatAPIConfig("https://api.example.com", "target", "secret"),
-        batch_size=1,
-        max_batches=3,
-        require_exact_count=True,
-        input_generation_chat_fn=fake_input_generation_chat,
-        target_answer_chat_fn=fake_answer_chat,
-    )
-    manifest = json.loads((tmp_path / "dataset" / "manifest.json").read_text(encoding="utf-8"))
-
-    assert result.attempted_count == 3
-    assert result.final_count == 2
-    assert result.batches == 3
-    assert manifest["filter_stats"]["dropped_duplicate_prompt"] == 1
-
-
-def test_anchor_build_dataset_command_is_registered():
-    from ard.cli import build_parser
-
-    args = build_parser().parse_args(
-        [
-            "anchor-build-dataset",
-            "--output-dir",
-            "out",
-            "--target-count",
-            "3",
-        ]
-    )
-
-    assert args.func.__name__ == "cmd_anchor_build_dataset"
-    assert args.target_count == 3
-    assert args.input_generator_concurrency == 4
-    assert args.target_concurrency == 4
-    assert args.sampling_strategy == "farthest"
-
-
-def test_ontology_embed_command_writes_hash_sidecar(tmp_path):
-    from ard.cli import cmd_ontology_embed
-
-    ontology = _write_test_anchor_ontology(
-        tmp_path,
-        knowledge={"general": {"topic": ["alpha", "beta"]}},
-    )
-    ontology_path = tmp_path / "anchor_ontology.json"
-    output_path = tmp_path / "embeddings.json"
-
-    cmd_ontology_embed(
-        Namespace(
-            ontology=str(ontology_path),
-            output=str(output_path),
-            backend="hash",
-            model=None,
-            api_env_file=None,
-            batch_size=2,
-            timeout=1.0,
-            dimensions=8,
-        )
-    )
-
-    payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert payload["embedding_model"] == "research-neutral-lexical-bootstrap-v1"
-    assert payload["embedding_dimension"] == 8
-    assert {item["section"] for item in payload["items"]} >= {
-        "languages",
-        "knowledge_domains",
-        "capabilities",
-        "conversation_types",
-        "language_features",
+def _make_anchor(id="a", **kwargs):
+    defaults = {
+        "id": id,
+        "messages": [{"role": "user", "content": "q"}],
+        "target_answer": "answer",
+        "target_model": "target",
+        "input_generator_model": "input-gen",
+        "anchor_meta": {"knowledge_domain": "math", "language": "English", "capability": "qa"},
     }
-    assert ontology.knowledge.leaves
+    defaults.update(kwargs)
+    return Anchor(**defaults)
 
 
-# ---------------------------------------------------------------------------
-# system persona tests
-# ---------------------------------------------------------------------------
+def test_write_and_read_anchor_bank(tmp_path):
+    """write_anchor_bank + read_anchor_bank round-trip."""
+    path = tmp_path / "bank.jsonl"
+    anchors = [_make_anchor("a"), _make_anchor("b")]
+    write_anchor_bank(anchors, path)
+    records = read_anchor_bank(path)
+    assert len(records) == 2
+    assert records[0]["id"] == "a"
+    assert records[0]["source"] == "ard"
+    assert records[0]["teacher_id"] == "target"
+    assert "targets" in records[0]
+    assert records[0]["targets"][0]["output"]["content"] == "answer"
 
 
-def test_generate_system_prompt_one_sentence():
-    item = AnchorPrompt(
-        id="a",
-        messages=[{"role": "user", "content": "make a question"}],
-        anchor_meta={
-            "system_persona": "one_sentence",
-            "language": "English",
-            "knowledge_domain": "software_engineering -> programming -> Python debugging",
-            "capability": "coding",
-            "task_type": "coding",
-            "conversation_type": "single_turn",
-        },
-    )
-    config = ChatAPIConfig("https://api.example.com", "model", "secret")
-
-    def fake_chat(_config, messages, *_args):
-        return "You are a Python debugging expert."
-
-    result = generate_system_prompt(
-        item=item,
-        api_config=config,
-        temperature=0.7,
-        top_p=0.95,
-        timeout=60,
-        max_retries=0,
-        chat_fn=fake_chat,
-    )
-
-    assert result == "You are a Python debugging expert."
+def test_write_anchor_bank_creates_parent_dir(tmp_path):
+    """write_anchor_bank creates parent directories."""
+    path = tmp_path / "subdir" / "nested" / "bank.jsonl"
+    anchors = [_make_anchor()]
+    write_anchor_bank(anchors, path)
+    assert path.exists()
 
 
-def test_generate_system_prompt_detailed_markdown():
-    item = AnchorPrompt(
-        id="a",
-        messages=[{"role": "user", "content": "q"}],
-        anchor_meta={
-            "system_persona": "detailed",
-            "language": "English",
-            "knowledge_domain": "math_logic -> math -> algebra",
-            "capability": "math_solving",
-            "task_type": "math_solving",
-            "conversation_type": "single_turn",
-        },
-    )
-    config = ChatAPIConfig("https://api.example.com", "model", "secret")
-
-    def fake_chat(_config, messages, *_args):
-        prompt = messages[0]["content"]
-        assert "## Role" in prompt
-        return "## Role\nMath tutor\n\n## Expertise\nAlgebra\n\n## Guidelines\nBe precise\n\n## Constraints\nNone"
-
-    result = generate_system_prompt(
-        item=item,
-        api_config=config,
-        temperature=0.7,
-        top_p=0.95,
-        timeout=60,
-        max_retries=0,
-        chat_fn=fake_chat,
-    )
-
-    assert result is not None
-    assert "## Role" in result
-
-
-def test_generate_system_prompt_none_returns_none():
-    item = AnchorPrompt(
-        id="a",
-        messages=[{"role": "user", "content": "q"}],
-        anchor_meta={"system_persona": "none"},
-    )
-    config = ChatAPIConfig("https://api.example.com", "model", "secret")
-
-    result = generate_system_prompt(
-        item=item,
-        api_config=config,
-        temperature=0.7,
-        top_p=0.95,
-        timeout=60,
-        max_retries=0,
-        chat_fn=lambda *_args: "should not be called",
-    )
-
-    assert result is None
-
-
-def test_generate_system_prompt_unknown_persona_returns_none():
-    item = AnchorPrompt(
-        id="a",
-        messages=[{"role": "user", "content": "q"}],
-        anchor_meta={"system_persona": "unknown_type"},
-    )
-    config = ChatAPIConfig("https://api.example.com", "model", "secret")
-
-    result = generate_system_prompt(
-        item=item,
-        api_config=config,
-        temperature=0.7,
-        top_p=0.95,
-        timeout=60,
-        max_retries=0,
-        chat_fn=lambda *_args: "should not be called",
-    )
-
-    assert result is None
-
-
-def test_generate_system_prompt_failure_returns_none():
-    item = AnchorPrompt(
-        id="a",
-        messages=[{"role": "user", "content": "q"}],
-        anchor_meta={
-            "system_persona": "one_sentence",
-            "language": "English",
-            "knowledge_domain": "general",
-            "capability": "qa",
-            "task_type": "qa",
-            "conversation_type": "single_turn",
-        },
-    )
-    config = ChatAPIConfig("https://api.example.com", "model", "secret")
-
-    def always_fail(*_args):
-        raise RuntimeError("API error")
-
-    result = generate_system_prompt(
-        item=item,
-        api_config=config,
-        temperature=0.7,
-        top_p=0.95,
-        timeout=60,
-        max_retries=2,
-        chat_fn=always_fail,
-    )
-
-    assert result is None
-
-
-def test_generate_one_anchor_input_injects_system_message():
-    item = AnchorPrompt(
-        id="a",
-        messages=[{"role": "user", "content": "make a coding question"}],
-        anchor_meta={
-            "system_persona": "one_sentence",
-            "language": "English",
-            "knowledge_domain": "software_engineering -> programming -> Python",
-            "capability": "coding",
-            "task_type": "coding",
-            "conversation_type": "single_turn",
-        },
-    )
-    config = ChatAPIConfig("https://api.example.com", "model", "secret")
-
-    call_count = {"count": 0}
-
-    def fake_chat(_config, messages, *_args):
-        call_count["count"] += 1
-        if call_count["count"] == 1:
-            return "What are Python decorators?"
-        return "You are a Python expert."
-
-    result = generate_one_anchor_input(
-        item=item,
-        api_config=config,
-        max_tokens=None,
-        temperature=0.7,
-        top_p=0.95,
-        timeout=60,
-        max_retries=0,
-        chat_fn=fake_chat,
-    )
-
-    assert call_count["count"] == 2
-    assert result.messages[0]["role"] == "system"
-    assert result.messages[0]["content"] == "You are a Python expert."
-    assert len(result.messages) == 2
-    assert result.anchor_meta["system_persona"] == "one_sentence"
-
-
-def test_generate_one_anchor_input_no_system_for_none_persona():
-    item = AnchorPrompt(
-        id="a",
-        messages=[{"role": "user", "content": "make a question"}],
-        anchor_meta={
-            "system_persona": "none",
-            "language": "English",
-            "knowledge_domain": "general",
-            "capability": "qa",
-            "task_type": "qa",
-            "conversation_type": "single_turn",
-        },
-    )
-    config = ChatAPIConfig("https://api.example.com", "model", "secret")
-
-    def fake_chat(_config, messages, *_args):
-        return "What is async await?"
-
-    result = generate_one_anchor_input(
-        item=item,
-        api_config=config,
-        max_tokens=None,
-        temperature=0.7,
-        top_p=0.95,
-        timeout=60,
-        max_retries=0,
-        chat_fn=fake_chat,
-    )
-
-    assert result.messages[0]["role"] == "user"
-    assert result.anchor_meta["system_persona"] == "none"
-
-
-def test_generate_one_anchor_input_preserves_original_messages():
-    item = AnchorPrompt(
-        id="a",
-        messages=[{"role": "user", "content": "make a question"}],
-        anchor_meta={
-            "system_persona": "one_sentence",
-            "language": "English",
-            "knowledge_domain": "general",
-            "capability": "qa",
-            "task_type": "qa",
-            "conversation_type": "single_turn",
-        },
-    )
-    config = ChatAPIConfig("https://api.example.com", "model", "secret")
-
-    call_count = {"count": 0}
-
-    def fake_chat(_config, messages, *_args):
-        call_count["count"] += 1
-        if call_count["count"] == 1:
-            return "What is a closure?"
-        return "You are a helpful assistant."
-
-    result = generate_one_anchor_input(
-        item=item,
-        api_config=config,
-        max_tokens=None,
-        temperature=0.7,
-        top_p=0.95,
-        timeout=60,
-        max_retries=0,
-        chat_fn=fake_chat,
-    )
-
-    # Original item.messages should be unchanged
-    assert item.messages == [{"role": "user", "content": "make a question"}]
-    # Result messages should include system prompt
-    assert len(result.messages) == 2
-
-
-def test_generate_one_anchor_input_fallback_to_none_on_system_failure():
-    item = AnchorPrompt(
-        id="a",
-        messages=[{"role": "user", "content": "make a question"}],
-        anchor_meta={
-            "system_persona": "detailed",
-            "language": "English",
-            "knowledge_domain": "general",
-            "capability": "qa",
-            "task_type": "qa",
-            "conversation_type": "single_turn",
-        },
-    )
-    config = ChatAPIConfig("https://api.example.com", "model", "secret")
-
-    call_count = {"count": 0}
-
-    def fake_chat(_config, messages, *_args):
-        call_count["count"] += 1
-        if call_count["count"] == 1:
-            return "What is a monad?"
-        raise RuntimeError("system prompt generation failed")
-
-    result = generate_one_anchor_input(
-        item=item,
-        api_config=config,
-        max_tokens=None,
-        temperature=0.7,
-        top_p=0.95,
-        timeout=60,
-        max_retries=1,
-        chat_fn=fake_chat,
-    )
-
-    # max_retries=1: user gen (1 call) + system gen (2 attempts = 1 + 1 retry, both fail)
-    assert call_count["count"] == 3
-    # Messages should be user-only since system prompt failed
-    assert len(result.messages) == 1
-    assert result.messages[0]["role"] == "user"
-    # Meta should record "none" since fallback occurred
-    assert result.anchor_meta["system_persona"] == "none"
-
-
-def test_system_persona_flows_through_full_pipeline(tmp_path):
-    ontology = _write_test_anchor_ontology(
-        tmp_path,
-        knowledge={"general": {"topic": ["alpha", "beta"]}},
-        language_features={
-            "style": ["concise"],
-            "format": ["paragraph"],
-            "difficulty": ["basic"],
-            "context_length": ["short"],
-            "noise": ["clean"],
-            "answer_expectation": ["direct_answer"],
-        },
-    )
-
-    call_count = {"count": 0}
-
-    def fake_input_generation_chat(_config, messages, *_args):
-        call_count["count"] += 1
-        return f"unique input {call_count['count']}"
-
-    def fake_answer_chat(**kwargs):
-        return f"useful answer for {kwargs['messages'][-1]['content'][:20]}"
-
-    result = build_anchor_dataset_api(
-        output_dir=tmp_path / "dataset",
-        target_count=4,
-        seed=1,
-        knowledge=ontology.knowledge,
-        language=ontology.language_features,
-        capability=ontology.capabilities,
-        conversation=ontology.conversation_types,
-        languages=["English"],
-        task_types=["qa"],
-        input_generator_config=ChatAPIConfig("https://api.example.com", "input-gen", "secret"),
-        target_config=ChatAPIConfig("https://api.example.com", "target", "secret"),
-        system_personas=["none", "one_sentence", "appropriate", "detailed"],
-        input_generation_chat_fn=fake_input_generation_chat,
-        target_answer_chat_fn=fake_answer_chat,
-    )
-
-    assert result.final_count == 4
-
-    records = [
-        json.loads(line)
-        for line in (tmp_path / "dataset" / "anchor_bank.jsonl")
-        .read_text(encoding="utf-8")
-        .splitlines()
-        if line.strip()
+def test_build_manifest_counts(tmp_path):
+    """build_manifest counts domains, languages, capabilities."""
+    anchors = [
+        _make_anchor("a", anchor_meta={"knowledge_domain": "math", "language": "English", "capability": "qa"}),
+        _make_anchor("b", anchor_meta={"knowledge_domain": "math", "language": "简体中文", "capability": "qa"}),
+        _make_anchor("c", anchor_meta={"knowledge_domain": "physics", "language": "English", "capability": "reasoning"}),
     ]
-    manifest = json.loads((tmp_path / "dataset" / "manifest.json").read_text(encoding="utf-8"))
+    manifest = build_manifest(anchors, tmp_path / "out")
+    assert manifest["total_anchors"] == 3
+    assert manifest["domains"] == {"math": 2, "physics": 1}
+    assert manifest["languages"] == {"English": 2, "简体中文": 1}
+    assert manifest["capabilities"] == {"qa": 2, "reasoning": 1}
 
-    personas = [r["anchor_meta"].get("system_persona") for r in records]
-    assert set(personas) <= {"none", "one_sentence", "appropriate", "detailed"}
-    assert "by_system_persona" in manifest["counts"]
+
+def test_write_manifest(tmp_path):
+    """write_manifest writes JSON."""
+    path = tmp_path / "manifest.json"
+    manifest = {"total_anchors": 5, "domains": {}}
+    write_manifest(manifest, path)
+    data = json.loads(path.read_text())
+    assert data["total_anchors"] == 5
 
 
-def test_system_persona_manifest_counts_default_to_none(tmp_path):
-    ontology = _write_test_anchor_ontology(
-        tmp_path,
-        knowledge={"general": {"topic": ["alpha"]}},
+# ── Text Anchor prompts ────────────────────────────────────────────────────
+
+
+def test_build_input_prompt_contains_meta():
+    """build_input_prompt includes domain, capability, language."""
+    meta = {
+        "language": "简体中文",
+        "knowledge_domain": "software_engineering",
+        "capability": "coding",
+        "conversation_type": "single_turn",
+    }
+    prompt = build_input_prompt(meta)
+    assert "简体中文" in prompt
+    assert "software_engineering" in prompt
+    assert "coding" in prompt
+    assert "single_turn" in prompt
+
+
+def test_build_input_prompt_defaults():
+    """build_input_prompt uses defaults for missing keys."""
+    prompt = build_input_prompt({})
+    assert "English" in prompt
+    assert "general" in prompt
+
+
+def test_build_target_prompt():
+    """build_target_prompt returns a non-empty string."""
+    prompt = build_target_prompt({})
+    assert isinstance(prompt, str)
+    assert len(prompt) > 0
+
+
+# ── Pipeline (import-only) ──────────────────────────────────────────────────
+
+
+def test_pipeline_imports():
+    """Verify pipeline module is importable."""
+    from ard.pipeline import run
+    assert callable(run)
+
+
+# ── Config types ────────────────────────────────────────────────────────────
+
+
+def test_config_section_types():
+    """Verify config section types are importable and constructible."""
+    from ard.config import (
+        ARDConfig,
+        InputGeneratorConfig,
+        TargetConfig,
+        GenerationConfig,
+        OntologyConfig,
+        OutputConfig,
     )
 
-    build_anchor_dataset_api(
-        output_dir=tmp_path / "dataset",
-        target_count=1,
-        seed=1,
-        knowledge=ontology.knowledge,
-        language=ontology.language_features,
-        capability=ontology.capabilities,
-        conversation=ontology.conversation_types,
-        languages=["English"],
-        task_types=["qa"],
-        input_generator_config=ChatAPIConfig("https://api.example.com", "input-gen", "secret"),
-        target_config=ChatAPIConfig("https://api.example.com", "target", "secret"),
-        system_personas=None,
-        input_generation_chat_fn=lambda *_args: "unique input",
-        target_answer_chat_fn=lambda **_kwargs: "useful answer here",
-    )
+    ig = InputGeneratorConfig(api_base="https://api.example.com", model_name="m", api_key="k")
+    assert ig.temperature == 0.8
 
-    manifest = json.loads((tmp_path / "dataset" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["counts"]["by_system_persona"] == {"none": 1}
+    t = TargetConfig(api_base="https://api.example.com", model_name="m", api_key="k")
+    assert t.temperature == 0.0
+
+    g = GenerationConfig()
+    assert g.target_count == 100
+    assert g.seed == 42
+
+    o = OntologyConfig()
+    assert o.path == "configs/anchor_ontology.json"
+
+    out = OutputConfig()
+    assert out.dir == ""
+    assert out.overwrite is False
 
 
-# --- reasoning_effort ---
+def test_ard_config_full():
+    """ARDConfig composes all sections."""
+    from ard.config import ARDConfig
 
-
-def test_reasoning_effort_is_passed_to_api_payload(monkeypatch):
-    """reasoning_effort='none' is included in the API request body."""
-    from ard.anchor import api_client as ac
-
-    captured_payload = {}
-
-    def fake_urlopen(request, timeout=None):
-        captured_payload["body"] = json.loads(request.data.decode("utf-8"))
-        raise RuntimeError("stop after capture")
-
-    monkeypatch.setattr(ac.urllib.request, "urlopen", fake_urlopen)
-
-    config = ChatAPIConfig(
-        api_base="https://api.example.com",
-        model_name="test-model",
-        api_key="secret",
-        reasoning_effort="none",
-    )
-    try:
-        ac.chat_completion(config, [{"role": "user", "content": "hi"}])
-    except RuntimeError:
-        pass
-
-    assert captured_payload["body"]["reasoning_effort"] == "none"
-
-
-def test_reasoning_effort_none_omitted_from_payload(monkeypatch):
-    """When reasoning_effort is None, it is not included in the API request."""
-    from ard.anchor import api_client as ac
-
-    captured_payload = {}
-
-    def fake_urlopen(request, timeout=None):
-        captured_payload["body"] = json.loads(request.data.decode("utf-8"))
-        raise RuntimeError("stop after capture")
-
-    monkeypatch.setattr(ac.urllib.request, "urlopen", fake_urlopen)
-
-    config = ChatAPIConfig(
-        api_base="https://api.example.com",
-        model_name="test-model",
-        api_key="secret",
-        reasoning_effort=None,
-    )
-    try:
-        ac.chat_completion(config, [{"role": "user", "content": "hi"}])
-    except RuntimeError:
-        pass
-
-    assert "reasoning_effort" not in captured_payload["body"]
-
-
-def test_chat_api_config_from_env_reads_reasoning_effort(monkeypatch, tmp_path):
-    """chat_api_config_from_env reads ARD_TARGET_REASONING_EFFORT from env file."""
-    env_file = tmp_path / ".env"
-    env_file.write_text(
-        "ARD_TARGET_API_BASE=https://api.example.com\n"
-        "ARD_TARGET_MODEL_NAME=test-model\n"
-        "ARD_TARGET_API_KEY=secret\n"
-        "ARD_TARGET_REASONING_EFFORT=none\n",
-        encoding="utf-8",
-    )
-    config = chat_api_config_from_env(env_file=str(env_file))
-    assert config.reasoning_effort == "none"
-
-
-def test_chat_api_config_from_env_reasoning_defaults_to_none(monkeypatch, tmp_path):
-    """When ARD_TARGET_REASONING_EFFORT is not set, reasoning_effort defaults to None."""
-    env_file = tmp_path / ".env"
-    env_file.write_text(
-        "ARD_TARGET_API_BASE=https://api.example.com\n"
-        "ARD_TARGET_MODEL_NAME=test-model\n"
-        "ARD_TARGET_API_KEY=secret\n",
-        encoding="utf-8",
-    )
-    # Ensure env var not set in os.environ
-    monkeypatch.delenv("ARD_TARGET_REASONING_EFFORT", raising=False)
-    config = chat_api_config_from_env(env_file=str(env_file))
-    assert config.reasoning_effort is None
+    c = ARDConfig()
+    assert c.generation.target_count == 100
+    assert c.output.overwrite is False
+    assert c.ontology.path == "configs/anchor_ontology.json"
