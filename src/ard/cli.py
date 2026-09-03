@@ -22,7 +22,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--config",
-        required=True,
+        default=None,
         help="Path to config.toml",
     )
     parser.add_argument(
@@ -32,6 +32,9 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+
+    if args.config is None:
+        parser.error("--config is required")
 
     config_path = Path(args.config)
 

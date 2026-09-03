@@ -211,12 +211,14 @@ def _extract_logprobs(response_payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(content_list, list):
         return {"token_ids": [], "log_probs": []}
 
-    token_ids: list[int] = []
+    token_ids: list[int | str] = []
     log_probs: list[float] = []
     for item in content_list:
         if isinstance(item, dict):
-            tid = item.get("token")
-            if isinstance(tid, int):
+            # vLLM returns token as a string (e.g., "The", " dilemma");
+            # some OpenAI-compatible servers also return a numeric token_id
+            tid = item.get("token_id") or item.get("token")
+            if isinstance(tid, (int, str)):
                 token_ids.append(tid)
             lp = item.get("logprob")
             if isinstance(lp, (int, float)):

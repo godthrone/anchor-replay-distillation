@@ -94,6 +94,7 @@ def generate_text_anchors(
             logprobs=logprobs,
         )
         anchors.append(anchor)
+        print(f"  [{len(anchors)}/{config.target_count}] {anchor_id}")
 
         if len(anchors) >= config.target_count:
             break
