@@ -30,7 +30,7 @@ def test_chat_api_config_defaults():
     """ChatAPIConfig has sensible defaults."""
     c = ChatAPIConfig(api_base="https://api.example.com", model_name="m", api_key="k")
     assert c.temperature == 0.7
-    assert c.max_tokens == 0
+    assert c.max_tokens is None
     assert c.timeout == 60.0
     assert c.max_retries == 2
     assert c.chat_completions_url == "https://api.example.com/chat/completions"
@@ -233,7 +233,7 @@ def test_config_section_types():
     from ard.config import (
         ARDConfig,
         InputGeneratorConfig,
-        TargetConfig,
+        TargetModelConfig,
         GenerationConfig,
         OntologyConfig,
         OutputConfig,
@@ -242,7 +242,7 @@ def test_config_section_types():
     ig = InputGeneratorConfig(api_base="https://api.example.com", model_name="m", api_key="k")
     assert ig.temperature == 0.8
 
-    t = TargetConfig(api_base="https://api.example.com", model_name="m", api_key="k")
+    t = TargetModelConfig(api_base="https://api.example.com", model_name="m", api_key="k")
     assert t.temperature == 0.0
 
     g = GenerationConfig()
@@ -253,7 +253,7 @@ def test_config_section_types():
     assert o.path == "configs/anchor_ontology.json"
 
     out = OutputConfig()
-    assert out.dir == ""
+    assert out.directory is None
     assert out.overwrite is False
 
 

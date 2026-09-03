@@ -21,36 +21,37 @@ else:
 # ── Section configs ───────────────────────────────────────────────────────
 
 
-class InputGeneratorConfig(BaseModel):
-    """Configuration for the input generator (question creator) LLM API."""
+class _LLMConfig(BaseModel):
+    """Common base for LLM API configurations.
 
-    model_config = ConfigDict(extra="forbid")
-
-    api_base: str = ""
-    model_name: str = ""
-    api_key: str = ""  # secret — override in config.override.toml
-    temperature: float = 0.8
-    max_tokens: int = 4096
-    timeout: float = 120.0
-    max_retries: int = 3
-
-
-class TargetConfig(BaseModel):
-    """Configuration for the target (answer provider) LLM API.
-
-    Same fields as InputGeneratorConfig, but temperature defaults to 0.0
-    for deterministic answers.
+    Shared fields for both input generator and target model backends.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    api_base: str = ""
-    model_name: str = ""
-    api_key: str = ""  # secret — override in config.override.toml
-    temperature: float = 0.0
+    api_base: Optional[str] = None
+    model_name: Optional[str] = None
+    api_key: Optional[str] = None  # secret — override in config.override.toml
     max_tokens: int = 4096
     timeout: float = 120.0
     max_retries: int = 3
+
+    # temperature is set by subclasses — different defaults for input vs target
+
+
+class InputGeneratorConfig(_LLMConfig):
+    """Configuration for the input generator (question creator) LLM API."""
+
+    temperature: float = 0.8
+
+
+class TargetModelConfig(_LLMConfig):
+    """Configuration for the target model (answer provider) LLM API.
+
+    Temperature defaults to 0.0 for deterministic answers.
+    """
+
+    temperature: float = 0.0
 
 
 class OntologyConfig(BaseModel):
@@ -77,7 +78,7 @@ class OutputConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    dir: str = ""
+    directory: Optional[str] = None
     overwrite: bool = False
 
 
@@ -93,7 +94,7 @@ class ARDConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     input_generator: InputGeneratorConfig = Field(default_factory=InputGeneratorConfig)
-    target: TargetConfig = Field(default_factory=TargetConfig)
+    target_model: TargetModelConfig = Field(default_factory=TargetModelConfig)
     generation: GenerationConfig = Field(default_factory=GenerationConfig)
     ontology: OntologyConfig = Field(default_factory=OntologyConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)

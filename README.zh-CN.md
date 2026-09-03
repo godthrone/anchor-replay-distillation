@@ -17,7 +17,7 @@ cat > config.override.toml << 'EOF'
 [input_generator]
 api_key = "your-api-key"
 
-[target]
+[target_model]
 api_key = "your-api-key"
 EOF
 
@@ -41,7 +41,7 @@ bash run.sh --config configs/my_config.toml --image-dir /data/images
 | Section | 用途 |
 |---------|------|
 | `[input_generator]` | 生成用户提问的 VLM/LLM |
-| `[target]` | 生成答案（含 log-prob）的教师模型 |
+| `[target_model]` | 生成答案（含 log-prob）的教师模型 |
 | `[generation]` | 目标数量、随机种子、语言和任务类型过滤 |
 | `[ontology]` | 本体论路径 |
 | `[output]` | 输出目录设置 |

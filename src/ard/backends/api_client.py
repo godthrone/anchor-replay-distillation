@@ -14,7 +14,7 @@ import urllib.request
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 
 # ── Dataclasses ────────────────────────────────────────────────────────────
@@ -28,7 +28,7 @@ class ChatAPIConfig:
     model_name: str
     api_key: str
     temperature: float = 0.7
-    max_tokens: int = 0  # 0 means omit from request (use provider default)
+    max_tokens: Optional[int] = None  # None means omit from request (use provider default)
     timeout: float = 60.0
     max_retries: int = 2
 
@@ -123,7 +123,7 @@ def _build_payload(
         "messages": messages,
         "temperature": temperature if temperature is not None else config.temperature,
     }
-    if config.max_tokens > 0:
+    if config.max_tokens is not None:
         payload["max_tokens"] = config.max_tokens
     if logprobs:
         payload["logprobs"] = True

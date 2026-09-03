@@ -12,7 +12,7 @@ max_tokens = 4096
 timeout = 120.0
 max_retries = 3
 
-[target]
+[target_model]
 api_base = ""
 model_name = ""
 api_key = ""
@@ -31,5 +31,5 @@ task_types = []
 path = "configs/anchor_ontology.json"
 
 [output]
-dir = ""
+directory = ""
 overwrite = false

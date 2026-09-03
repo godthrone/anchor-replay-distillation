@@ -37,7 +37,7 @@ def run(
     # ── Output directory ──────────────────────────────────────────────────
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     dataset_name = f"ard_dataset_{timestamp}"
-    output_dir = Path(config.output.dir) if config.output.dir else Path("outputs") / dataset_name
+    output_dir = Path(config.output.directory) if config.output.directory is not None else Path("outputs") / dataset_name
 
     if output_dir.exists():
         if not config.output.overwrite:
@@ -72,13 +72,13 @@ def run(
     )
     target_client = ChatAPIClient(
         ChatAPIConfig(
-            api_base=config.target.api_base,
-            model_name=config.target.model_name,
-            api_key=config.target.api_key,
-            temperature=config.target.temperature,
-            max_tokens=config.target.max_tokens,
-            timeout=config.target.timeout,
-            max_retries=config.target.max_retries,
+            api_base=config.target_model.api_base,
+            model_name=config.target_model.model_name,
+            api_key=config.target_model.api_key,
+            temperature=config.target_model.temperature,
+            max_tokens=config.target_model.max_tokens,
+            timeout=config.target_model.timeout,
+            max_retries=config.target_model.max_retries,
         )
     )
 
@@ -93,7 +93,7 @@ def run(
         input_client=input_client,
         target_client=target_client,
         input_model_name=config.input_generator.model_name,
-        target_model_name=config.target.model_name,
+        target_model_name=config.target_model.model_name,
     )
     all_anchors.extend(text_anchors)
     print(f"  Generated {len(text_anchors)} text anchors")

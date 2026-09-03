@@ -1,7 +1,7 @@
 """Text anchor generation pipeline — simple per-sample loop."""
 
 import random
-from typing import Any
+from typing import Any, Optional
 
 from ard.core.types import Anchor, AnchorGenerationConfig
 from ard.core.sampler import sample_anchors, generate_anchor_id
@@ -38,7 +38,7 @@ def generate_text_anchors(
     input_model_name: str,
     target_model_name: str,
     min_answer_chars: int = 8,
-    max_answer_chars: int = 0,
+    max_answer_chars: Optional[int] = None,
 ) -> list[Anchor]:
     metas = sample_anchors(ontology, config)
     rng = random.Random(config.seed)
@@ -81,7 +81,7 @@ def generate_text_anchors(
 
         if len(target_answer) < min_answer_chars:
             continue
-        if max_answer_chars > 0 and len(target_answer) > max_answer_chars:
+        if max_answer_chars is not None and len(target_answer) > max_answer_chars:
             continue
 
         anchor = Anchor(

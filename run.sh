@@ -1,7 +1,8 @@
 #!/bin/bash
-# ARD v1.0.0 启动脚本
+# ARD 启动脚本
 set -euo pipefail
-IMAGE="${ARD_IMAGE:-ard:1.0.0}"
+VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "1.0.0")
+IMAGE="${ARD_IMAGE:-ard:${VERSION}}"
 docker run --rm \
     -v "${PWD}/configs:/app/configs:ro" \
     -v "${PWD}/outputs:/app/outputs" \

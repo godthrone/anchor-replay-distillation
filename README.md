@@ -18,7 +18,7 @@ cat > config.override.toml << 'EOF'
 [input_generator]
 api_key = "your-api-key"
 
-[target]
+[target_model]
 api_key = "your-api-key"
 EOF
 
@@ -43,7 +43,7 @@ template with all fields and defaults.
 | Section | Purpose |
 |---------|---------|
 | `[input_generator]` | VLM/LLM that generates user questions |
-| `[target]` | Teacher model that generates answers with log-probs |
+| `[target_model]` | Teacher model that generates answers with log-probs |
 | `[generation]` | Target count, seed, language and task type filters |
 | `[ontology]` | Ontology path |
 | `[output]` | Output directory settings |

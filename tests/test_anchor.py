@@ -227,7 +227,7 @@ def test_config_load_minimal(tmp_path):
         'api_base = "https://api.example.com/v1"\n'
         'model_name = "test-model"\n'
         'api_key = "sk-test"\n'
-        "[target]\n"
+        "[target_model]\n"
         'api_base = "https://api.example.com/v1"\n'
         'model_name = "target-model"\n'
         'api_key = "sk-target"\n'
@@ -235,7 +235,7 @@ def test_config_load_minimal(tmp_path):
     config = load_config(str(config_path))
     assert isinstance(config, ARDConfig)
     assert config.input_generator.api_base == "https://api.example.com/v1"
-    assert config.target.model_name == "target-model"
+    assert config.target_model.model_name == "target-model"
     # Defaults
     assert config.generation.target_count == 100
     assert config.generation.seed == 42
@@ -251,7 +251,7 @@ def test_config_load_with_override(tmp_path):
         'api_base = ""\n'
         'model_name = ""\n'
         'api_key = ""\n'
-        "[target]\n"
+        "[target_model]\n"
         'api_base = ""\n'
         'model_name = ""\n'
         'api_key = ""\n'
@@ -262,14 +262,14 @@ def test_config_load_with_override(tmp_path):
         'api_base = "https://real.example.com/v1"\n'
         'model_name = "real-model"\n'
         'api_key = "real-key"\n'
-        "[target]\n"
+        "[target_model]\n"
         'api_base = "https://real.example.com/v1"\n'
         'model_name = "real-target"\n'
         'api_key = "real-target-key"\n'
     )
     config = load_config(str(base), str(override))
     assert config.input_generator.api_base == "https://real.example.com/v1"
-    assert config.target.model_name == "real-target"
+    assert config.target_model.model_name == "real-target"
 
 
 def test_config_validation_rejects_unknown_fields(tmp_path):
@@ -282,7 +282,7 @@ def test_config_validation_rejects_unknown_fields(tmp_path):
         'api_base = "https://api.example.com"\n'
         'model_name = "m"\n'
         'api_key = "k"\n'
-        "[target]\n"
+        "[target_model]\n"
         'api_base = "https://api.example.com"\n'
         'model_name = "m"\n'
         'api_key = "k"\n'

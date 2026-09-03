@@ -105,3 +105,53 @@ flowchart LR
 5. **TOML config with override**: Base config (`config.toml`) contains all fields with defaults. Override config (`config.override.toml`) contains only secrets. Both are deep-merged into a single `ARDConfig` instance at startup.
 
 6. **User-provided resources**: Images are provided by the user (directory). All model inference goes through the user's API endpoints. ARD does not bundle models or images.
+
+## Anchor Generation Flow
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant CLI as "CLI (cli.py)"
+    participant Pipeline as "Pipeline (pipeline.py)"
+    participant Domain as "Domain Layer"
+    participant Backend as "API Client (api_client.py)"
+    participant Teacher as "Teacher Model API"
+
+    User->>CLI: ard --config config.toml [--image-dir /path]
+    CLI->>CLI: Parse CLI args
+    CLI->>Pipeline: load_config() → ARDConfig
+    Pipeline->>Pipeline: Validate output directory
+    Pipeline->>Pipeline: Load ontology
+    Pipeline->>Domain: generate_text_anchors(ontology, config, clients)
+    Domain->>Domain: Sample anchor combinations
+    loop For each anchor
+        Domain->>Backend: chat() — generate user question
+        Backend->>Teacher: POST /chat/completions
+        Teacher-->>Backend: User question
+        Backend-->>Domain: User message
+        Domain->>Backend: chat_with_logprobs() — generate answer
+        Backend->>Teacher: POST /chat/completions (logprobs=True)
+        Teacher-->>Backend: Answer + token log-probs
+        Backend-->>Domain: Answer + logprobs
+        Domain->>Domain: Validate answer length
+    end
+    Domain-->>Pipeline: List of text anchors
+    opt Image directory provided
+        Pipeline->>Domain: generate_multimodal_anchors(image_dir, ...)
+        Domain->>Domain: Scan & sample images
+        loop For each image
+            Domain->>Backend: chat_batch() — VLM question
+            Backend->>Teacher: POST /chat/completions (multimodal)
+            Teacher-->>Backend: Question
+            Domain->>Backend: chat_with_logprobs() — answer
+            Backend->>Teacher: POST /chat/completions (logprobs=True)
+            Teacher-->>Backend: Answer + logprobs
+            Backend-->>Domain: Answer + logprobs
+        end
+        Domain-->>Pipeline: List of multimodal anchors
+    end
+    Pipeline->>Pipeline: write_anchor_bank() → anchor_bank.jsonl
+    Pipeline->>Pipeline: build_manifest() → manifest.json
+    Pipeline-->>CLI: Output directory path
+    CLI-->>User: Done! Output: outputs/ard_dataset_YYYYMMDD_HHMMSS/
+```
