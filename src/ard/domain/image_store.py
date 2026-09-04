@@ -4,6 +4,8 @@ Scans user-provided image directories, performs random sampling,
 and manages image files in the output directory.
 """
 
+from __future__ import annotations
+
 import random
 import shutil
 from pathlib import Path

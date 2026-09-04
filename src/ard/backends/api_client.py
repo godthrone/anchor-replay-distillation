@@ -12,10 +12,9 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
-
+from typing import Any
 
 # ── Dataclasses ────────────────────────────────────────────────────────────
 
@@ -28,7 +27,7 @@ class ChatAPIConfig:
     model_name: str
     api_key: str
     temperature: float = 0.7
-    max_tokens: Optional[int] = None  # None means omit from request (use provider default)
+    max_tokens: int | None = None  # None means omit from request (use provider default)
     timeout: float = 60.0
     max_retries: int = 2
 
@@ -288,7 +287,7 @@ class ChatAPIClient:
                     time.sleep(min(2.0 ** attempt, 30.0))
 
         raise RuntimeError(
-            f"Chat request failed after {self._config.max_retries + 1} attempt(s)"
+            f"Chat request failed after {self._config.max_retries + 1} attempt(s): {last_error}"
         ) from last_error
 
     def chat_with_logprobs(
@@ -331,7 +330,7 @@ class ChatAPIClient:
                     time.sleep(min(2.0 ** attempt, 30.0))
 
         raise RuntimeError(
-            f"Chat request failed after {self._config.max_retries + 1} attempt(s)"
+            f"Chat request failed after {self._config.max_retries + 1} attempt(s): {last_error}"
         ) from last_error
 
     def chat_batch(

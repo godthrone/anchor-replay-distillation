@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Optional
 
 from ard.config import load_config
 from ard.pipeline import run as run_pipeline
@@ -30,6 +29,17 @@ def main() -> None:
         default=None,
         help="Image directory for multimodal mode (optional)",
     )
+    parser.add_argument(
+        "--override",
+        default=None,
+        help="Path to config.override.toml (optional, default: auto-detect alongside --config)",
+    )
+    parser.add_argument(
+        "--max-turns",
+        type=int,
+        default=None,
+        help="Maximum conversation turns (default: from config)",
+    )
 
     args = parser.parse_args()
 
@@ -38,10 +48,16 @@ def main() -> None:
 
     config_path = Path(args.config)
 
-    # Auto-detect override config
-    override_path: Optional[Path] = config_path.parent / "config.override.toml"
-    if not override_path.exists():
-        override_path = None
+    # Auto-detect or use explicit override config
+    if args.override:
+        override_path: Path | None = Path(args.override)
+        if not override_path.exists():
+            print(f"Error: override config not found: {args.override}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        override_path = config_path.parent / "config.override.toml"
+        if not override_path.exists():
+            override_path = None
 
     # Load config
     try:
@@ -55,6 +71,10 @@ def main() -> None:
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
+
+    # CLI overrides
+    if args.max_turns is not None:
+        config.generation.max_turns = args.max_turns
 
     # Run pipeline
     try:

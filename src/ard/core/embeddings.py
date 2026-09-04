@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import pathlib
-from typing import Any, Optional
+from typing import Any
+
+import numpy as np
 
 _np = None
 
@@ -57,7 +59,7 @@ def farthest_point_sampling(
     embeddings: np.ndarray,
     n: int,
     *,
-    seed: Optional[int] = None,
+    seed: int | None = None,
 ) -> list[int]:
     """Select *n* diverse points via Farthest Point Sampling (FPS).
 

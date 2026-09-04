@@ -4,6 +4,8 @@ Loads anchor_ontology.json and provides typed access to its sections.
 No external dependencies beyond stdlib json.
 """
 
+from __future__ import annotations
+
 import json
 from pathlib import Path
 from typing import Any

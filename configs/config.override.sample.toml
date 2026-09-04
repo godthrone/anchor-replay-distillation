@@ -1,22 +1,60 @@
 # ARD — Override configuration template.
-# Copy this file to configs/config.override.toml and fill in secret values.
-# config.override.toml is gitignored — never commit real secrets.
+# Copy to .local/config.override.toml and fill in your values.
+# .local/config.override.toml is gitignored — never commit real secrets.
 #
-# Only override fields that need to differ from the base config.
-# You CANNOT add new fields not present in config.toml.
+# This file mirrors ALL fields from configs/config.toml.
+# You CANNOT add new sections or fields not present in config.toml.
 
 [input_generator]
-# API endpoint for the input generation LLM (e.g., vLLM OpenAI-compatible)
+# API endpoint URL (OpenAI-compatible)
 api_base = "REPLACE_ME"
 # Model name as registered in the API
 model_name = "REPLACE_ME"
-# API key if required by the endpoint
+# API key (leave empty if not required)
 api_key = "REPLACE_ME"
+# Sampling temperature for question generation
+temperature = 0.8
+# Maximum tokens per response
+max_tokens = 4096
+# Request timeout in seconds
+timeout = 120.0
+# Number of retries on failure
+max_retries = 3
 
 [target_model]
-# API endpoint for the target/reference LLM
+# API endpoint URL (OpenAI-compatible)
 api_base = "REPLACE_ME"
-# Model name for the target LLM
+# Model name for the teacher model
 model_name = "REPLACE_ME"
-# API key if required by the endpoint
+# API key (leave empty if not required)
 api_key = "REPLACE_ME"
+# Sampling temperature for answer generation (0.0 = deterministic)
+temperature = 0.0
+# Maximum tokens per response
+max_tokens = 4096
+# Request timeout in seconds
+timeout = 120.0
+# Number of retries on failure
+max_retries = 3
+
+[generation]
+# Number of anchors to generate
+target_count = 100
+# Random seed for reproducibility
+seed = 42
+# Language filter (empty = all available)
+languages = []
+# Task type filter (empty = all available)
+task_types = []
+# Number of concurrent API requests
+concurrency = 4
+
+[ontology]
+# Path to the ontology JSON file
+path = "data/anchor_ontology.json"
+
+[output]
+# Output directory (empty = auto-generated under outputs/)
+directory = ""
+# Whether to overwrite existing output directory
+overwrite = false

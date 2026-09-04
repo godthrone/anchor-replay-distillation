@@ -1,11 +1,11 @@
 """ARD — Anchor Replay Distillation.
 
 Multi-modal anchor data generation with log-prob export for OPD training.
+
+Version is derived by setuptools-scm from git tags — do not hardcode it here.
 """
 
-from importlib.metadata import PackageNotFoundError, version as _version
+from ard.config import ARDConfig, load_config
+from ard.pipeline import run
 
-try:
-    __version__ = _version(__name__)
-except PackageNotFoundError:
-    __version__ = "1.0.0.dev0"
+__all__ = ["ARDConfig", "load_config", "run"]

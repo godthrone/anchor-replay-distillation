@@ -1,10 +1,14 @@
+# config.py — Configuration model definitions and loading.
+# Responsibility: define Pydantic models for all config sections,
+# load and validate TOML config files, deep-merge override configs.
+
 from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ── TOML parsing ──────────────────────────────────────────────────────────
 if sys.version_info >= (3, 11):
@@ -29,14 +33,14 @@ class _LLMConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    api_base: Optional[str] = None
-    model_name: Optional[str] = None
-    api_key: Optional[str] = None  # secret — override in config.override.toml
+    api_base: str | None = None
+    model_name: str | None = None
+    api_key: str | None = None  # secret — override in config.override.toml
     max_tokens: int = 4096
     timeout: float = 120.0
     max_retries: int = 3
-
-    # temperature is set by subclasses — different defaults for input vs target
+    temperature: float
+    """Sampling temperature — different defaults for input vs target."""
 
 
 class InputGeneratorConfig(_LLMConfig):
@@ -59,7 +63,7 @@ class OntologyConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    path: str = "configs/anchor_ontology.json"
+    path: str = "data/anchor_ontology.json"
 
 
 class GenerationConfig(BaseModel):
@@ -69,8 +73,21 @@ class GenerationConfig(BaseModel):
 
     target_count: int = 100
     seed: int = 42
+    concurrency: int = 4
     languages: list[str] = Field(default_factory=list)
     task_types: list[str] = Field(default_factory=list)
+    max_turns: int = Field(default=1, ge=1, le=10)
+    system_persona: Literal["none", "one_sentence", "appropriate", "detailed"] = "none"
+    max_turns_with_image: int = Field(default=1, ge=0, le=5)
+
+    @model_validator(mode="after")
+    def _validate_image_turns(self) -> "GenerationConfig":
+        if self.max_turns_with_image > self.max_turns:
+            raise ValueError(
+                f"max_turns_with_image ({self.max_turns_with_image}) cannot exceed "
+                f"max_turns ({self.max_turns})"
+            )
+        return self
 
 
 class OutputConfig(BaseModel):
@@ -78,7 +95,7 @@ class OutputConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    directory: Optional[str] = None
+    directory: str | None = None
     overwrite: bool = False
 
 
@@ -104,10 +121,33 @@ class ARDConfig(BaseModel):
 ARDConfig.model_rebuild()
 
 
+# ── Empty string normalization ─────────────────────────────────────────────
+
+
+def _replace_empty_str_with_none(d: dict) -> dict:
+    """Recursively replace all empty string ``""`` values with ``None``.
+
+    TOML files often use ``api_key = ""`` as a placeholder for secret fields.
+    Pydantic models with ``Optional[str] = None`` will not trigger their
+    ``None`` default when ``""`` is loaded — downstream ``is None`` checks
+    miss the empty string. This normalizer ensures that ``""`` is treated
+    as "not provided" throughout the config.
+    """
+    result: dict = {}
+    for k, v in d.items():
+        if isinstance(v, dict):
+            result[k] = _replace_empty_str_with_none(v)
+        elif v == "":
+            result[k] = None
+        else:
+            result[k] = v
+    return result
+
+
 # ── Deep merge helper ─────────────────────────────────────────────────────
 
 
-def _deep_merge(base: dict, override: dict) -> dict:
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """Deep-merge two dictionaries. Leaf values in *override* replace those in *base*.
 
     Returns a new dict; neither input is mutated.
@@ -126,7 +166,7 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 def load_config(
     base_path: str | Path,
-    override_path: Optional[str | Path] = None,
+    override_path: str | Path | None = None,
 ) -> ARDConfig:
     """Load and validate ARD configuration.
 
@@ -160,7 +200,10 @@ def load_config(
     else:
         merged_dict = base_dict
 
-    # 3. Validate
+    # 3. Normalize empty strings to None
+    merged_dict = _replace_empty_str_with_none(merged_dict)
+
+    # 4. Validate
     try:
         return ARDConfig.model_validate(merged_dict)
     except Exception as exc:

@@ -24,11 +24,20 @@ max_retries = 3
 [generation]
 target_count = 100
 seed = 42
+# Number of concurrent API requests (higher = faster, but may hit rate limits)
+concurrency = 4
+# Empty list = use all available values from ontology
 languages = []
 task_types = []
+# Maximum conversation turns (1 = single-turn, 2-10 = multi-turn)
+max_turns = 1
+# System persona mode: "none" | "one_sentence" | "appropriate" | "detailed"
+system_persona = "none"
+# Maximum turns with image per anchor (must be <= max_turns)
+max_turns_with_image = 1
 
 [ontology]
-path = "configs/anchor_ontology.json"
+path = "data/anchor_ontology.json"
 
 [output]
 directory = ""

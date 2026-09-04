@@ -1,44 +1,109 @@
 # ARD — Anchor Replay Distillation
 
-> Multi-modal anchor data generation with log-prob export for OPD training.
+[中文文档](README.zh-CN.md)
 
-**ARD** generates anchor datasets that prevent catastrophic forgetting during
-continual fine-tuning. It samples diverse prompts from an ontology, generates
-answers using a teacher model, and exports token-level log-probabilities
-for On-Policy Distillation (OPD) training.
+> Anchor dataset generation for continual LLM fine-tuning — ontology-driven
+> sampling, teacher-model distillation with token-level log-probabilities,
+> and native Graspo/OPD integration.
+
+**ARD** generates high-quality anchor datasets that prevent catastrophic
+forgetting during continual fine-tuning. It samples diverse prompts from
+a structured knowledge ontology, calls a teacher model to generate answers
+with full token-level log-probabilities, and exports in a format directly
+compatible with On-Policy Distillation (OPD) and Graspo reinforcement
+learning pipelines.
+
+**Key features:**
+- 🧠 **Ontology-driven sampling** — Four-dimensional ontology (knowledge
+  domains, languages, capabilities, task types) with embedding-based
+  farthest-point sampling ensures broad, balanced coverage.
+- 🎯 **Teacher distillation with logprobs** — Full token-level
+  log-probabilities from a strong teacher model provide high-quality
+  replay signals for OPD training.
+- 🖼️ **Multi-modal support** — Text and text+image anchors in a single
+  unified pipeline and output format.
+- 📦 **Graspo-compatible** — Output format is directly consumable by
+  Graspo anchor bank, no conversion needed.
+- ⚡ **One command** — Single CLI, TOML-driven config, secrets separated,
+  Docker one-click launch.
 
 ## Quick Start
 
+### Prerequisites
+
+- Docker
+
+### 1. Build the Docker image
+
 ```bash
-# 1. Prepare config
-cp configs/config.toml my_config.toml
-# Edit my_config.toml: fill in API endpoint and model name
-# Create config.override.toml with your API key:
-cat > config.override.toml << 'EOF'
+git clone <repo>
+cd anchor-replay-distillation
+bash docker/build.sh
+```
+
+### 2. Create your override config
+
+```bash
+mkdir -p .local
+cp configs/config.override.sample.toml .local/config.override.toml
+```
+
+Edit `.local/config.override.toml` and fill in your API credentials:
+
+```toml
 [input_generator]
+api_base = "https://your-api.example.com/v1"
+model_name = "your-model-name"
 api_key = "your-api-key"
 
 [target_model]
+api_base = "https://your-api.example.com/v1"
+model_name = "your-model-name"
 api_key = "your-api-key"
-EOF
-
-# 2. Install
-uv sync
-
-# 3. Generate text anchors
-uv run ard --config my_config.toml
-
-# 4. Generate text + multimodal anchors
-uv run ard --config my_config.toml --image-dir /path/to/images
-
-# 5. Docker (alternative)
-bash run.sh --config configs/my_config.toml --image-dir /data/images
 ```
+
+### 3. Generate anchors
+
+```bash
+# Text-only anchors
+bash run.sh --config configs/config.toml --override .local/config.override.toml
+
+# Multimodal anchors (with sample images)
+bash run.sh --config configs/config.toml --override .local/config.override.toml \
+    --image-dir examples/images
+```
+
+### 4. Check the output
+
+```bash
+ls outputs/<dataset_name>/
+```
+
+See `examples/anchor_bank.sample.jsonl` for the expected format.
 
 ## Configuration
 
-All settings in a single TOML file. See `configs/config.toml` for the complete
-template with all fields and defaults.
+ARD uses a **layered TOML configuration** model. There are two config files:
+
+| File | Purpose | Git-tracked? |
+|------|---------|-------------|
+| `configs/config.toml` | Base config — all fields with defaults | ✅ Yes |
+| `.local/config.override.toml` | Override — deployment-specific secrets | ❌ No (`.gitignore`d) |
+
+**`configs/config.toml`** is the single source of truth for the configuration
+schema. It defines every field with sensible defaults. Non-secret fields
+(e.g., `temperature`, `max_tokens`, `seed`) are ready to use out of the box.
+Secret fields (`api_base`, `model_name`, `api_key`) are left empty and must
+be filled via the override file.
+
+**`.local/config.override.toml`** contains only the fields you need to
+override — typically `api_base`, `model_name`, and `api_key` for both
+`[input_generator]` and `[target_model]`. It lives in `.local/` so it is
+never committed to git. You cannot add new fields that don't exist in the
+base config.
+
+At startup, the override file is deep-merged into the base config.
+The merged result is a single config dict used throughout the program.
 
 | Section | Purpose |
 |---------|---------|
@@ -48,17 +113,16 @@ template with all fields and defaults.
 | `[ontology]` | Ontology path |
 | `[output]` | Output directory settings |
 
-Secrets (API keys) go in `config.override.toml` (gitignored).
-
 ## CLI
 
 ```
-ard --config <path> [--image-dir <path>]
+ard --config <path> [--override <path>] [--image-dir <path>]
 ```
 
 A single command handles everything:
 
-- `--config` — Path to config.toml (required)
+- `--config` — Path to base config TOML (required)
+- `--override` — Path to override config TOML (optional)
 - `--image-dir` — Image directory for multimodal anchors (optional)
 
 ## Output
@@ -95,22 +159,124 @@ compatible with graspo:
 }
 ```
 
+## Examples
+
+The `examples/` directory contains sample inputs and outputs to help you
+understand the project without running it:
+
+```
+examples/
+├── images/                    # Sample images for multimodal mode
+│   ├── sample_01.jpg
+│   └── ...
+└── anchor_bank.sample.jsonl   # Sample output (3 anchors)
+```
+
+You can browse `examples/` directly on GitHub to see the input/output format.
+
 ## Docker
 
-```bash
-# Build
-bash docker/build.sh
+The Docker image is built with `docker/build.sh`, which tags the image with the
+current git version. The image uses a two-layer build (dependencies + source)
+with BuildKit cache mounts for fast rebuilds.
 
-# Run
-bash run.sh --config configs/my_config.toml
+### Custom image tag
+
+```bash
+IMAGE_NAME=ard:latest bash docker/build.sh
+ARD_IMAGE=ard:latest bash run.sh --config configs/config.toml --override .local/config.override.toml
+```
+
+### Without git
+
+```bash
+VERSION=1.0.0 bash docker/build.sh
 ```
 
 ## Development
 
 ```bash
-uv sync --dev
+# Install dependencies
+uv sync --extra dev
+
+# Run tests
 uv run pytest tests/ -v
+
+# Run type checking
+uv run mypy src/ard/
+
+# Run linting
+uv run ruff check src/ tests/
 ```
+
+## FAQ
+
+### How do I configure the API key?
+
+Create `.local/config.override.toml` from the sample template and fill in
+your API keys:
+
+```bash
+mkdir -p .local
+cp configs/config.override.sample.toml .local/config.override.toml
+```
+
+Then edit the file:
+
+```toml
+[input_generator]
+api_base = "https://your-api.example.com/v1"
+model_name = "your-model-name"
+api_key = "sk-..."
+
+[target_model]
+api_base = "https://your-api.example.com/v1"
+model_name = "your-model-name"
+api_key = "sk-..."
+```
+
+The override file is deep-merged with `configs/config.toml` at startup.
+Only secrets go here; all other configuration stays in `configs/config.toml`.
+
+### How do I add a custom ontology?
+
+Place your ontology JSON file in the `data/` directory (or any path), then
+set `path` in `configs/config.toml`:
+
+```toml
+[ontology]
+path = "data/my_ontology.json"
+```
+
+The ontology must follow the expected schema with `knowledge_domains`,
+`capabilities`, and `languages` fields.
+
+### What is the output format?
+
+All anchors are written to a single `anchor_bank.jsonl` file in JSONL format
+(one JSON object per line). Each record includes `id`, `source`, `messages`,
+`targets` (with `content` and token-level `logprobs`), `anchor_meta`, and
+`teacher_id`. The format is compatible with graspo's anchor bank format. See
+the [Data Format](#data-format) section for the full schema.
+
+### How do I generate multimodal anchors?
+
+Pass the `--image-dir` flag pointing to a directory of images:
+
+```bash
+bash run.sh --config configs/config.toml --override .local/config.override.toml \
+    --image-dir examples/images
+```
+
+The pipeline will sample images from the directory, generate VLM-based
+questions about them, and produce multimodal anchors alongside text anchors.
+
+### What is the difference between text and multimodal anchors?
+
+Text anchors are question-answer pairs generated from the ontology without
+images. Multimodal anchors include an image in the conversation messages
+and are generated when `--image-dir` is provided. Both types share the same
+output format and are written to the same `anchor_bank.jsonl` file.
 
 ## License
 

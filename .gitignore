@@ -12,6 +12,7 @@ venv/
 
 # Local secrets and env files
 config.override.toml
+my_config*.toml
 .env
 !.env-example
 *.env
@@ -20,11 +21,13 @@ api_env.txt
 
 # AI assistants
 CLAUDE.md
+CLAUDE.zh-CN.md
 AGENTS.md
 
 # Generated artifacts
 outputs/
 anchor_bank/
+data/
 *.log
 run.stdout.log
 run.stderr.log

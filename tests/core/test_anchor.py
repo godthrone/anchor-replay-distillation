@@ -1,11 +1,11 @@
-"""Tests for ARD v2 — core types, ontology, config, sampler, embeddings, CLI."""
+"""Tests for ARD — core types, ontology, config, sampler, embeddings, CLI."""
 
 import json
 from pathlib import Path
 
 import pytest
 
-from ard.core.types import Anchor, AnchorGenerationConfig
+from ard.core.types import GeneratedAnchor, AnchorGenerationConfig
 from ard.core.ontology import load_ontology
 from ard.core.sampler import sample_anchors, generate_anchor_id
 from ard.core.embeddings import load_embeddings, farthest_point_sampling
@@ -44,12 +44,13 @@ def _minimal_ontology_payload() -> dict:
 
 def test_anchor_type_defaults():
     """Anchor dataclass creates with required fields."""
-    a = Anchor(
+    a = GeneratedAnchor(
         id="test_001",
         messages=[{"role": "user", "content": "hello"}],
         target_answer="world",
         target_model="gpt-4",
         input_generator_model="claude",
+        anchor_meta={},
     )
     assert a.id == "test_001"
     assert a.target_answer == "world"
@@ -60,12 +61,13 @@ def test_anchor_type_defaults():
 def test_anchor_type_with_logprobs():
     """Anchor stores logprobs when provided."""
     logprobs = {"token_ids": [1, 2, 3], "log_probs": [-0.1, -0.2, -0.3]}
-    a = Anchor(
+    a = GeneratedAnchor(
         id="a",
         messages=[],
         target_answer="x",
         target_model="m",
         input_generator_model="m",
+        anchor_meta={},
         logprobs=logprobs,
     )
     assert a.logprobs == logprobs
@@ -76,6 +78,7 @@ def test_anchor_generation_config_defaults():
     c = AnchorGenerationConfig()
     assert c.target_count == 100
     assert c.seed == 42
+    assert c.concurrency == 4
     assert c.languages == []
     assert c.task_types == []
 
@@ -83,10 +86,11 @@ def test_anchor_generation_config_defaults():
 def test_anchor_generation_config_custom():
     """AnchorGenerationConfig accepts custom values."""
     c = AnchorGenerationConfig(
-        target_count=50, seed=7, languages=["English"], task_types=["qa", "coding"]
+        target_count=50, seed=7, concurrency=8, languages=["English"], task_types=["qa", "coding"]
     )
     assert c.target_count == 50
     assert c.seed == 7
+    assert c.concurrency == 8
     assert c.languages == ["English"]
     assert c.task_types == ["qa", "coding"]
 
@@ -105,7 +109,7 @@ def test_ontology_loads_valid(tmp_path):
 
 def test_ontology_loads_real_file():
     """load_ontology loads the real anchor_ontology.json."""
-    ontology = load_ontology(Path("configs/anchor_ontology.json"))
+    ontology = load_ontology(Path("data/anchor_ontology.json"))
     assert isinstance(ontology, dict)
     assert "languages" in ontology
     assert "knowledge_domains" in ontology
@@ -239,6 +243,7 @@ def test_config_load_minimal(tmp_path):
     # Defaults
     assert config.generation.target_count == 100
     assert config.generation.seed == 42
+    assert config.generation.concurrency == 4
 
 
 def test_config_load_with_override(tmp_path):
@@ -319,3 +324,46 @@ def test_cli_requires_config():
     )
     assert result.returncode == 0
     assert "--config" in result.stdout
+
+
+# ── Config types ────────────────────────────────────────────────────────────
+
+
+def test_config_section_types():
+    """Verify config section types are importable and constructible."""
+    from ard.config import (
+        ARDConfig,
+        InputGeneratorConfig,
+        TargetModelConfig,
+        GenerationConfig,
+        OntologyConfig,
+        OutputConfig,
+    )
+
+    ig = InputGeneratorConfig(api_base="https://api.example.com", model_name="m", api_key="k")
+    assert ig.temperature == 0.8
+
+    t = TargetModelConfig(api_base="https://api.example.com", model_name="m", api_key="k")
+    assert t.temperature == 0.0
+
+    g = GenerationConfig()
+    assert g.target_count == 100
+    assert g.seed == 42
+    assert g.concurrency == 4
+
+    o = OntologyConfig()
+    assert o.path == "data/anchor_ontology.json"
+
+    out = OutputConfig()
+    assert out.directory is None
+    assert out.overwrite is False
+
+
+def test_ard_config_full():
+    """ARDConfig composes all sections."""
+    from ard.config import ARDConfig
+
+    c = ARDConfig()
+    assert c.generation.target_count == 100
+    assert c.output.overwrite is False
+    assert c.ontology.path == "data/anchor_ontology.json"
