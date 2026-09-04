@@ -36,7 +36,7 @@ learning pipelines.
 ### 1. Build the Docker image
 
 ```bash
-git clone <repo>
+git clone https://github.com/your-org/anchor-replay-distillation.git
 cd anchor-replay-distillation
 bash docker/build.sh
 ```
@@ -46,6 +46,7 @@ bash docker/build.sh
 ```bash
 mkdir -p .local
 cp configs/config.override.sample.toml .local/config.override.toml
+# Edit .local/config.override.toml: fill in api_base, model_name, api_key
 ```
 
 Edit `.local/config.override.toml` and fill in your API credentials:
@@ -76,9 +77,10 @@ bash run.sh --config configs/config.toml --override .local/config.override.toml 
 ### 4. Check the output
 
 ```bash
-ls outputs/<dataset_name>/
+ls outputs/
 ```
 
+Find the `ard_dataset_*` directory (e.g. `ard_dataset_20240101_120000`).
 See `examples/anchor_bank.sample.jsonl` for the expected format.
 
 ## Configuration
@@ -109,21 +111,22 @@ The merged result is a single config dict used throughout the program.
 |---------|---------|
 | `[input_generator]` | VLM/LLM that generates user questions |
 | `[target_model]` | Teacher model that generates answers with log-probs |
-| `[generation]` | Target count, seed, language and task type filters |
+| `[generation]` | Target count, seed, concurrency, max turns, system persona, language and task type filters |
 | `[ontology]` | Ontology path |
 | `[output]` | Output directory settings |
 
 ## CLI
 
 ```
-ard --config <path> [--override <path>] [--image-dir <path>]
+ard --config <path> [--override <path>] [--image-dir <path>] [--max-turns <n>]
 ```
 
 A single command handles everything:
 
 - `--config` — Path to base config TOML (required)
-- `--override` — Path to override config TOML (optional)
+- `--override` — Path to override config TOML (optional; auto-detects `config.override.toml` alongside `--config` if not provided)
 - `--image-dir` — Image directory for multimodal anchors (optional)
+- `--max-turns` — Maximum conversation turns, overrides config value (optional; 1 = single-turn, 2-10 = multi-turn)
 
 ## Output
 
@@ -143,11 +146,16 @@ compatible with graspo:
 {
   "id": "anchor_a1b2c3d4",
   "source": "ard",
-  "messages": [{"role": "user", "content": "Explain entropy..."}],
+  "messages": [
+    {"role": "user", "content": "Explain entropy..."},
+    {"role": "assistant", "content": "Entropy is a measure of disorder..."},
+    {"role": "user", "content": "Can you give an example?"},
+    {"role": "assistant", "content": "Sure! Melting ice..."}
+  ],
   "targets": [{
     "id": "primary",
     "output": {
-      "content": "Entropy is a measure of disorder...",
+      "content": "Sure! Melting ice...",
       "logprobs": {
         "token_ids": [1, 2, 3],
         "log_probs": [-0.1, -0.2, -0.3]
@@ -273,10 +281,18 @@ questions about them, and produce multimodal anchors alongside text anchors.
 
 ### What is the difference between text and multimodal anchors?
 
-Text anchors are question-answer pairs generated from the ontology without
-images. Multimodal anchors include an image in the conversation messages
-and are generated when `--image-dir` is provided. Both types share the same
-output format and are written to the same `anchor_bank.jsonl` file.
+Text anchors are conversations (single-turn or multi-turn) generated from
+the ontology without images. Multimodal anchors include an image in the
+conversation messages and are generated when `--image-dir` is provided.
+Both types share the same output format and are written to the same
+`anchor_bank.jsonl` file. The number of turns is controlled by `max_turns`
+in the config (or `--max-turns` on the CLI).
+
+### How do I resume an interrupted generation?
+
+ARD automatically resumes from the last committed anchor. Just re-run the
+same command — the pipeline detects existing anchors in `anchor_bank.jsonl`
+and only generates the remaining ones up to `target_count`.
 
 ## License
 

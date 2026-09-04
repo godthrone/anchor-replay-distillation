@@ -30,7 +30,7 @@
 ### 1. 构建 Docker 镜像
 
 ```bash
-git clone <repo>
+git clone https://github.com/your-org/anchor-replay-distillation.git
 cd anchor-replay-distillation
 bash docker/build.sh
 ```
@@ -40,6 +40,7 @@ bash docker/build.sh
 ```bash
 mkdir -p .local
 cp configs/config.override.sample.toml .local/config.override.toml
+# 编辑 .local/config.override.toml: 填入 api_base, model_name, api_key
 ```
 
 编辑 `.local/config.override.toml`，填入你的 API 凭证：
@@ -70,9 +71,10 @@ bash run.sh --config configs/config.toml --override .local/config.override.toml 
 ### 4. 查看输出
 
 ```bash
-ls outputs/<dataset_name>/
+ls outputs/
 ```
 
+找到 `ard_dataset_*` 目录（如 `ard_dataset_20240101_120000`）。
 参考 `examples/anchor_bank.sample.jsonl` 了解输出格式。
 
 ## 配置
@@ -100,21 +102,22 @@ ARD 采用**分层 TOML 配置**模型。有两个配置文件：
 |---------|------|
 | `[input_generator]` | 生成用户提问的 VLM/LLM |
 | `[target_model]` | 生成答案（含 log-prob）的教师模型 |
-| `[generation]` | 目标数量、随机种子、语言和任务类型过滤 |
+| `[generation]` | 目标数量、随机种子、并发数、最大轮数、系统角色、语言和任务类型过滤 |
 | `[ontology]` | 本体论路径 |
 | `[output]` | 输出目录设置 |
 
 ## CLI
 
 ```
-ard --config <路径> [--override <路径>] [--image-dir <路径>]
+ard --config <路径> [--override <路径>] [--image-dir <路径>] [--max-turns <n>]
 ```
 
 单一命令完成所有操作：
 
 - `--config` — 基础配置 TOML 文件路径（必填）
-- `--override` — 覆写配置 TOML 文件路径（可选）
+- `--override` — 覆写配置 TOML 文件路径（可选；未提供时自动检测 `--config` 同目录下的 `config.override.toml`）
 - `--image-dir` — 多模态锚点的图片目录（可选）
+- `--max-turns` — 最大对话轮数，覆盖配置中的值（可选；1 = 单轮, 2-10 = 多轮）
 
 ## 输出
 
@@ -133,11 +136,16 @@ outputs/<dataset_name>/
 {
   "id": "anchor_a1b2c3d4",
   "source": "ard",
-  "messages": [{"role": "user", "content": "解释熵的概念..."}],
+  "messages": [
+    {"role": "user", "content": "解释熵的概念..."},
+    {"role": "assistant", "content": "熵是衡量系统无序程度的物理量..."},
+    {"role": "user", "content": "能举个例子吗？"},
+    {"role": "assistant", "content": "当然！冰融化成水..."}
+  ],
   "targets": [{
     "id": "primary",
     "output": {
-      "content": "熵是衡量系统无序程度的物理量...",
+      "content": "当然！冰融化成水...",
       "logprobs": {
         "token_ids": [1, 2, 3],
         "log_probs": [-0.1, -0.2, -0.3]
@@ -259,9 +267,14 @@ bash run.sh --config configs/config.toml --override .local/config.override.toml 
 
 ### 文本锚点和多模态锚点有什么区别？
 
-文本锚点是从本体论生成的问答对，不含图片。多模态锚点在对话消息中包含图片，
+文本锚点是从本体论生成的对话（单轮或多轮），不含图片。多模态锚点在对话消息中包含图片，
 需要提供 `--image-dir` 参数才会生成。两种类型共享相同的输出格式，
-写入同一个 `anchor_bank.jsonl` 文件。
+写入同一个 `anchor_bank.jsonl` 文件。对话轮数由配置中的 `max_turns`（或 CLI 的 `--max_turns`）控制。
+
+### 如何断点续传？
+
+ARD 自动从上次已完成的锚点恢复。只需重新运行相同的命令——流水线会检测
+`anchor_bank.jsonl` 中已有的锚点，只生成剩余数量以达到 `target_count`。
 
 ## 许可证
 
