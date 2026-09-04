@@ -128,7 +128,7 @@ def _replace_empty_str_with_none(d: dict) -> dict:
     """Recursively replace all empty string ``""`` values with ``None``.
 
     TOML files often use ``api_key = ""`` as a placeholder for secret fields.
-    Pydantic models with ``Optional[str] = None`` will not trigger their
+    Pydantic models with ``str | None = None`` will not trigger their
     ``None`` default when ``""`` is loaded — downstream ``is None`` checks
     miss the empty string. This normalizer ensures that ``""`` is treated
     as "not provided" throughout the config.
