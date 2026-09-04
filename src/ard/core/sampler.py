@@ -106,6 +106,13 @@ def _sample_balanced(
         n = min(per_domain, len(pool))
         result.extend(rng.sample(pool, n))
 
+    if len(result) < config.target_count:
+        # Integer division may leave a shortfall (e.g. 100 // 18 = 5, 18 × 5 = 90).
+        remaining = [c for c in combos if c not in result]
+        n_missing = config.target_count - len(result)
+        if remaining:
+            result.extend(rng.sample(remaining, min(n_missing, len(remaining))))
+
     if len(result) > config.target_count:
         result = rng.sample(result, config.target_count)
     return result

@@ -299,7 +299,7 @@ class TestAllocateImages:
                 assert s.anchor_meta["image_count"] >= 1
 
     def test_degradation_small_pool(self) -> None:
-        """``allocate_images`` degrades gracefully when the image pool is too small."""
+        """``allocate_images`` cycles through a small pool — all specs get images."""
         specs = [_make_spec_with_n_turns(f"spec_{i}", 1) for i in range(5)]
         image_pool = ["/img/only.png"]  # only 1 image
         rng = random.Random(42)
@@ -309,9 +309,9 @@ class TestAllocateImages:
         assert result is specs
         images_assigned = sum(1 for s in specs if s.anchor_meta.get("has_image"))
         no_images = sum(1 for s in specs if not s.anchor_meta.get("has_image"))
-        # Some specs get images, some don't — degradation without exception
-        assert images_assigned >= 1, "At least some specs should get images"
-        assert no_images >= 1, "At least some specs should be text-only"
+        # All specs get images via cycle — the single image is reused
+        assert images_assigned == len(specs), "All specs should get images via cycle"
+        assert no_images == 0, "No specs should be text-only when image pool is non-empty"
         # All specs that got images should have image_path set
         for s in specs:
             if s.anchor_meta.get("has_image"):

@@ -77,13 +77,8 @@ def allocate_images(
 
     image_iter = itertools.cycle(image_pool)
     specs_with_images = 0
-    max_multimodal = min(len(anchor_specs), len(image_pool) * 2)  # generous
 
     for spec in single_turn + multi_turn:
-        if specs_with_images >= max_multimodal:
-            spec.anchor_meta["has_image"] = False
-            spec.anchor_meta["image_count"] = 0
-            continue
         images_this_spec = 0
         for turn in spec.turns:
             if turn.role == "user" and turn.image_path is None:

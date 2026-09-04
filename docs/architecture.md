@@ -97,7 +97,7 @@ flowchart LR
 
 1. **Three-layer separation**: Core (pure computation) → Backends (I/O) → Domain (business logic). Core modules can be tested without network, GPU, or file system access.
 
-2. **Single CLI command**: `ard --config <path> [--image-dir <path>]` handles everything. All anchors are generated through a unified pipeline; multimodal data is handled by attaching image paths to anchor specs before generation.
+2. **Single CLI command**: `ard --config <path> [--override <path>] [--image-dir <path>] [--max-turns <n>]` handles everything. All anchors are generated through a unified pipeline; multimodal data is handled by attaching image paths to anchor specs before generation. The `--override` flag auto-detects `config.override.toml` alongside the config if not explicitly provided; `--max-turns` overrides the config value for ad-hoc experiments.
 
 3. **Dual-model architecture**: Two separate API backends are used — the **Input Generator** (simulates user questions) and the **Target Model** (provides assistant answers). Each has its own endpoint, model name, and temperature configuration. Token-level log-probabilities are obtained from the Target Model API on the final turn of each conversation. See `api_client.py` for implementation details.
 
@@ -122,7 +122,7 @@ sequenceDiagram
     participant InputGen as "Input Generator API"
     participant Target as "Target Model API"
 
-    User->>CLI: ard --config config.toml [--image-dir /path]
+    User->>CLI: ard --config config.toml [--override override.toml] [--image-dir /path] [--max-turns 3]
     CLI->>CLI: Parse CLI args
     CLI->>Pipeline: load_config() → ARDConfig
     Pipeline->>Pipeline: Validate output directory
