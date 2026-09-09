@@ -46,8 +46,8 @@ def run(
         Path to the output directory.
 
     Raises:
-        FileExistsError: If the output directory exists and ``overwrite`` is
-            ``False`` in the config.
+        RuntimeError: If multimodal mode is requested but LLM API
+            configuration is incomplete.
     """
     # ── Output directory ──────────────────────────────────────────────────
     timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -58,20 +58,19 @@ def run(
         else Path("outputs") / dataset_name
     )
 
-    if output_dir.exists():
-        if not config.output.overwrite:
-            raise FileExistsError(
-                f"Output directory already exists: {output_dir}. "
-                f"Set output.overwrite=true in config to overwrite."
-            )
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    output_path = output_dir / "anchor_bank.jsonl"
+
+    # ── Overwrite / checkpoint-resume ──────────────────────────────────────
+    if output_path.exists() and config.output.overwrite:
+        output_path.unlink()
+        logger.info("Overwrite mode: cleared existing anchor bank at %s", output_path)
 
     # Backup config to output directory for reproducibility
     base_config = Path("configs/config.toml")
     if base_config.exists():
         shutil.copy2(base_config, output_dir / "config.toml")
-
-    output_path = output_dir / "anchor_bank.jsonl"
 
     # ── Checkpoint / resume ───────────────────────────────────────────────
     existing_count = count_existing_anchors(output_path)

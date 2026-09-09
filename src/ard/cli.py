@@ -75,9 +75,6 @@ def main() -> None:
     try:
         output_dir = run_pipeline(config, image_dir=args.image_dir)
         logger.info("Done! Output: %s", output_dir)
-    except FileExistsError as exc:
-        logger.error("%s", exc)
-        sys.exit(1)
     except FileNotFoundError as exc:
         logger.error("%s", exc)
         sys.exit(1)

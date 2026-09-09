@@ -46,5 +46,10 @@ embeddings_path = "data/anchor_ontology_embeddings.json"
 path = "data/anchor_ontology.json"
 
 [output]
+# Output directory path. Leave empty to auto-generate: outputs/ard_dataset_<timestamp>
 directory = ""
+# When true: clear any existing anchor bank and start fresh.
+# When false: resume from existing anchors (checkpoint/resume) if anchor_bank.jsonl
+# already exists in the output directory. If the directory is empty or has no
+# anchor data, generation proceeds normally.
 overwrite = false
