@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from ard.core.types import GeneratedAnchor, AnchorGenerationConfig
+from ard.core.types import AnchorSpec, GeneratedAnchor, AnchorGenerationConfig
 from ard.core.ontology import load_ontology
 from ard.core.sampler import sample_anchors, generate_anchor_id
 from ard.core.embeddings import load_embeddings, farthest_point_sampling
@@ -125,24 +125,27 @@ def test_ontology_file_not_found():
 # ── Sampler ─────────────────────────────────────────────────────────────────
 
 
-def test_sample_anchors_returns_list(tmp_path):
-    """sample_anchors returns a list of meta dicts."""
-    path = tmp_path / "ontology.json"
-    path.write_text(json.dumps(_minimal_ontology_payload()), encoding="utf-8")
-    ontology = load_ontology(path)
+def test_sample_anchors_returns_list():
+    """sample_anchors returns a list of AnchorSpec objects."""
+    import random
+    ontology = load_ontology(Path("data/anchor_ontology.json"))
     config = AnchorGenerationConfig(target_count=4, seed=1, languages=["English"], task_types=["qa"])
-    result = sample_anchors(ontology, config)
+    rng = random.Random(config.seed)
+    result = sample_anchors(ontology, config, rng)
     assert isinstance(result, list)
     assert len(result) <= 4
-    assert all(isinstance(item, dict) for item in result)
+    assert all(isinstance(item, AnchorSpec) for item in result)
 
 
 def test_sample_anchors_deterministic():
     """Same seed+config produces same output."""
-    ontology = _minimal_ontology_payload()
+    import random
+    ontology = load_ontology(Path("data/anchor_ontology.json"))
     config = AnchorGenerationConfig(target_count=4, seed=42, languages=["English"], task_types=["qa"])
-    r1 = sample_anchors(ontology, config)
-    r2 = sample_anchors(ontology, config)
+    rng1 = random.Random(config.seed)
+    rng2 = random.Random(config.seed)
+    r1 = sample_anchors(ontology, config, rng1)
+    r2 = sample_anchors(ontology, config, rng2)
     assert r1 == r2
 
 

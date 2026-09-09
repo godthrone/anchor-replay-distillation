@@ -17,7 +17,7 @@ temperature = 0.8
 # Maximum tokens per response
 max_tokens = 4096
 # Request timeout in seconds
-timeout = 120.0
+timeout = 180.0
 # Number of retries on failure
 max_retries = 3
 
@@ -33,21 +33,33 @@ temperature = 0.0
 # Maximum tokens per response
 max_tokens = 4096
 # Request timeout in seconds
-timeout = 120.0
+timeout = 180.0
 # Number of retries on failure
 max_retries = 3
+# Enable thinking/reasoning mode (Qwen3, DeepSeek-R1, etc.)
+# When True, the model outputs reasoning before the final answer.
+# Only enable when distilling to a reasoning-capable student model.
+enable_thinking = false
 
 [generation]
 # Number of anchors to generate
 target_count = 100
 # Random seed for reproducibility
 seed = 42
-# Language filter (empty = all available)
-languages = []
-# Task type filter (empty = all available)
-task_types = []
-# Number of concurrent API requests
+# Number of concurrent API requests (higher = faster, but may hit rate limits)
 concurrency = 4
+# Language filter (empty = use all available from ontology)
+languages = []
+# Task type filter (empty = use all available from ontology)
+task_types = []
+# Maximum conversation turns (1 = single-turn, 2-10 = multi-turn)
+max_turns = 1
+# System persona mode: "none" | "one_sentence" | "appropriate" | "detailed"
+system_persona = "none"
+# Maximum turns with image per anchor (must be <= max_turns)
+max_turns_with_image = 1
+# Path to pre-computed ontology embeddings for farthest-point sampling
+embeddings_path = "data/anchor_ontology_embeddings.json"
 
 [ontology]
 # Path to the ontology JSON file

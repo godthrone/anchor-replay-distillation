@@ -9,10 +9,12 @@ __pycache__/
 .uv-verify/
 .uv-cache/
 venv/
+venvs/
 
 # Local secrets and env files
 config.override.toml
 my_config*.toml
+*.local.toml
 .env
 !.env-example
 *.env

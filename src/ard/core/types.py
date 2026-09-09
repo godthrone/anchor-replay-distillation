@@ -20,7 +20,7 @@ class TurnSpec:
 
     turn_index: int
     role: str  # "user" | "assistant"
-    generation_instruction: str
+    generation_instruction: str | None = None
     image_path: str | None = None
     is_final: bool = False
 
@@ -43,7 +43,7 @@ class AnchorSpec:
     id: str
     anchor_meta: dict[str, Any]
     turns: list[TurnSpec]
-    input_generator_id: str
+    input_generator_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.turns:
@@ -88,3 +88,6 @@ class AnchorGenerationConfig:
     languages: list[str] = field(default_factory=list)
     task_types: list[str] = field(default_factory=list)
     max_turns: int = 1
+    max_turns_with_image: int = 1
+    system_persona: str = "none"
+    embeddings_path: str = "data/anchor_ontology_embeddings.json"

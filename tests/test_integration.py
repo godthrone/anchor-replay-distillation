@@ -119,7 +119,7 @@ def _make_spec_with_n_turns(spec_id: str, num_turns: int) -> AnchorSpec:
         id=spec_id,
         anchor_meta={},
         turns=turns,
-        input_generator_id="",
+        input_generator_id=None,
     )
 
 
@@ -331,7 +331,7 @@ class TestAnchorSpecValidation:
                 id="bad",
                 anchor_meta={},
                 turns=[],
-                input_generator_id="",
+                input_generator_id=None,
             )
 
     def test_first_not_user_raises(self) -> None:
@@ -350,7 +350,7 @@ class TestAnchorSpecValidation:
                 id="bad",
                 anchor_meta={},
                 turns=turns,
-                input_generator_id="",
+                input_generator_id=None,
             )
 
     def test_last_not_user_raises(self) -> None:
@@ -369,7 +369,7 @@ class TestAnchorSpecValidation:
                 id="bad",
                 anchor_meta={},
                 turns=turns,
-                input_generator_id="",
+                input_generator_id=None,
             )
 
     def test_consecutive_same_role_raises(self) -> None:
@@ -388,5 +388,5 @@ class TestAnchorSpecValidation:
                 id="bad",
                 anchor_meta={},
                 turns=turns,
-                input_generator_id="",
+                input_generator_id=None,
             )

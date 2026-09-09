@@ -13,7 +13,7 @@
 
 **核心能力：**
 - 🧠 **本体驱动采样** — 基于知识领域、语言、能力、任务类型四维本体，
-  结合 embedding 最远点采样，确保锚点覆盖全面且分布均匀。
+  结合 embedding 分层最远点采样，确保锚点覆盖全面且分布多样。
 - 🎯 **教师模型蒸馏** — 强模型生成答案并导出完整 token 级 logprobs，
   为 OPD 训练提供高质量 replay 信号。
 - 🖼️ **多模态支持** — 文本锚点和图文锚点统一流程、统一输出，一条命令
@@ -26,6 +26,7 @@
 ### 环境要求
 
 - Docker
+- 嵌入数据：`data/anchor_ontology_embeddings.json`（49 个预计算嵌入向量，1024 维，供分层 FPS 采样器使用）
 
 ### 1. 构建 Docker 镜像
 
@@ -103,13 +104,70 @@ ARD 采用**分层 TOML 配置**模型。有两个配置文件：
 | `[input_generator]` | 生成用户提问的 VLM/LLM |
 | `[target_model]` | 生成答案（含 log-prob）的教师模型 |
 | `[generation]` | 目标数量、随机种子、并发数、最大轮数、系统角色、语言和任务类型过滤 |
-| `[ontology]` | 本体论路径 |
+| `[ontology]` | 本体论文件路径 |
 | `[output]` | 输出目录设置 |
+
+## 配置参考
+
+所有参数定义在 `configs/config.toml` 中。机密字段（`api_base`、`model_name`、`api_key`）
+留空，在 `.local/config.override.toml` 中填写。
+
+### `[input_generator]` — 输入生成器（出题模型）
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `api_base` | string | `""` | API 端点 URL（OpenAI 兼容） |
+| `model_name` | string | `""` | 模型名称 |
+| `api_key` | string | `""` | API 密钥（机密，在 override 中填写） |
+| `temperature` | float | `0.8` | 采样温度，越高越随机 |
+| `max_tokens` | int | `4096` | 最大生成 token 数 |
+| `timeout` | float | `180.0` | 单次请求超时秒数 |
+| `max_retries` | int | `3` | 请求失败重试次数 |
+
+### `[target_model]` — 目标模型（教师模型）
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `api_base` | string | `""` | API 端点 URL |
+| `model_name` | string | `""` | 教师模型名称 |
+| `api_key` | string | `""` | API 密钥（机密） |
+| `temperature` | float | `0.0` | 采样温度，0.0 = 确定性输出 |
+| `max_tokens` | int | `4096` | 最大生成 token 数 |
+| `timeout` | float | `180.0` | 单次请求超时秒数 |
+| `max_retries` | int | `3` | 请求失败重试次数 |
+| `enable_thinking` | bool | `false` | 启用推理模式（Qwen3/DeepSeek-R1 等）。开启后模型先输出 `...` 推理过程再输出答案，`content` 和 `logprobs` 均包含推理 token。**仅当蒸馏目标为推理模型时开启** |
+
+### `[generation]` — 生成控制
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `target_count` | int | `100` | 目标锚点数量。建议 ≥200 以保证能力维度全覆盖 |
+| `seed` | int | `42` | 随机种子 |
+| `concurrency` | int | `4` | 并发请求数，过高可能触发限流 |
+| `languages` | list | `[]` | 语言过滤（空=全部）。可选：`zh-CN`, `en`, `ja`, `ko` |
+| `task_types` | list | `[]` | 任务类型过滤（空=全部） |
+| `max_turns` | int | `1` | 最大对话轮数（1=单轮，2-10=多轮） |
+| `system_persona` | string | `"none"` | 系统角色模式：`none` / `one_sentence` / `appropriate` / `detailed` |
+| `max_turns_with_image` | int | `1` | 含图片的最大轮数（≤ `max_turns`） |
+| `embeddings_path` | string | `"data/anchor_ontology_embeddings.json"` | 预计算本体论 embedding 文件路径 |
+
+### `[ontology]` — 本体论
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `path` | string | `"data/anchor_ontology.json"` | 本体论 JSON 文件路径 |
+
+### `[output]` — 输出
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `directory` | string | `""` | 输出目录（空=自动生成时间戳目录） |
+| `overwrite` | bool | `false` | 是否覆盖已有输出目录 |
 
 ## CLI
 
 ```
-ard --config <路径> [--override <路径>] [--image-dir <路径>] [--max-turns <n>]
+ard --config <路径> [--override <路径>] [--image-dir <路径>]
 ```
 
 单一命令完成所有操作：
@@ -117,7 +175,7 @@ ard --config <路径> [--override <路径>] [--image-dir <路径>] [--max-turns 
 - `--config` — 基础配置 TOML 文件路径（必填）
 - `--override` — 覆写配置 TOML 文件路径（可选；未提供时自动检测 `--config` 同目录下的 `config.override.toml`）
 - `--image-dir` — 多模态锚点的图片目录（可选）
-- `--max-turns` — 最大对话轮数，覆盖配置中的值（可选；1 = 单轮, 2-10 = 多轮）
+  - ⚠️ `input_generator` 和 `target_model` 均需支持多模态输入。如果模型不支持多模态，API 会直接报错。
 
 ## 输出
 
@@ -265,16 +323,58 @@ bash run.sh --config configs/config.toml --override .local/config.override.toml 
 流水线会从目录中采样图片，生成基于 VLM 的提问，
 并在文本锚点之外产出多模态锚点。
 
+### 多模态锚点生成需要什么模型？
+
+`input_generator` 和 `target_model` 均需支持多模态（视觉-语言）输入。
+如果模型不支持多模态，API 会直接返回错误——无需手动维护配置开关。
+
 ### 文本锚点和多模态锚点有什么区别？
 
 文本锚点是从本体论生成的对话（单轮或多轮），不含图片。多模态锚点在对话消息中包含图片，
 需要提供 `--image-dir` 参数才会生成。两种类型共享相同的输出格式，
-写入同一个 `anchor_bank.jsonl` 文件。对话轮数由配置中的 `max_turns`（或 CLI 的 `--max_turns`）控制。
+写入同一个 `anchor_bank.jsonl` 文件。对话轮数由配置中的 `max_turns` 控制。
 
 ### 如何断点续传？
 
 ARD 自动从上次已完成的锚点恢复。只需重新运行相同的命令——流水线会检测
 `anchor_bank.jsonl` 中已有的锚点，只生成剩余数量以达到 `target_count`。
+
+### 多模态锚点的多样性从哪里来？
+
+多模态锚点的多样性来自三个独立来源：
+
+1. **Ontology 多样性**（FPS 保证）：FPS 采样器从 10,080 个本体组合中选出
+   最优锚点规格，语言/知识域/能力/会话类型等元数据通过 VLM prompt 传递，
+   确保 prompt 多样性。即使图片池单一，Ontology 元数据仍然保证 prompt 不重复。
+
+2. **图片池多样性**：从用户指定的图片目录中随机采样图片，
+   图片内容本身构成视觉输入的多样性。
+
+3. **VLM 随机性**（temperature=0.8）：Input Generator 的采样温度默认 0.8，
+   即使相同的元数据和图片，VLM 也会生成不同措辞的问题。
+
+### 生成的 token_ids 是什么格式？
+
+vLLM API 返回的 `token_ids` 优先使用整数 token ID
+（`logprobs.content[].token_id`），fallback 为字符串 token
+（`logprobs.content[].token`）。当 teacher 和 student 使用相同 tokenizer 时，
+整数 ID 可直接用于 OPD 训练；不同 tokenizer 则字符串形式更通用，
+下游可按自己的 tokenizer 重新编码。
+
+### 多模态锚点和文本锚点的比例怎么控制？
+
+当前是**二选一开关**：提供 `--image-dir` 则生成多模态锚点，不提供则生成纯文本锚点。
+如需混合比例（如 30% 图片 + 70% 纯文本），需要运行两次并手动合并输出：
+一次不带 `--image-dir` 生成纯文本锚点，一次带 `--image-dir` 生成多模态锚点，
+然后合并两个 `anchor_bank.jsonl` 文件。
+
+### 推荐的目标数量是多少？
+
+`target_count = 100` 时，知识域和语言的覆盖率可达 100%，
+但**能力（capability）的覆盖率约 75-90%**，是覆盖的短板
+（20 种能力在 100 个样本中难以全部覆盖）。
+建议 `target_count ≥ 200` 以保证能力维度的全覆盖。
+各维度实际总数：18 知识域 × 20 能力 × 4 语言 × 7 会话类型 = 10,080 个组合。
 
 ## 许可证
 

@@ -13,7 +13,7 @@ from ard.core.types import (
     TurnSpec,
 )
 from ard.core.quota import compute_turn_distribution
-from ard.core.sampler import sample_anchor_specs, _get_leaf_conversation_types
+from ard.core.sampler import sample_anchors, _get_leaf_conversation_types
 from ard.core.ontology import load_ontology
 
 
@@ -134,7 +134,7 @@ def test_anchor_spec_multi_turn():
         id="multi_001",
         anchor_meta={},
         turns=turns,
-        input_generator_id="",
+        input_generator_id=None,
     )
     assert len(spec.turns) == 3
 
@@ -146,7 +146,7 @@ def test_anchor_spec_empty_turns_raises():
             id="bad",
             anchor_meta={},
             turns=[],
-            input_generator_id="",
+            input_generator_id=None,
         )
 
 
@@ -161,7 +161,7 @@ def test_anchor_spec_first_not_user_raises():
             id="bad",
             anchor_meta={},
             turns=turns,
-            input_generator_id="",
+            input_generator_id=None,
         )
 
 
@@ -176,7 +176,7 @@ def test_anchor_spec_last_not_user_raises():
             id="bad",
             anchor_meta={},
             turns=turns,
-            input_generator_id="",
+            input_generator_id=None,
         )
 
 
@@ -191,7 +191,7 @@ def test_anchor_spec_role_alternation():
             id="bad",
             anchor_meta={},
             turns=turns,
-            input_generator_id="",
+            input_generator_id=None,
         )
 
 
@@ -258,29 +258,29 @@ def test_compute_turn_distribution_deterministic():
     assert r1 == r2
 
 
-# ── sample_anchor_specs ─────────────────────────────────────────────────────
+# ── sample_anchors ───────────────────────────────────────────────────────────
 
 
-def test_sample_anchor_specs_count():
-    """sample_anchor_specs returns correct count."""
-    ontology = _large_ontology_payload()
+def test_sample_anchors_count():
+    """sample_anchors returns correct count."""
+    ontology = load_ontology(Path("data/anchor_ontology.json"))
     config = AnchorGenerationConfig(
         target_count=100, seed=42, max_turns=3,
     )
     rng = random.Random(config.seed)
-    specs = sample_anchor_specs(ontology, config, rng)
+    specs = sample_anchors(ontology, config, rng)
     assert len(specs) == 100
     assert all(isinstance(s, AnchorSpec) for s in specs)
 
 
-def test_sample_anchor_specs_turn_distribution():
+def test_sample_anchors_turn_distribution():
     """Turn counts are distributed across 1..max_turns."""
-    ontology = _large_ontology_payload()
+    ontology = load_ontology(Path("data/anchor_ontology.json"))
     config = AnchorGenerationConfig(
         target_count=100, seed=42, max_turns=3,
     )
     rng = random.Random(config.seed)
-    specs = sample_anchor_specs(ontology, config, rng)
+    specs = sample_anchors(ontology, config, rng)
 
     # Count anchors by number of turns
     turn_counts: dict[int, int] = {}
@@ -295,27 +295,27 @@ def test_sample_anchor_specs_turn_distribution():
         assert 40 <= count <= 60  # roughly 50/50
 
 
-def test_sample_anchor_specs_single_turn():
+def test_sample_anchors_single_turn():
     """max_turns=1 produces all single-turn specs."""
-    ontology = _large_ontology_payload()
+    ontology = load_ontology(Path("data/anchor_ontology.json"))
     config = AnchorGenerationConfig(
         target_count=50, seed=42, max_turns=1,
     )
     rng = random.Random(config.seed)
-    specs = sample_anchor_specs(ontology, config, rng)
+    specs = sample_anchors(ontology, config, rng)
     assert len(specs) == 50
     assert all(len(s.turns) == 1 for s in specs)
     assert all(s.turns[0].role == "user" for s in specs)
 
 
-def test_sample_anchor_specs_turns_alternate():
+def test_sample_anchors_turns_alternate():
     """All generated specs have valid role alternation."""
-    ontology = _large_ontology_payload()
+    ontology = load_ontology(Path("data/anchor_ontology.json"))
     config = AnchorGenerationConfig(
         target_count=30, seed=7, max_turns=4,
     )
     rng = random.Random(config.seed)
-    specs = sample_anchor_specs(ontology, config, rng)
+    specs = sample_anchors(ontology, config, rng)
 
     for s in specs:
         # Verify __post_init__ passes (no exception)
@@ -325,14 +325,14 @@ def test_sample_anchor_specs_turns_alternate():
         assert s.turns[-1].role == "user"
 
 
-def test_sample_anchor_specs_ids_unique():
+def test_sample_anchors_ids_unique():
     """Each AnchorSpec has a unique id."""
-    ontology = _large_ontology_payload()
+    ontology = load_ontology(Path("data/anchor_ontology.json"))
     config = AnchorGenerationConfig(
         target_count=50, seed=42, max_turns=2,
     )
     rng = random.Random(config.seed)
-    specs = sample_anchor_specs(ontology, config, rng)
+    specs = sample_anchors(ontology, config, rng)
     ids = {s.id for s in specs}
     assert len(ids) == len(specs)
 

@@ -6,11 +6,13 @@ Core layer — pure computation, no network or API dependencies.
 from __future__ import annotations
 
 import itertools
+import logging
 import random
-import sys
 from typing import Any
 
 from ard.core.types import AnchorSpec
+
+logger = logging.getLogger(__name__)
 
 
 def compute_turn_distribution(
@@ -92,11 +94,11 @@ def allocate_images(
             specs_with_images += 1
 
     if specs_with_images < len(anchor_specs):
-        print(
-            f"Warning: only {specs_with_images} image-allocated specs "
-            f"for {len(anchor_specs)} total specs "
-            f"(image pool: {len(image_pool)})",
-            file=sys.stderr,
+        logger.warning(
+            "only %d image-allocated specs for %d total specs (image pool: %d)",
+            specs_with_images,
+            len(anchor_specs),
+            len(image_pool),
         )
 
     return anchor_specs

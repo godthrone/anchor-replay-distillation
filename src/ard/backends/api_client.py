@@ -30,6 +30,13 @@ class ChatAPIConfig:
     max_tokens: int | None = None  # None means omit from request (use provider default)
     timeout: float = 60.0
     max_retries: int = 2
+    enable_thinking: bool = False
+
+    def __post_init__(self) -> None:
+        if self.api_base is None:
+            raise ValueError("api_base must not be None")
+        if self.model_name is None:
+            raise ValueError("model_name must not be None")
 
     @property
     def chat_completions_url(self) -> str:
@@ -127,8 +134,8 @@ def _build_payload(
     if logprobs:
         payload["logprobs"] = True
         payload["top_logprobs"] = top_logprobs
-    # Disable thinking mode for deterministic output (required by Qwen3.8-27B)
-    payload["chat_template_kwargs"] = {"enable_thinking": False}
+    if config.enable_thinking:
+        payload["chat_template_kwargs"] = {"enable_thinking": True}
     return payload
 
 

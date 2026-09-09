@@ -9,7 +9,7 @@ model_name = ""
 api_key = ""
 temperature = 0.8
 max_tokens = 4096
-timeout = 120.0
+timeout = 180.0
 max_retries = 3
 
 [target_model]
@@ -18,8 +18,12 @@ model_name = ""
 api_key = ""
 temperature = 0.0
 max_tokens = 4096
-timeout = 120.0
+timeout = 180.0
 max_retries = 3
+# Enable thinking/reasoning mode (Qwen3, DeepSeek-R1, etc.)
+# When True, the model outputs reasoning before the final answer.
+# Only enable when distilling to a reasoning-capable student model.
+enable_thinking = false
 
 [generation]
 target_count = 100
@@ -35,6 +39,8 @@ max_turns = 1
 system_persona = "none"
 # Maximum turns with image per anchor (must be <= max_turns)
 max_turns_with_image = 1
+# Path to pre-computed ontology embeddings for farthest-point sampling
+embeddings_path = "data/anchor_ontology_embeddings.json"
 
 [ontology]
 path = "data/anchor_ontology.json"

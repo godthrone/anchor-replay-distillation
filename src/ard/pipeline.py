@@ -6,7 +6,9 @@ Phase 3 unified flow: all anchors (text + multimodal) are generated from
 
 from __future__ import annotations
 
+import logging
 import random
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -15,7 +17,7 @@ from ard.backends.api_client import ChatAPIClient, ChatAPIConfig
 from ard.config import ARDConfig
 from ard.core.ontology import load_ontology
 from ard.core.quota import allocate_images
-from ard.core.sampler import sample_anchor_specs
+from ard.core.sampler import sample_anchors
 from ard.core.types import AnchorGenerationConfig
 from ard.domain.bank import (
     build_manifest_from_records,
@@ -26,6 +28,7 @@ from ard.domain.bank import (
 from ard.domain.image_store import copy_images_to_output, sample_images, scan_images
 from ard.domain.text_anchor import generate_text_anchors
 
+logger = logging.getLogger(__name__)
 
 def run(
     config: ARDConfig,
@@ -63,6 +66,11 @@ def run(
             )
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Backup config to output directory for reproducibility
+    base_config = Path("configs/config.toml")
+    if base_config.exists():
+        shutil.copy2(base_config, output_dir / "config.toml")
+
     output_path = output_dir / "anchor_bank.jsonl"
 
     # ── Checkpoint / resume ───────────────────────────────────────────────
@@ -71,15 +79,15 @@ def run(
     remaining = target_count - existing_count
 
     if remaining <= 0:
-        print(f"Already have {existing_count} anchors, skipping generation.")
+        logger.info("Already have %d anchors, skipping generation.", existing_count)
         all_records = read_anchor_bank(output_path)
         manifest = build_manifest_from_records(all_records, output_dir)
         write_manifest(manifest, output_dir / "manifest.json")
-        print(f"\nDone! Output: {output_dir}")
-        print(f"  Total anchors: {len(all_records)}")
+        logger.info("Done! Output: %s", output_dir)
+        logger.info("  Total anchors: %d", len(all_records))
         return output_dir
 
-    print(f"Found {existing_count} existing anchors, generating {remaining} more...")
+    logger.info("Found %d existing anchors, generating %d more...", existing_count, remaining)
 
     # ── Ontology ──────────────────────────────────────────────────────────
     ontology = load_ontology(config.ontology.path)
@@ -92,6 +100,9 @@ def run(
         languages=config.generation.languages,
         task_types=config.generation.task_types,
         max_turns=config.generation.max_turns,
+        max_turns_with_image=config.generation.max_turns_with_image,
+        system_persona=config.generation.system_persona,
+        embeddings_path=config.generation.embeddings_path,
     )
 
     # ── API clients ───────────────────────────────────────────────────────
@@ -115,14 +126,38 @@ def run(
             max_tokens=config.target_model.max_tokens,
             timeout=config.target_model.timeout,
             max_retries=config.target_model.max_retries,
+            enable_thinking=config.target_model.enable_thinking,
         )
     )
+
+    # ── Multimodal validation ───────────────────────────────────────────
+    if image_dir:
+        if config.input_generator.api_base is None:
+            raise RuntimeError(
+                "Multimodal mode (--image-dir) requires input_generator.api_base "
+                "to be set in config."
+            )
+        if config.target_model.api_base is None:
+            raise RuntimeError(
+                "Multimodal mode (--image-dir) requires target_model.api_base "
+                "to be set in config."
+            )
+        if config.input_generator.model_name is None:
+            raise RuntimeError(
+                "Multimodal mode (--image-dir) requires input_generator.model_name "
+                "to be set in config."
+            )
+        if config.target_model.model_name is None:
+            raise RuntimeError(
+                "Multimodal mode (--image-dir) requires target_model.model_name "
+                "to be set in config."
+            )
 
     # ── Generate anchors (unified flow) ───────────────────────────────────
     rng = random.Random(gen_config.seed)
 
     # Step 1: Sample AnchorSpec objects from the ontology
-    specs = sample_anchor_specs(ontology, gen_config, rng)
+    specs = sample_anchors(ontology, gen_config, rng)
 
     # Step 2: If image_dir is provided, scan, sample, copy, and allocate images
     if image_dir:
@@ -133,11 +168,15 @@ def run(
             specs = allocate_images(
                 specs, rel_paths, config.generation.max_turns_with_image, rng
             )
+            # Resolve image paths relative to output_dir for base64 encoding
+            for spec in specs:
+                for turn in spec.turns:
+                    if turn.image_path:
+                        turn.image_path = str(output_dir / turn.image_path)
         else:
-            print(
-                f"Warning: No images found in {image_dir}. "
-                f"All anchors will be pure text.",
-                file=sys.stderr,
+            logger.warning(
+                "No images found in %s. All anchors will be pure text.",
+                image_dir,
             )
 
     # Step 3: Generate all anchors via the unified generator
@@ -157,6 +196,6 @@ def run(
     write_manifest(manifest, output_dir / "manifest.json")
 
     total = len(all_records)
-    print(f"\nDone! Output: {output_dir}")
-    print(f"  Total anchors: {total} ({existing_count} existing + {total - existing_count} new)")
+    logger.info("Done! Output: %s", output_dir)
+    logger.info("  Total anchors: %d (%d existing + %d new)", total, existing_count, total - existing_count)
     return output_dir

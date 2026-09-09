@@ -37,7 +37,7 @@ class _LLMConfig(BaseModel):
     model_name: str | None = None
     api_key: str | None = None  # secret — override in config.override.toml
     max_tokens: int = 4096
-    timeout: float = 120.0
+    timeout: float = 180.0
     max_retries: int = 3
     temperature: float
     """Sampling temperature — different defaults for input vs target."""
@@ -56,6 +56,13 @@ class TargetModelConfig(_LLMConfig):
     """
 
     temperature: float = 0.0
+    enable_thinking: bool = False
+    """Enable thinking/reasoning mode (Qwen3, DeepSeek-R1, etc.).
+
+    When True, the model outputs reasoning before the final answer.
+    Set to True only when distilling to a reasoning-capable student model.
+    Default False for deterministic output.
+    """
 
 
 class OntologyConfig(BaseModel):
@@ -79,6 +86,7 @@ class GenerationConfig(BaseModel):
     max_turns: int = Field(default=1, ge=1, le=10)
     system_persona: Literal["none", "one_sentence", "appropriate", "detailed"] = "none"
     max_turns_with_image: int = Field(default=1, ge=0, le=5)
+    embeddings_path: str = "data/anchor_ontology_embeddings.json"
 
     @model_validator(mode="after")
     def _validate_image_turns(self) -> "GenerationConfig":

@@ -6,11 +6,15 @@ Provides a single ``ard generate`` command.
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
 from ard.config import load_config
+from ard.logging import get_logger
 from ard.pipeline import run as run_pipeline
+
+logger = get_logger(__name__)
 
 
 def main() -> None:
@@ -34,12 +38,7 @@ def main() -> None:
         default=None,
         help="Path to config.override.toml (optional, default: auto-detect alongside --config)",
     )
-    parser.add_argument(
-        "--max-turns",
-        type=int,
-        default=None,
-        help="Maximum conversation turns (default: from config)",
-    )
+    
 
     args = parser.parse_args()
 
@@ -52,7 +51,7 @@ def main() -> None:
     if args.override:
         override_path: Path | None = Path(args.override)
         if not override_path.exists():
-            print(f"Error: override config not found: {args.override}", file=sys.stderr)
+            logger.error("override config not found: %s", args.override)
             sys.exit(1)
     else:
         override_path = config_path.parent / "config.override.toml"
@@ -66,28 +65,24 @@ def main() -> None:
             str(override_path) if override_path is not None else None,
         )
     except FileNotFoundError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        logger.error("%s", exc)
         sys.exit(1)
     except ValueError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        logger.error("%s", exc)
         sys.exit(1)
-
-    # CLI overrides
-    if args.max_turns is not None:
-        config.generation.max_turns = args.max_turns
 
     # Run pipeline
     try:
         output_dir = run_pipeline(config, image_dir=args.image_dir)
-        print(f"\nDone! Output: {output_dir}")
+        logger.info("Done! Output: %s", output_dir)
     except FileExistsError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        logger.error("%s", exc)
         sys.exit(1)
     except FileNotFoundError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        logger.error("%s", exc)
         sys.exit(1)
     except RuntimeError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        logger.error("%s", exc)
         sys.exit(1)
 
 

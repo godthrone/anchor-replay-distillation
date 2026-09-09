@@ -95,8 +95,9 @@ def farthest_point_sampling(
         rng = np.random.default_rng(seed if seed is not None else 42)
         return [int(rng.integers(0, N))]
 
-    if n == N:
-        return list(range(N))
+    # When n == N, we fall through to the normal FPS loop below.
+    # The loop ``range(1, N)`` plus the initial random point produces
+    # a true diversity ordering of all N points (not just range(N)).
 
     # -- normalize for cosine-distance computation --------------------------
     norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
