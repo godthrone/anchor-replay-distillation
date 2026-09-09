@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import time
 import urllib.error
 import urllib.request
@@ -15,6 +16,8 @@ from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # ── Dataclasses ────────────────────────────────────────────────────────────
 
@@ -73,7 +76,7 @@ class ChatResultWithLogprobs(ChatResult):
 def encode_image_to_base64(path: str | Path) -> str:
     """Read an image file and return a ``data:image/...;base64,...`` data URI.
 
-    Supports JPEG, PNG, WebP, GIF, and BMP formats.  The MIME type is
+    Supports JPEG, PNG, WebP, and GIF formats.  The MIME type is
     derived from the file extension (case-insensitive).
 
     Args:
@@ -97,7 +100,7 @@ def encode_image_to_base64(path: str | Path) -> str:
         ".png": "image/png",
         ".webp": "image/webp",
         ".gif": "image/gif",
-        ".bmp": "image/bmp",
+        
     }
     suffix = path.suffix.lower()
     mime = extension_to_mime.get(suffix)
@@ -169,6 +172,14 @@ def _send_request(
     except urllib.error.URLError as exc:
         raise RuntimeError(f"Chat completions request failed: {exc.reason}") from exc
     return response_payload
+
+
+def _get_finish_reason(response_payload: dict[str, Any]) -> str | None:
+    """Extract finish_reason from a chat completions response."""
+    choices = response_payload.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        return choices[0].get("finish_reason")
+    return None
 
 
 def _extract_content(response_payload: dict[str, Any]) -> str:
@@ -287,6 +298,12 @@ class ChatAPIClient:
         for attempt in range(self._config.max_retries + 1):
             try:
                 response = _send_request(self._config, payload)
+                finish_reason = _get_finish_reason(response)
+                if finish_reason == "length":
+                    logger.warning(
+                        "Response truncated by max_tokens (finish_reason=length), discarding"
+                    )
+                    raise RuntimeError("Response truncated by max_tokens limit")
                 return _extract_content(response)
             except RuntimeError as exc:
                 last_error = exc
@@ -328,6 +345,12 @@ class ChatAPIClient:
         for attempt in range(self._config.max_retries + 1):
             try:
                 response = _send_request(self._config, payload)
+                finish_reason = _get_finish_reason(response)
+                if finish_reason == "length":
+                    logger.warning(
+                        "Response truncated by max_tokens (finish_reason=length), discarding"
+                    )
+                    raise RuntimeError("Response truncated by max_tokens limit")
                 content = _extract_content(response)
                 logprobs_data = _extract_logprobs(response)
                 return {"content": content, "logprobs": logprobs_data}

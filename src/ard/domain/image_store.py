@@ -10,7 +10,7 @@ import random
 import shutil
 from pathlib import Path
 
-SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 
 
 def scan_images(image_dir: str | Path, recursive: bool = True) -> list[Path]:
