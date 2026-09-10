@@ -38,7 +38,11 @@ class _LLMConfig(BaseModel):
     api_key: str | None = None  # secret — override in config.override.toml
     max_tokens: int = 4096
     timeout: float = 180.0
+    connect_timeout: float = 10.0
+    first_token_timeout: float = 60.0
+    inter_token_timeout: float = 15.0
     max_retries: int = 3
+    retry_on_timeout: bool = False
     temperature: float
     """Sampling temperature — different defaults for input vs target."""
 

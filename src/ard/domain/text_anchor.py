@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
+import httpx
 from tqdm import tqdm
 
 from ard.backends.api_client import ChatAPIClient
@@ -251,6 +253,8 @@ def _generate_one_anchor(
                 ),
                 temperature=0.7,
             )
+        except httpx.TimeoutException:
+            raise  # propagate for backpressure tracking
         except Exception as exc:
             logger.warning("skipping anchor due to error: %s", exc)
             return None
@@ -274,6 +278,8 @@ def _generate_one_anchor(
             # Final turn: target_model generates with logprobs
             try:
                 result = target_client.chat_with_logprobs(messages, temperature=0.0)
+            except httpx.TimeoutException:
+                raise  # propagate for backpressure tracking
             except Exception as exc:
                 logger.warning("skipping anchor due to error: %s", exc)
                 return None
@@ -296,6 +302,8 @@ def _generate_one_anchor(
             # Intermediate turn: target_model generates without logprobs
             try:
                 assist_msg = target_client.chat(messages, temperature=0.0)
+            except httpx.TimeoutException:
+                raise  # propagate for backpressure tracking
             except Exception as exc:
                 logger.warning("skipping anchor due to error: %s", exc)
                 return None
@@ -317,11 +325,18 @@ def generate_text_anchors(
     min_answer_chars: int = 8,
     max_answer_chars: int | None = None,
     output_path: Path | None = None,
+    backpressure_threshold: int = 3,
+    backpressure_cooldown: float = 60.0,
 ) -> list[GeneratedAnchor]:
     """Generate text anchors from a list of AnchorSpec objects.
 
     Each spec is processed concurrently via ThreadPoolExecutor.  Results
     are streamed to *output_path* (if provided) as they complete.
+
+    Backpressure: when ``httpx.TimeoutException`` is raised by any worker,
+    a consecutive timeout counter is incremented.  After
+    *backpressure_threshold* consecutive timeouts the pipeline pauses for
+    *backpressure_cooldown* seconds to let vLLM recover from overload.
 
     Args:
         specs: List of :class:`AnchorSpec` objects to generate.
@@ -334,6 +349,10 @@ def generate_text_anchors(
         max_answer_chars: Optional maximum answer length.
         output_path: If provided, each anchor is appended to this JSONL
             file immediately after generation (streaming write).
+        backpressure_threshold: Consecutive timeout count that triggers a
+            cooldown pause.  Default 3.
+        backpressure_cooldown: Seconds to pause when backpressure triggers.
+            Default 60.
 
     Returns:
         List of generated :class:`GeneratedAnchor` objects.
@@ -357,16 +376,37 @@ def generate_text_anchors(
         )
         for spec in specs
     ]
+
+    consecutive_timeouts = 0
+
     try:
         for future in as_completed(futures):
-            anchor = future.result()
+            try:
+                anchor = future.result()
+            except httpx.TimeoutException:
+                consecutive_timeouts += 1
+                logger.warning(
+                    "Timeout generating anchor (consecutive: %d/%d)",
+                    consecutive_timeouts, backpressure_threshold,
+                )
+                pbar.update(1)
+                if consecutive_timeouts >= backpressure_threshold:
+                    logger.warning(
+                        "Backpressure: %d consecutive timeouts, pausing %ds...",
+                        consecutive_timeouts, backpressure_cooldown,
+                    )
+                    time.sleep(backpressure_cooldown)
+                    consecutive_timeouts = 0
+                continue
+
             if anchor is not None:
                 anchors.append(anchor)
                 if output_path is not None:
                     append_anchor(anchor, output_path)
-                pbar.update(1)
-                if len(anchors) >= target_count:
-                    break
+                consecutive_timeouts = 0
+            pbar.update(1)
+            if len(anchors) >= target_count:
+                break
     finally:
         pbar.close()
         executor.shutdown(wait=False, cancel_futures=True)

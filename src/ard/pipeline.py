@@ -125,7 +125,11 @@ def run(
             temperature=config.input_generator.temperature,
             max_tokens=config.input_generator.max_tokens,
             timeout=config.input_generator.timeout,
+            connect_timeout=config.input_generator.connect_timeout,
+            first_token_timeout=config.input_generator.first_token_timeout,
+            inter_token_timeout=config.input_generator.inter_token_timeout,
             max_retries=config.input_generator.max_retries,
+            retry_on_timeout=config.input_generator.retry_on_timeout,
         )
     )
     target_client = ChatAPIClient(
@@ -136,7 +140,11 @@ def run(
             temperature=config.target_model.temperature,
             max_tokens=config.target_model.max_tokens,
             timeout=config.target_model.timeout,
+            connect_timeout=config.target_model.connect_timeout,
+            first_token_timeout=config.target_model.first_token_timeout,
+            inter_token_timeout=config.target_model.inter_token_timeout,
             max_retries=config.target_model.max_retries,
+            retry_on_timeout=config.target_model.retry_on_timeout,
             enable_thinking=config.target_model.enable_thinking,
         )
     )

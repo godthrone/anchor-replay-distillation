@@ -10,7 +10,11 @@ api_key = ""
 temperature = 0.8
 max_tokens = 4096
 timeout = 180.0
+connect_timeout = 10.0
+first_token_timeout = 60.0
+inter_token_timeout = 15.0
 max_retries = 3
+retry_on_timeout = false
 
 [target_model]
 api_base = ""
@@ -19,7 +23,11 @@ api_key = ""
 temperature = 0.0
 max_tokens = 4096
 timeout = 180.0
+connect_timeout = 10.0
+first_token_timeout = 60.0
+inter_token_timeout = 15.0
 max_retries = 3
+retry_on_timeout = false
 # Enable thinking/reasoning mode (Qwen3, DeepSeek-R1, etc.)
 # When True, the model outputs reasoning before the final answer.
 # Only enable when distilling to a reasoning-capable student model.

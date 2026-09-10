@@ -10,6 +10,7 @@ resolution-markers = [
 name = "anchor-replay-distillation"
 source = { editable = "." }
 dependencies = [
+    { name = "httpx" },
     { name = "numpy" },
     { name = "pillow" },
     { name = "pydantic" },
@@ -32,6 +33,7 @@ hf = [
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11.0" },
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "pillow", specifier = ">=10.0" },
