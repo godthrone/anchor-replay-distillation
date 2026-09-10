@@ -34,6 +34,10 @@ learning pipelines.
 - Docker
 - Embedding data: `data/anchor_ontology_embeddings.json` (49 pre-computed
   embeddings, 1024-dim, used by the hierarchical FPS sampler)
+- **Optional:** `rawpy` (included in `pyproject.toml` dependencies) for RAW
+  image format support (CR2, NEF, ARW, DNG, etc.). The library ships as a
+  manylinux wheel with bundled `libraw.so` — no system packages required.
+  If RAW formats are not needed, rawpy's import is lazy and won't be triggered.
 
 ### 1. Build the Docker image
 
@@ -177,7 +181,7 @@ All parameters are defined in `configs/config.toml`. Secret fields (`api_base`,
 ## CLI
 
 ```
-ard --config <path> [--override <path>] [--image-dir <path>]
+ard --config <path> [--override <path>] [--image-dir <path>] [--no-convert]
 ```
 
 A single command handles everything:
@@ -186,6 +190,8 @@ A single command handles everything:
 - `--override` — Path to override config TOML (optional; auto-detects `config.override.toml` alongside `--config` if not provided)
 - `--image-dir` — Image directory for multimodal anchors (optional)
   - ⚠️ Both `input_generator` and `target_model` must support multimodal inputs. If either model does not support multimodal, the API will return an error.
+- `--no-convert` — Disable automatic image format conversion (optional)
+  - By default, the pipeline auto-converts all images to JPG/PNG (PNG → PNG copy, RAW/ BMP/ TIFF/ GIF/ WebP → JPG quality=95). Use this flag to skip conversion — only PNG/JPEG/GIF/WEBP files are accepted, any other format causes an error.
 
 ## Output
 

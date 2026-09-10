@@ -25,7 +25,13 @@ from ard.domain.bank import (
     read_anchor_bank,
     write_manifest,
 )
-from ard.domain.image_store import copy_images_to_output, sample_images, scan_images
+from ard.domain.image_store import (
+    CONVERTABLE_EXTENSIONS,
+    convert_and_copy_images,
+    copy_images_to_output,
+    sample_images,
+    scan_images,
+)
 from ard.domain.text_anchor import generate_text_anchors
 
 logger = logging.getLogger(__name__)
@@ -34,6 +40,7 @@ def run(
     config: ARDConfig,
     *,
     image_dir: str | None = None,
+    no_convert: bool = False,
 ) -> Path:
     """Run the ARD anchor generation pipeline.
 
@@ -41,6 +48,11 @@ def run(
         config: Validated ARD configuration.
         image_dir: Optional path to image directory. If provided, multimodal
             anchors are generated alongside text anchors.
+        no_convert: If ``True``, skip image format conversion — only
+            :data:`ard.domain.image_store.SUPPORTED_EXTENSIONS` are
+            accepted and images are copied as-is.  The default
+            (``False``) enables automatic conversion of RAW / BMP /
+            TIFF / GIF / WebP images to JPEG.
 
     Returns:
         Path to the output directory.
@@ -158,25 +170,44 @@ def run(
     # Step 1: Sample AnchorSpec objects from the ontology
     specs = sample_anchors(ontology, gen_config, rng)
 
-    # Step 2: If image_dir is provided, scan, sample, copy, and allocate images
+    # Step 2: If image_dir is provided, scan, sample, convert/copy, and allocate images
     if image_dir:
-        images = scan_images(image_dir, recursive=True)
-        if images:
-            sampled = sample_images(images, 100, seed=gen_config.seed)
-            rel_paths = copy_images_to_output(sampled, output_dir)
-            specs = allocate_images(
-                specs, rel_paths, config.generation.max_turns_with_image, rng
-            )
-            # Resolve image paths relative to output_dir for base64 encoding
-            for spec in specs:
-                for turn in spec.turns:
-                    if turn.image_path:
-                        turn.image_path = str(output_dir / turn.image_path)
+        if no_convert:
+            images = scan_images(image_dir, recursive=True)
+            if images:
+                sampled = sample_images(images, 100, seed=gen_config.seed)
+                rel_paths = copy_images_to_output(sampled, output_dir)
+                specs = allocate_images(
+                    specs, rel_paths, config.generation.max_turns_with_image, rng
+                )
+                # Resolve image paths relative to output_dir for base64 encoding
+                for spec in specs:
+                    for turn in spec.turns:
+                        if turn.image_path:
+                            turn.image_path = str(output_dir / turn.image_path)
+            else:
+                logger.warning(
+                    "No images found in %s. All anchors will be pure text.",
+                    image_dir,
+                )
         else:
-            logger.warning(
-                "No images found in %s. All anchors will be pure text.",
-                image_dir,
-            )
+            images = scan_images(image_dir, recursive=True, extensions=CONVERTABLE_EXTENSIONS)
+            if images:
+                sampled = sample_images(images, 100, seed=gen_config.seed)
+                rel_paths = convert_and_copy_images(sampled, output_dir)
+                specs = allocate_images(
+                    specs, rel_paths, config.generation.max_turns_with_image, rng
+                )
+                # Resolve image paths relative to output_dir for base64 encoding
+                for spec in specs:
+                    for turn in spec.turns:
+                        if turn.image_path:
+                            turn.image_path = str(output_dir / turn.image_path)
+            else:
+                logger.warning(
+                    "No images found in %s. All anchors will be pure text.",
+                    image_dir,
+                )
 
     # Step 3: Generate all anchors via the unified generator
     new_anchors = generate_text_anchors(

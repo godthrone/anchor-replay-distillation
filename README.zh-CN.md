@@ -27,6 +27,10 @@
 
 - Docker
 - 嵌入数据：`data/anchor_ontology_embeddings.json`（49 个预计算嵌入向量，1024 维，供分层 FPS 采样器使用）
+- **可选：** `rawpy`（已包含在 `pyproject.toml` 依赖中）用于 RAW 图片格式支持
+  （CR2、NEF、ARW、DNG 等 19 种）。该库以 manylinux wheel 发布，自带
+  `libraw.so`，无需安装系统包。如果不需要 RAW 格式，rawpy 的导入是懒加载的，
+  不会被触发。
 
 ### 1. 构建 Docker 镜像
 
@@ -167,7 +171,7 @@ ARD 采用**分层 TOML 配置**模型。有两个配置文件：
 ## CLI
 
 ```
-ard --config <路径> [--override <路径>] [--image-dir <路径>]
+ard --config <路径> [--override <路径>] [--image-dir <路径>] [--no-convert]
 ```
 
 单一命令完成所有操作：
@@ -176,6 +180,8 @@ ard --config <路径> [--override <路径>] [--image-dir <路径>]
 - `--override` — 覆写配置 TOML 文件路径（可选；未提供时自动检测 `--config` 同目录下的 `config.override.toml`）
 - `--image-dir` — 多模态锚点的图片目录（可选）
   - ⚠️ `input_generator` 和 `target_model` 均需支持多模态输入。如果模型不支持多模态，API 会直接报错。
+- `--no-convert` — 关闭图片格式自动转换（可选）
+  - 默认情况下，流水线会将所有图片自动转换为 JPG/PNG（PNG → 直接复制，RAW/BMP/TIFF/GIF/WebP → JPG quality=95）。使用此参数跳过转换——仅接受 PNG/JPEG/GIF/WEBP 文件，其他格式会报错。
 
 ## 输出
 

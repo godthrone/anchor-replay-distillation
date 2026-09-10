@@ -104,7 +104,7 @@ graph TD
 | **Quota** | `core/quota.py` | 分配多轮对话轮次配额和图片到锚点的配额 |
 | **Text Anchor** | `domain/text_anchor.py` | 并发生成锚点：调用 Input Generator 生成用户消息，调用 Target Model 生成回答。**多模态场景下：input_generator 和 target_model 必须均为多模态模型** |
 | **Bank** | `domain/bank.py` | 锚点存储：序列化、追加、读取、构建 manifest |
-| **Image Store** | `domain/image_store.py` | 图片扫描、随机采样、复制到输出目录 |
+| **Image Store** | `domain/image_store.py` | 图片扫描、格式转换（RAW/ BMP/ TIFF/ GIF/ WebP → JPG）、随机采样、复制到输出目录 |
 | **Logging** | `logging.py` | 提供 `get_logger` 辅助函数，统一所有模块的日志格式和输出目标 |
 | **API Client** | `backends/api_client.py` | OpenAI 兼容的 HTTP 客户端，支持文本/多模态请求和 log-probs 提取 |
 
@@ -146,10 +146,11 @@ flowchart LR
         CKPT{"5. Checkpoint?"}
         ONTL["6. Load Ontology"]
         SMPL["7. Sample Anchors"]
-        IMGSCAN["8. Scan & Copy Images"]
-        ALLOC["9. Allocate Images"]
-        GEN["10. Generate Anchors"]
-        EXP["11. Export"]
+        IMGSCAN["8. Scan Images"]
+        IMGCONV["9. Convert & Copy Images"]
+        ALLOC["10. Allocate Images"]
+        GEN["11. Generate Anchors"]
+        EXP["12. Export"]
     end
 
     subgraph "Output"
@@ -173,7 +174,8 @@ flowchart LR
     EMB --> SMPL
     SMPL --> ALLOC
     IMG --> IMGSCAN
-    IMGSCAN --> ALLOC
+    IMGSCAN --> IMGCONV
+    IMGCONV --> ALLOC
     ALLOC --> GEN
     GEN --> EXP
     EXP --> AB
@@ -423,11 +425,12 @@ sequenceDiagram
 
     User->>CLI: ard --config config.toml --image-dir /path/to/images
     CLI->>Pipeline: run(config, image_dir="/path/to/images")
-    Pipeline->>IS: scan_images(image_dir, recursive=True)
-    IS-->>Pipeline: List[Path] (所有图片)
+    Pipeline->>IS: scan_images(image_dir, recursive=True, extensions=CONVERTABLE_EXTENSIONS)
+    IS-->>Pipeline: List[Path] (所有可转换图片，含 RAW/BMP/TIFF/GIF/WEBP)
     Pipeline->>IS: sample_images(images, count=100, seed=42)
     IS-->>Pipeline: 100 张随机采样的图片
-    Pipeline->>IS: copy_images_to_output(sampled_images, output_dir)
+    Pipeline->>IS: convert_and_copy_images(sampled_images, output_dir)
+    Note over Pipeline,IS: RAW → rawpy → JPG<br/>BMP/TIFF/GIF/WEBP → Pillow → JPG<br/>PNG → 直接复制<br/>JPG → 直接复制
     IS-->>Pipeline: ["images/photo1.jpg", "images/photo2.jpg", ...]
     Pipeline->>Quota: allocate_images(specs, image_pool, max_turns_with_image, rng)
     Quota-->>Pipeline: specs (TurnSpec.image_path 已设置)
@@ -438,6 +441,28 @@ sequenceDiagram
         Note over TextAnchor,API: content: [{"type": "image_url", ...}, {"type": "text", ...}]
     end
 ```
+
+```
+
+### 6.1.5 图片格式转换
+
+Pipeline 默认开启图片格式自动转换（可通过 `--no-convert` 关闭）：
+
+| 源格式 | 处理方式 | 输出格式 |
+|--------|----------|----------|
+| `.png` | 直接复制（无损） | PNG |
+| `.jpg` / `.jpeg` | 直接复制（避免二次有损压缩） | JPG |
+| RAW（`.cr2`, `.nef`, `.arw`, `.dng` 等 19 种） | `rawpy` 解码 → Pillow 编码 | JPG (quality=95) |
+| `.bmp`, `.tiff`, `.gif`, `.webp` | Pillow 打开 → 编码 | JPG (quality=95) |
+
+**依赖**：
+- `Pillow>=10.0` — 必需依赖，处理 BMP/TIFF/GIF/WebP 转换
+- `rawpy>=0.24` — 可选依赖（manylinux wheel 自带 `libraw.so`，零系统依赖），仅 RAW 格式需要
+
+**`--no-convert` 关闭转换**：当关闭转换时，`scan_images` 仅接受 `SUPPORTED_EXTENSIONS`
+（PNG/JPEG/GIF/WEBP），遇 BMP/TIFF/RAW 格式的图片会被静默跳过。
+
+**Resume 安全**：`convert_and_copy_images()` 检查目标文件是否已存在，已转换的图片自动跳过。
 
 ### 6.2 视觉域结构
 
@@ -671,7 +696,7 @@ overwrite = false       # 是否覆盖已有输出目录（预授权退路，遵
 | `src/ard/cli.py` | 95 | CLI 入口 |
 | `src/ard/config.py` | 215 | 配置模型与加载 |
 | `src/ard/logging.py` | 21 | 统一日志配置（`get_logger` 辅助函数） |
-| `src/ard/pipeline.py` | 164 | 流程编排 |
+| `src/ard/pipeline.py` | 222 | 流程编排 |
 | `src/ard/core/types.py` | 93 | 核心数据类型 |
 | `src/ard/core/ontology.py` | 29 | 本体加载 |
 | `src/ard/core/embeddings.py` | 134 | 嵌入加载与 FPS 算法 |
@@ -680,7 +705,7 @@ overwrite = false       # 是否覆盖已有输出目录（预授权退路，遵
 | `src/ard/core/quota.py` | 102 | 配额分配 |
 | `src/ard/domain/text_anchor.py` | 271 | 锚点生成 |
 | `src/ard/domain/bank.py` | 172 | 锚点存储 |
-| `src/ard/domain/image_store.py` | 96 | 图片管理 |
+| `src/ard/domain/image_store.py` | 265 | 图片管理（扫描、格式转换、采样、复制） |
 | `src/ard/backends/api_client.py` | 373 | API 客户端 |
 
 ### 数据文件

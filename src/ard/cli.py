@@ -38,6 +38,13 @@ def main() -> None:
         default=None,
         help="Path to config.override.toml (optional, default: auto-detect alongside --config)",
     )
+    parser.add_argument(
+        "--no-convert",
+        action="store_true",
+        default=False,
+        help="Disable image format conversion. Only PNG/JPEG/GIF/WEBP are "
+        "accepted (via SUPPORTED_EXTENSIONS) and copied as-is.",
+    )
     
 
     args = parser.parse_args()
@@ -73,7 +80,7 @@ def main() -> None:
 
     # Run pipeline
     try:
-        output_dir = run_pipeline(config, image_dir=args.image_dir)
+        output_dir = run_pipeline(config, image_dir=args.image_dir, no_convert=args.no_convert)
         logger.info("Done! Output: %s", output_dir)
     except FileNotFoundError as exc:
         logger.error("%s", exc)
