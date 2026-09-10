@@ -3,10 +3,10 @@
 Supports text and multimodal (base64-encoded image) chat requests,
 with concurrent batch execution via ThreadPoolExecutor.
 
-P0 changes:
-- httpx replaces urllib; streaming SSE with per-phase timeouts
-- ChatAPIConfig gains connect_timeout, first_token_timeout, inter_token_timeout
-- retry_on_timeout=False prevents timeout amplification
+All requests use streaming SSE:
+- ``chat()`` returns content via SSE with per-phase timeouts.
+- ``chat_with_logprobs()`` returns content + log-probs via SSE,
+  collecting ``logprobs.content`` from each delta chunk.
 """
 
 from __future__ import annotations
@@ -219,8 +219,10 @@ def _iter_lines_with_timeout(
 def _send_streaming_request(
     config: ChatAPIConfig,
     payload: dict[str, Any],
-) -> tuple[str, str | None]:
-    """Send a streaming chat completions request via SSE and return (content, finish_reason).
+    *,
+    collect_logprobs: bool = False,
+) -> tuple[str, str | None, dict | None]:
+    """Send a streaming chat completions request via SSE and return (content, finish_reason, logprobs).
 
     Uses ``httpx.Client.stream()`` to POST *payload* with ``stream: true``,
     then parses SSE ``data:`` chunks.  Timeouts are layered:
@@ -232,10 +234,14 @@ def _send_streaming_request(
     Args:
         config: Endpoint and timeout configuration.
         payload: Full JSON request body (must include ``"stream": true``).
+        collect_logprobs: If True, collect log-probabilities from each SSE chunk
+            and return them as a dict with ``token_ids`` and ``log_probs`` lists.
+            Defaults to False for plain ``chat()`` calls.
 
     Returns:
-        A tuple of ``(full_content, finish_reason)``.  *finish_reason* is
-        ``None`` if none was observed.
+        A tuple of ``(full_content, finish_reason, logprobs)``.  *finish_reason* is
+        ``None`` if none was observed.  *logprobs* is ``None`` when *collect_logprobs*
+        is ``False``, otherwise a dict ``{"token_ids": [...], "log_probs": [...]}``.
 
     Raises:
         httpx.TimeoutException: On connect-timeout.
@@ -251,6 +257,8 @@ def _send_streaming_request(
 
     content_parts: list[str] = []
     finish_reason: str | None = None
+    token_ids: list[int | str] = []
+    log_probs: list[float] = []
 
     with httpx.Client(timeout=http_timeout) as client:
         with client.stream("POST", config.chat_completions_url,
@@ -286,117 +294,39 @@ def _send_streaming_request(
                         token = delta.get("content")
                         if isinstance(token, str) and token:
                             content_parts.append(token)
+                    if collect_logprobs:
+                        chunk_logprobs = chunk.get("logprobs")
+                        if chunk_logprobs is not None and isinstance(chunk_logprobs, dict):
+                            content_lps = chunk_logprobs.get("content")
+                            if isinstance(content_lps, list):
+                                for lp in content_lps:
+                                    if isinstance(lp, dict):
+                                        tid = lp.get("token") or lp.get("token_id", "")
+                                        if isinstance(tid, (int, str)):
+                                            token_ids.append(tid)
+                                        lp_val = lp.get("logprob")
+                                        if isinstance(lp_val, (int, float)):
+                                            log_probs.append(float(lp_val))
                     fr = choices[0].get("finish_reason") if isinstance(choices[0], dict) else None
                     if fr is not None:
                         finish_reason = fr
 
-    return "".join(content_parts), finish_reason
+    logprobs_result: dict | None = None
+    if collect_logprobs:
+        logprobs_result = {"token_ids": token_ids, "log_probs": log_probs}
+    return "".join(content_parts), finish_reason, logprobs_result
 
 
-def _send_non_streaming_request(
-    config: ChatAPIConfig,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    """Send a non-streaming chat completions request and return the parsed JSON.
-
-    Used for ``chat_with_logprobs`` where streaming logprobs are unreliable
-    on many vLLM configurations.
-
-    Raises:
-        httpx.TimeoutException: On connect/read timeout.
-        RuntimeError: On HTTP errors.
-    """
-    headers: dict[str, str] = {"Content-Type": "application/json"}
-    if config.api_key:
-        headers["Authorization"] = f"Bearer {config.api_key}"
-
-    http_timeout = httpx.Timeout(
-        config.timeout,
-        connect=config.connect_timeout,
-    )
-
-    with httpx.Client(timeout=http_timeout) as client:
-        response = client.post(
-            config.chat_completions_url,
-            json=payload,
-            headers=headers,
-        )
-        if response.status_code != 200:
-            body = response.text[:1000]
-            raise RuntimeError(
-                f"Chat completions request failed with HTTP {response.status_code}: {body}"
-            )
-        return response.json()  # type: ignore[no-any-return]
 
 
-def _get_finish_reason(response_payload: dict[str, Any]) -> str | None:
-    """Extract finish_reason from a chat completions response."""
-    choices = response_payload.get("choices")
-    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
-        return choices[0].get("finish_reason")
-    return None
 
 
-def _extract_content(response_payload: dict[str, Any]) -> str:
-    """Extract the message content string from a chat completions response."""
-    choices = response_payload.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise RuntimeError("Chat completions response did not contain choices")
-    message = choices[0].get("message") if isinstance(choices[0], dict) else None
-    if not isinstance(message, dict):
-        raise RuntimeError("Chat completions response did not contain message content")
-    content = message.get("content")
-    if content is None:
-        # Fallback: Qwen3.8-27B may return reasoning in the "reasoning" field
-        reasoning = message.get("reasoning")
-        if isinstance(reasoning, str) and reasoning.strip():
-            return reasoning.strip()
-        raise RuntimeError("Chat completions response message had no content")
-    if isinstance(content, str):
-        return content.strip()
-    # content may be a list (multimodal response) — flatten to string
-    if isinstance(content, list):
-        parts: list[str] = []
-        for part in content:
-            if isinstance(part, dict) and part.get("type") == "text":
-                parts.append(str(part.get("text", "")))
-        return "\n".join(parts).strip()
-    return str(content).strip()
 
 
-def _extract_logprobs(response_payload: dict[str, Any]) -> dict[str, Any]:
-    """Extract log-prob data from a chat completions response.
 
-    Returns a dict with ``token_ids`` and ``log_probs`` lists.
-    """
-    choices = response_payload.get("choices")
-    if not isinstance(choices, list) or not choices:
-        return {"token_ids": [], "log_probs": []}
 
-    logprobs_content = None
-    if isinstance(choices[0], dict):
-        logprobs_content = choices[0].get("logprobs")
-    if logprobs_content is None:
-        return {"token_ids": [], "log_probs": []}
 
-    content_list = logprobs_content.get("content") if isinstance(logprobs_content, dict) else None
-    if not isinstance(content_list, list):
-        return {"token_ids": [], "log_probs": []}
 
-    token_ids: list[int | str] = []
-    log_probs: list[float] = []
-    for item in content_list:
-        if isinstance(item, dict):
-            # vLLM returns token as a string (e.g., "The", " dilemma");
-            # some OpenAI-compatible servers also return a numeric token_id
-            tid = item.get("token_id") or item.get("token")
-            if isinstance(tid, (int, str)):
-                token_ids.append(tid)
-            lp = item.get("logprob")
-            if isinstance(lp, (int, float)):
-                log_probs.append(float(lp))
-
-    return {"token_ids": token_ids, "log_probs": log_probs}
 
 
 def _is_timeout_error(exc: Exception) -> bool:
@@ -413,8 +343,9 @@ def _is_timeout_error(exc: Exception) -> bool:
 class ChatAPIClient:
     """OpenAI-compatible chat completions API client.
 
-    Supports text and multimodal messages.  Uses ``httpx`` with streaming
-    SSE for text generation and non-streaming for logprobs retrieval.
+    Supports text and multimodal messages.  All requests use ``httpx`` with
+    streaming SSE and per-phase timeouts (connect → first_token → inter_token).
+    Log-probs are collected from SSE delta chunks when requested.
     Concurrency is handled by ``ThreadPoolExecutor``.
 
     Parameters:
@@ -465,7 +396,7 @@ class ChatAPIClient:
 
         for attempt in range(self._config.max_retries + 1):
             try:
-                content, finish_reason = _send_streaming_request(self._config, payload)
+                content, finish_reason, _ = _send_streaming_request(self._config, payload)
                 if finish_reason == "length":
                     logger.warning(
                         "Response truncated by max_tokens (finish_reason=length), discarding"
@@ -501,11 +432,11 @@ class ChatAPIClient:
         *,
         top_logprobs: int = 1,
     ) -> dict[str, Any]:
-        """Send a non-streaming chat request and return content + log-probabilities.
+        """Send a streaming chat request and return content + log-probabilities.
 
-        Uses non-streaming mode because streaming logprobs are unreliable on
-        many vLLM configurations.  This is only used for the final turn
-        where logprobs are needed, so the latency impact is acceptable.
+        Uses SSE streaming mode with per-phase timeouts (connect → first_token →
+        inter_token).  Log-probs are collected from each SSE delta chunk via
+        ``collect_logprobs=True``.
 
         Args:
             messages: A list of message dicts in OpenAI format.
@@ -523,22 +454,26 @@ class ChatAPIClient:
         payload = _build_payload(
             self._config, messages, temperature,
             logprobs=True, top_logprobs=top_logprobs,
-            stream=False,
+            stream=True,
         )
         last_error: Exception | None = None
 
         for attempt in range(self._config.max_retries + 1):
             try:
-                response = _send_non_streaming_request(self._config, payload)
-                finish_reason = _get_finish_reason(response)
+                content, finish_reason, logprobs = _send_streaming_request(
+                    self._config, payload, collect_logprobs=True,
+                )
                 if finish_reason == "length":
                     logger.warning(
                         "Response truncated by max_tokens (finish_reason=length), discarding"
                     )
                     raise RuntimeError("Response truncated by max_tokens limit")
-                content = _extract_content(response)
-                logprobs_data = _extract_logprobs(response)
-                return {"content": content, "logprobs": logprobs_data}
+                if finish_reason is not None and finish_reason != "stop":
+                    logger.warning("Unusual finish_reason: %s", finish_reason)
+                return {
+                    "content": content.strip(),
+                    "logprobs": logprobs or {"token_ids": [], "log_probs": []},
+                }
             except RuntimeError as exc:
                 if _is_timeout_error(exc) and not self._config.retry_on_timeout:
                     raise
@@ -548,7 +483,7 @@ class ChatAPIClient:
             except httpx.TimeoutException as exc:
                 if not self._config.retry_on_timeout:
                     raise RuntimeError(
-                        f"Logprobs request timed out after "
+                        f"Streaming request timed out after "
                         f"{self._config.max_retries + 1} attempt(s)"
                     ) from exc
                 last_error = exc

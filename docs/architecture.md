@@ -335,7 +335,7 @@ sequenceDiagram
 
     API-->>ARD: {"choices": [{"message": {"content": "..."}, "logprobs": {"content": [{"token": "The", "logprob": -0.23}, ...]}}]}
 
-    ARD->>ARD: _extract_logprobs() → {"token_ids": [...], "log_probs": [...]}
+    ARD->>ARD: 从 SSE delta chunks 收集 logprobs → {"token_ids": [...], "log_probs": [...]}
 ```
 
 ### 5.2 输出数据格式
@@ -425,8 +425,8 @@ ARD 使用 `httpx` 替换 `urllib`，通过 SSE（Server-Sent Events）流式获
 | 方法 | 模式 | 原因 |
 |------|------|------|
 | `chat()` | **SSE 流式** | 常规文本生成，流式响应降低首字节延迟，支持分层超时 |
-| `chat_with_logprobs()` | **非流式** | 流式 SSE 中 logprobs 不可靠（多数 vLLM 配置下各 chunk 的 logprobs 可能不完整或不返回），
-  非流式保证一次性拿到完整的 `logprobs.content` |
+| `chat_with_logprobs()` | **SSE 流式** | 通过 ``collect_logprobs=True`` 从每个 SSE delta chunk 收集
+``logprobs.content``，格式与非流式完全一致，同时享受分层超时保护 |
 
 **流式 SSE 超时策略图**：
 
@@ -812,7 +812,7 @@ overwrite = false       # 是否覆盖已有输出目录（预授权退路，遵
 | `src/ard/domain/text_anchor.py` | 271 | 锚点生成 |
 | `src/ard/domain/bank.py` | 172 | 锚点存储 |
 | `src/ard/domain/image_store.py` | 265 | 图片管理（扫描、格式转换、采样、复制） |
-| `src/ard/backends/api_client.py` | 373 | API 客户端 |
+| `src/ard/backends/api_client.py` | 533 | API 客户端 |
 
 ### 数据文件
 
