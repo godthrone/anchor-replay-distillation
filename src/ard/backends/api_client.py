@@ -247,7 +247,7 @@ def _send_streaming_request(
 
     # Disable httpx-level total/read timeouts — our _iter_lines_with_timeout
     # enforces the per-phase timeouts directly.
-    http_timeout = httpx.Timeout(connect=config.connect_timeout)
+    http_timeout = httpx.Timeout(None, connect=config.connect_timeout)
 
     content_parts: list[str] = []
     finish_reason: str | None = None
@@ -311,8 +311,8 @@ def _send_non_streaming_request(
         headers["Authorization"] = f"Bearer {config.api_key}"
 
     http_timeout = httpx.Timeout(
+        config.timeout,
         connect=config.connect_timeout,
-        read=config.timeout,  # fall back to legacy timeout for non-streaming
     )
 
     with httpx.Client(timeout=http_timeout) as client:

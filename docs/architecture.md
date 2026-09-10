@@ -106,7 +106,7 @@ graph TD
 | **Bank** | `domain/bank.py` | 锚点存储：序列化、追加、读取、构建 manifest |
 | **Image Store** | `domain/image_store.py` | 图片扫描、格式转换（RAW/ BMP/ TIFF/ GIF/ WebP → JPG）、随机采样、复制到输出目录 |
 | **Logging** | `logging.py` | 提供 `get_logger` 辅助函数，统一所有模块的日志格式和输出目标 |
-| **API Client** | `backends/api_client.py` | OpenAI 兼容的 HTTP 客户端，支持文本/多模态请求和 log-probs 提取 |
+| **API Client** | `backends/api_client.py` | 基于 httpx 的 OpenAI 兼容客户端，支持 SSE 流式生成、分层超时控制、log-probs 提取和背压传播 |
 
 ### 2.3 模块间接口
 
@@ -399,6 +399,112 @@ vLLM API 返回的 `token_ids` 有两种来源：
 **ARD 的默认行为**：优先使用整数 `token_id`（vLLM 原生返回），
 以字符串 `token` 为 fallback。输出 JSON 中的 `token_ids` 字段名
 （历史原因保留复数形式）实际存储的是 token 的文本表示数组。
+
+### 5.5 流式 SSE 与分层超时
+
+ARD 使用 `httpx` 替换 `urllib`，通过 SSE（Server-Sent Events）流式获取 API 响应。
+流式模式采用**三层超时策略**，每层超时独立控制，防止僵尸请求级联：
+
+| 超时层 | 配置字段 | 默认值 | 控制范围 |
+|--------|----------|--------|----------|
+| **连接超时** | `connect_timeout` | 10s | TCP 连接 + TLS 握手（httpx 层控制） |
+| **首 Token 超时** | `first_token_timeout` | 60s | 等待第一个 `data:` 行到达（应用层控制） |
+| **Token 间超时** | `inter_token_timeout` | 15s | 生成过程中 token 之间的最大间隔（应用层控制） |
+
+**设计要点**：
+
+- **httpx 层**只设置 `connect` 超时（`httpx.Timeout(connect=...)`），
+  不设置 `read`/`write`/`pool` 超时——这些由应用层的 `_iter_lines_with_timeout()` 接管。
+- `_iter_lines_with_timeout()` 使用后台线程读取 SSE 行，主线程通过 `queue.Queue.get(timeout=...)`
+  实现分阶段超时：首个 token 前用 `first_token_timeout`，之后切换到 `inter_token_timeout`。
+- `retry_on_timeout` 默认 `false`：超时不重试，避免超时放大——每个 API 的 `max_retries` 仅用于
+  非超时错误（如 HTTP 503、连接拒绝等），超时异常直接向上传播。
+
+**流式 vs 非流式模式选择**：
+
+| 方法 | 模式 | 原因 |
+|------|------|------|
+| `chat()` | **SSE 流式** | 常规文本生成，流式响应降低首字节延迟，支持分层超时 |
+| `chat_with_logprobs()` | **非流式** | 流式 SSE 中 logprobs 不可靠（多数 vLLM 配置下各 chunk 的 logprobs 可能不完整或不返回），
+  非流式保证一次性拿到完整的 `logprobs.content` |
+
+**流式 SSE 超时策略图**：
+
+```mermaid
+sequenceDiagram
+    participant ARD as "ARD (api_client.py)"
+    participant HTTPX as "httpx Client"
+    participant API as "vLLM / OpenAI API"
+
+    ARD->>HTTPX: POST /chat/completions<br/>(stream: true)
+    Note over ARD,HTTPX: Phase 1: connect_timeout=10s
+
+    HTTPX->>API: TCP + TLS handshake
+    API-->>HTTPX: HTTP 200 + SSE stream
+
+    Note over ARD,API: Phase 2: first_token_timeout=60s
+    Note over ARD: _iter_lines_with_timeout()<br/>queue.get(timeout=60s)
+
+    API-->>ARD: data: {"choices":[{"delta":{"content":"The"}},...]}
+    Note over ARD: first_token = False<br/>switch to inter_token_timeout
+
+    Note over ARD,API: Phase 3: inter_token_timeout=15s
+
+    loop Token Generation
+        API-->>ARD: data: {"choices":[{"delta":{"content":" answer"}},...]}
+        ARD->>ARD: timeout reset (15s per token)
+    end
+
+    API-->>ARD: data: {"choices":[{"finish_reason":"stop"}]}
+    API-->>ARD: data: [DONE]
+
+    ARD->>ARD: join content_parts → full response
+```
+
+### 5.6 背压机制（Backpressure）
+
+当 vLLM 服务端过载时，大量并发流式请求可能同时超时，在客户端形成**僵尸请求级联**——
+所有线程阻塞等待超时，恢复后再次同时发起请求，导致服务端负载振荡。
+
+ARD 在 `generate_text_anchors()` 中实现了**背压机制**：
+
+1. `_generate_one_anchor()` 将 `httpx.TimeoutException` 显式 `raise`（不吞没），传播到调度层
+2. `generate_text_anchors()` 的 `as_completed` 循环捕获 `httpx.TimeoutException`，
+   递增 `consecutive_timeouts` 计数器
+3. 当 `consecutive_timeouts >= backpressure_threshold`（默认 3）时，
+   调用 `time.sleep(backpressure_cooldown)`（默认 60s）暂停所有并发请求
+4. 成功生成的 anchor 将计数器重置为 0
+
+```mermaid
+flowchart TD
+    START["Future 完成"] --> GET["future.result()"]
+    GET --> CHECK{"异常类型?"}
+
+    CHECK -->|"httpx.TimeoutException"| INC["consecutive_timeouts += 1"]
+    INC --> THRESH{"consecutive_timeouts<br/>>= threshold?"}
+    THRESH -->|"是"| SLEEP["time.sleep(cooldown_seconds)"]
+    SLEEP --> RESET["consecutive_timeouts = 0"]
+    RESET --> NEXT["继续下一个 future"]
+    THRESH -->|"否"| NEXT
+
+    CHECK -->|"成功 (GeneratedAnchor)"| RESET_OK["consecutive_timeouts = 0"]
+    RESET_OK --> APPEND["追加到 anchors 列表"]
+    APPEND --> NEXT
+
+    CHECK -->|"其他异常"| NEXT
+```
+
+**配置参数**（硬编码在 `generate_text_anchors()` 签名中，非 TOML 配置）：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `backpressure_threshold` | 3 | 触发冷却的连续超时次数 |
+| `backpressure_cooldown` | 60.0 | 冷却暂停秒数 |
+
+**设计原理**：背压是 §3.3（预授权退路）的实践——超时是服务端过载的信号，
+冷却暂停改变代价（增加总耗时）但不改变结果（最终产出的 anchor 质量一致），
+且冷却参数在代码中显式声明。与 `retry_on_timeout=false` 配合：
+超时不重试（避免放大），而是通过背压让整个 Pipeline 降速等待服务端恢复。
 
 ---
 
