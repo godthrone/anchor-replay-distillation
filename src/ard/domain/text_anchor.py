@@ -16,9 +16,10 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+
 from tqdm import tqdm
 
-from ard.backends.api_client import ChatAPIClient
+from ard.backends.api_client import ARDTimeoutError, ChatAPIClient
 from ard.core.types import AnchorSpec, GeneratedAnchor, TurnSpec
 
 logger = logging.getLogger(__name__)
@@ -232,7 +233,8 @@ def _generate_one_anchor(
     """
     messages: list[dict[str, Any]] = []
 
-    for turn in spec.turns:
+    total_turns = len(spec.turns)
+    for turn_idx, turn in enumerate(spec.turns):
         # Pre-encode image (if any) — encoding failures are fatal and
         # must NOT be caught by the API error handler below.
         image_data_url: str | None = None
@@ -253,8 +255,14 @@ def _generate_one_anchor(
                 ),
                 temperature=0.7,
             )
-        except httpx.TimeoutException:
-            raise  # propagate for backpressure tracking
+        except ARDTimeoutError:
+            if len(messages) <= 1:
+                return None
+            logger.warning(
+                "Timeout in turn %d/%d, skipping this turn and continuing",
+                turn_idx + 1, total_turns,
+            )
+            continue
         except Exception as exc:
             logger.warning("skipping anchor due to error: %s", exc)
             return None
@@ -278,8 +286,14 @@ def _generate_one_anchor(
             # Final turn: target_model generates with logprobs
             try:
                 result = target_client.chat_with_logprobs(messages, temperature=0.0)
-            except httpx.TimeoutException:
-                raise  # propagate for backpressure tracking
+            except ARDTimeoutError:
+                if len(messages) <= 1:
+                    return None
+                logger.warning(
+                    "Timeout in turn %d/%d, skipping this turn and continuing",
+                    turn_idx + 1, total_turns,
+                )
+                continue
             except Exception as exc:
                 logger.warning("skipping anchor due to error: %s", exc)
                 return None
@@ -302,8 +316,14 @@ def _generate_one_anchor(
             # Intermediate turn: target_model generates without logprobs
             try:
                 assist_msg = target_client.chat(messages, temperature=0.0)
-            except httpx.TimeoutException:
-                raise  # propagate for backpressure tracking
+            except ARDTimeoutError:
+                if len(messages) <= 1:
+                    return None
+                logger.warning(
+                    "Timeout in turn %d/%d, skipping this turn and continuing",
+                    turn_idx + 1, total_turns,
+                )
+                continue
             except Exception as exc:
                 logger.warning("skipping anchor due to error: %s", exc)
                 return None
@@ -333,7 +353,7 @@ def generate_text_anchors(
     Each spec is processed concurrently via ThreadPoolExecutor.  Results
     are streamed to *output_path* (if provided) as they complete.
 
-    Backpressure: when ``httpx.TimeoutException`` is raised by any worker,
+    Backpressure: when ``ARDTimeoutError`` is raised by any worker,
     a consecutive timeout counter is incremented.  After
     *backpressure_threshold* consecutive timeouts the pipeline pauses for
     *backpressure_cooldown* seconds to let vLLM recover from overload.
@@ -383,7 +403,7 @@ def generate_text_anchors(
         for future in as_completed(futures):
             try:
                 anchor = future.result()
-            except httpx.TimeoutException:
+            except ARDTimeoutError:
                 consecutive_timeouts += 1
                 logger.warning(
                     "Timeout generating anchor (consecutive: %d/%d)",

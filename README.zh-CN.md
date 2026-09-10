@@ -125,7 +125,10 @@ ARD 采用**分层 TOML 配置**模型。有两个配置文件：
 | `api_key` | string | `""` | API 密钥（机密，在 override 中填写） |
 | `temperature` | float | `0.8` | 采样温度，越高越随机 |
 | `max_tokens` | int | `4096` | 最大生成 token 数 |
-| `timeout` | float | `180.0` | 单次请求超时秒数 |
+| `connect_timeout` | float | `10.0` | TCP 连接 + TLS 握手超时秒数 |
+| `first_token_timeout` | float | `300.0` | 等待首个 token 的最大秒数（prefill + 排队） |
+| `inter_token_timeout` | float | `15.0` | 首个 token 后 token 间最大等待秒数 |
+| `retry_on_timeout` | bool | `false` | 超时后是否重试（需 `max_retries > 0`） |
 | `max_retries` | int | `3` | 请求失败重试次数 |
 
 ### `[target_model]` — 目标模型（教师模型）
@@ -137,7 +140,10 @@ ARD 采用**分层 TOML 配置**模型。有两个配置文件：
 | `api_key` | string | `""` | API 密钥（机密） |
 | `temperature` | float | `0.0` | 采样温度，0.0 = 确定性输出 |
 | `max_tokens` | int | `4096` | 最大生成 token 数 |
-| `timeout` | float | `180.0` | 单次请求超时秒数 |
+| `connect_timeout` | float | `10.0` | TCP 连接 + TLS 握手超时秒数 |
+| `first_token_timeout` | float | `300.0` | 等待首个 token 的最大秒数（prefill + 排队） |
+| `inter_token_timeout` | float | `15.0` | 首个 token 后 token 间最大等待秒数 |
+| `retry_on_timeout` | bool | `false` | 超时后是否重试（需 `max_retries > 0`） |
 | `max_retries` | int | `3` | 请求失败重试次数 |
 | `enable_thinking` | bool | `false` | 启用推理模式（Qwen3/DeepSeek-R1 等）。开启后模型先输出 `...` 推理过程再输出答案，`content` 和 `logprobs` 均包含推理 token。**仅当蒸馏目标为推理模型时开启** |
 
@@ -173,10 +179,10 @@ ARD 采用**分层 TOML 配置**模型。有两个配置文件：
 TOML 不支持 `null` 值。要让 API 服务商自行决定某个值（如 `max_tokens`），
 请在 `config.toml` 中**注释掉或删除对应行**：
 
-\`\`\`toml
+```toml
 [input_generator]
 # max_tokens = 4096   ← 注释掉 → API 使用自己的默认值
-\`\`\`
+```
 
 pydantic 配置模型使用 `None` 作为可选字段的默认值。当字段为 `None` 时，
 它会被完全从 API 请求中省略。

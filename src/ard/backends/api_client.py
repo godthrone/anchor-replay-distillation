@@ -15,6 +15,7 @@ import base64
 import json
 import logging
 import queue
+import socket
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
@@ -25,6 +26,14 @@ from typing import Any, Generator
 import httpx
 
 logger = logging.getLogger(__name__)
+
+
+# ── Exception types ─────────────────────────────────────────────────────────
+
+
+class ARDTimeoutError(RuntimeError):
+    """Raised when a streaming request exceeds the configured timeout."""
+
 
 # ── Dataclasses ────────────────────────────────────────────────────────────
 
@@ -38,7 +47,6 @@ class ChatAPIConfig:
     api_key: str
     temperature: float = 0.7
     max_tokens: int | None = None  # None means omit from request (use provider default)
-    timeout: float = 60.0  # legacy — retained for backward compatibility
     connect_timeout: float = 10.0  # connection / TLS handshake
     first_token_timeout: float = 60.0  # prefill / time-to-first-token
     inter_token_timeout: float = 15.0  # stalls between tokens during generation
@@ -169,6 +177,11 @@ def _iter_lines_with_timeout(
     - Before the first ``data:`` line arrives → *first_token_timeout*
     - After the first ``data:`` line → *inter_token_timeout*
 
+    On timeout, signals the reader thread to stop, attempts to shut down
+    the underlying socket to interrupt a blocked ``recv()``, and raises
+    :exc:`ARDTimeoutError`.  A ``finally`` block ensures the response is
+    closed and the reader thread is joined.
+
     Args:
         response: An ``httpx.Response`` from a streaming request.
         first_token_timeout: Maximum seconds to wait for the first SSE line.
@@ -178,14 +191,17 @@ def _iter_lines_with_timeout(
         Raw line strings (including ``"data: ..."`` prefix and ``"[DONE]"``).
 
     Raises:
-        RuntimeError: If a timeout is exceeded in either phase.
+        ARDTimeoutError: If a timeout is exceeded in either phase.
     """
     line_queue: queue.Queue[tuple[str, str | Exception | None]] = queue.Queue()
+    stop_event = threading.Event()
 
     def _read_lines() -> None:
         try:
             for line in response.iter_lines():
                 line_queue.put(("line", line))
+                if stop_event.is_set():
+                    break
         except Exception as exc:
             line_queue.put(("error", exc))
         line_queue.put(("done", None))
@@ -194,26 +210,42 @@ def _iter_lines_with_timeout(
     reader_thread.start()
 
     first_token = True
-    while True:
-        try:
-            timeout = first_token_timeout if first_token else inter_token_timeout
-            kind, value = line_queue.get(timeout=timeout)
-        except queue.Empty:
-            phase = "first token (prefill)" if first_token else "inter-token"
-            raise RuntimeError(
-                f"Streaming request timed out waiting for {phase} "
-                f"(timeout={timeout:.0f}s)"
-            )
+    try:
+        while True:
+            try:
+                timeout = first_token_timeout if first_token else inter_token_timeout
+                kind, value = line_queue.get(timeout=timeout)
+            except queue.Empty:
+                stop_event.set()
+                # Attempt to interrupt a blocked recv() on the underlying socket
+                # so the reader thread can exit promptly (zombie-request defense).
+                try:
+                    sock = response._transport._proxy._sock
+                    sock.shutdown(socket.SHUT_RD)
+                except Exception:
+                    pass
+                phase = "first token (prefill)" if first_token else "inter-token"
+                raise ARDTimeoutError(
+                    f"Streaming request timed out waiting for {phase} "
+                    f"(timeout={timeout:.0f}s)"
+                )
 
-        if kind == "done":
-            break
-        if kind == "error":
-            raise value  # type: ignore[misc]
-        # kind == "line"
-        assert isinstance(value, str) or value is None
-        if value is not None:
-            first_token = False
-            yield value
+            if kind == "done":
+                break
+            if kind == "error":
+                raise value  # type: ignore[misc]
+            # kind == "line"
+            assert isinstance(value, str) or value is None
+            if value is not None:
+                first_token = False
+                yield value
+    finally:
+        stop_event.set()
+        try:
+            response.close()
+        except Exception:
+            pass
+        reader_thread.join(timeout=5.0)
 
 
 def _send_streaming_request(
@@ -228,8 +260,10 @@ def _send_streaming_request(
     then parses SSE ``data:`` chunks.  Timeouts are layered:
 
     1. ``connect_timeout`` — TCP connection + TLS handshake (httpx-level)
-    2. ``first_token_timeout`` — wait for the first ``data:`` line (our loop)
-    3. ``inter_token_timeout`` — wait between lines during generation (our loop)
+    2. ``read=30.0`` — httpx-level per-read timeout as a safety net
+       against permanently blocked receive operations
+    3. ``first_token_timeout`` — wait for the first ``data:`` line (our loop)
+    4. ``inter_token_timeout`` — wait between lines during generation (our loop)
 
     Args:
         config: Endpoint and timeout configuration.
@@ -244,16 +278,18 @@ def _send_streaming_request(
         is ``False``, otherwise a dict ``{"token_ids": [...], "log_probs": [...]}``.
 
     Raises:
-        httpx.TimeoutException: On connect-timeout.
-        RuntimeError: On HTTP errors, SSE parse errors, or streaming timeouts.
+        httpx.TimeoutException: On connect-timeout or read-timeout.
+        RuntimeError: On HTTP errors or SSE parse errors.
+        ARDTimeoutError: On streaming timeouts (from :func:`_iter_lines_with_timeout`).
     """
     headers: dict[str, str] = {"Content-Type": "application/json"}
     if config.api_key:
         headers["Authorization"] = f"Bearer {config.api_key}"
 
-    # Disable httpx-level total/read timeouts — our _iter_lines_with_timeout
-    # enforces the per-phase timeouts directly.
-    http_timeout = httpx.Timeout(None, connect=config.connect_timeout)
+    # Per-phase timeouts are enforced by _iter_lines_with_timeout.
+    # httpx-level read=30.0 acts as a safety net — if no data arrives for 30 s
+    # the read thread will not block indefinitely (zombie-request defense).
+    http_timeout = httpx.Timeout(None, connect=config.connect_timeout, read=30.0)
 
     content_parts: list[str] = []
     finish_reason: str | None = None
@@ -317,20 +353,16 @@ def _send_streaming_request(
     return "".join(content_parts), finish_reason, logprobs_result
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 def _is_timeout_error(exc: Exception) -> bool:
-    """Check if an exception is a timeout-related error."""
+    """Check if an exception is a timeout-related error.
+
+    Checks for :class:`ARDTimeoutError` (our own timeout),
+    :class:`httpx.TimeoutException` (httpx-level timeout), or a
+    ``"timed out"`` substring in the message (string fallback for
+    backward compatibility).
+    """
+    if isinstance(exc, ARDTimeoutError):
+        return True
     if isinstance(exc, httpx.TimeoutException):
         return True
     msg = str(exc).lower()
@@ -407,20 +439,48 @@ class ChatAPIClient:
                 return content.strip()
             except RuntimeError as exc:
                 if _is_timeout_error(exc) and not self._config.retry_on_timeout:
+                    logger.warning(
+                        "Streaming request timed out (retry_on_timeout=false, failing fast). "
+                        "Set retry_on_timeout=true to enable automatic retries."
+                    )
                     raise
                 last_error = exc
                 if attempt < self._config.max_retries:
-                    time.sleep(min(2.0 ** attempt, 30.0))
+                    delay = min(2.0 ** attempt, 30.0)
+                    if _is_timeout_error(exc):
+                        logger.warning(
+                            "Attempt %d/%d failed (timeout). Retrying in %.1fs...",
+                            attempt + 1, self._config.max_retries + 1, delay,
+                        )
+                    else:
+                        logger.warning(
+                            "Attempt %d/%d failed: %s. Retrying in %.1fs...",
+                            attempt + 1, self._config.max_retries + 1, exc, delay,
+                        )
+                    time.sleep(delay)
             except httpx.TimeoutException as exc:
                 if not self._config.retry_on_timeout:
-                    raise RuntimeError(
+                    logger.warning(
+                        "Streaming request timed out (retry_on_timeout=false, failing fast). "
+                        "Set retry_on_timeout=true to enable automatic retries."
+                    )
+                    raise ARDTimeoutError(
                         f"Streaming request timed out after "
                         f"{self._config.max_retries + 1} attempt(s)"
                     ) from exc
                 last_error = exc
                 if attempt < self._config.max_retries:
-                    time.sleep(min(2.0 ** attempt, 30.0))
+                    delay = min(2.0 ** attempt, 30.0)
+                    logger.warning(
+                        "Attempt %d/%d failed (timeout). Retrying in %.1fs...",
+                        attempt + 1, self._config.max_retries + 1, delay,
+                    )
+                    time.sleep(delay)
 
+        logger.error(
+            "All %d attempts failed: %s",
+            self._config.max_retries + 1, last_error,
+        )
         raise RuntimeError(
             f"Chat request failed after {self._config.max_retries + 1} attempt(s): {last_error}"
         ) from last_error
@@ -476,20 +536,48 @@ class ChatAPIClient:
                 }
             except RuntimeError as exc:
                 if _is_timeout_error(exc) and not self._config.retry_on_timeout:
+                    logger.warning(
+                        "Streaming request timed out (retry_on_timeout=false, failing fast). "
+                        "Set retry_on_timeout=true to enable automatic retries."
+                    )
                     raise
                 last_error = exc
                 if attempt < self._config.max_retries:
-                    time.sleep(min(2.0 ** attempt, 30.0))
+                    delay = min(2.0 ** attempt, 30.0)
+                    if _is_timeout_error(exc):
+                        logger.warning(
+                            "Attempt %d/%d failed (timeout). Retrying in %.1fs...",
+                            attempt + 1, self._config.max_retries + 1, delay,
+                        )
+                    else:
+                        logger.warning(
+                            "Attempt %d/%d failed: %s. Retrying in %.1fs...",
+                            attempt + 1, self._config.max_retries + 1, exc, delay,
+                        )
+                    time.sleep(delay)
             except httpx.TimeoutException as exc:
                 if not self._config.retry_on_timeout:
-                    raise RuntimeError(
+                    logger.warning(
+                        "Streaming request timed out (retry_on_timeout=false, failing fast). "
+                        "Set retry_on_timeout=true to enable automatic retries."
+                    )
+                    raise ARDTimeoutError(
                         f"Streaming request timed out after "
                         f"{self._config.max_retries + 1} attempt(s)"
                     ) from exc
                 last_error = exc
                 if attempt < self._config.max_retries:
-                    time.sleep(min(2.0 ** attempt, 30.0))
+                    delay = min(2.0 ** attempt, 30.0)
+                    logger.warning(
+                        "Attempt %d/%d failed (timeout). Retrying in %.1fs...",
+                        attempt + 1, self._config.max_retries + 1, delay,
+                    )
+                    time.sleep(delay)
 
+        logger.error(
+            "All %d attempts failed: %s",
+            self._config.max_retries + 1, last_error,
+        )
         raise RuntimeError(
             f"Chat request failed after {self._config.max_retries + 1} attempt(s): {last_error}"
         ) from last_error

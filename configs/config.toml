@@ -12,9 +12,9 @@ temperature = 0.8
 # provider decide (recommended for most use cases).
 # Uncomment and set a value to enforce a limit.
 # max_tokens = 4096
-timeout = 180.0
 connect_timeout = 10.0
-first_token_timeout = 60.0
+# Prefill + queue wait timeout. Default: 300s (5 minutes)
+first_token_timeout = 300.0
 inter_token_timeout = 15.0
 max_retries = 3
 retry_on_timeout = false
@@ -28,9 +28,9 @@ temperature = 0.0
 # provider decide (recommended for most use cases).
 # Uncomment and set a value to enforce a limit.
 # max_tokens = 4096
-timeout = 180.0
 connect_timeout = 10.0
-first_token_timeout = 60.0
+# Prefill + queue wait timeout. Default: 300s (5 minutes)
+first_token_timeout = 300.0
 inter_token_timeout = 15.0
 max_retries = 3
 retry_on_timeout = false
@@ -55,6 +55,11 @@ system_persona = "none"
 max_turns_with_image = 1
 # Path to pre-computed ontology embeddings for farthest-point sampling
 embeddings_path = "data/anchor_ontology_embeddings.json"
+
+# Consecutive timeouts to trigger backpressure cooldown
+backpressure_threshold = 3
+# Backpressure cooldown pause in seconds
+backpressure_cooldown = 60.0
 
 [ontology]
 path = "data/anchor_ontology.json"

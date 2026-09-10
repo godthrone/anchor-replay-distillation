@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import random
-import shutil
 import sys
 import time
 from pathlib import Path
@@ -79,10 +78,14 @@ def run(
         output_path.unlink()
         logger.info("Overwrite mode: cleared existing anchor bank at %s", output_path)
 
-    # Backup config to output directory for reproducibility
-    base_config = Path("configs/config.toml")
-    if base_config.exists():
-        shutil.copy2(base_config, output_dir / "config.toml")
+    # Backup merged config to output directory for reproducibility
+    import json
+    config_json_path = output_dir / "config.json"
+    config_json_path.write_text(
+        json.dumps(config.model_dump(mode="json"), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    logger.info("Merged config snapshot written to %s", config_json_path)
 
     # ── Checkpoint / resume ───────────────────────────────────────────────
     existing_count = count_existing_anchors(output_path)
@@ -124,7 +127,6 @@ def run(
             api_key=config.input_generator.api_key,
             temperature=config.input_generator.temperature,
             max_tokens=config.input_generator.max_tokens,
-            timeout=config.input_generator.timeout,
             connect_timeout=config.input_generator.connect_timeout,
             first_token_timeout=config.input_generator.first_token_timeout,
             inter_token_timeout=config.input_generator.inter_token_timeout,
@@ -139,7 +141,6 @@ def run(
             api_key=config.target_model.api_key,
             temperature=config.target_model.temperature,
             max_tokens=config.target_model.max_tokens,
-            timeout=config.target_model.timeout,
             connect_timeout=config.target_model.connect_timeout,
             first_token_timeout=config.target_model.first_token_timeout,
             inter_token_timeout=config.target_model.inter_token_timeout,
@@ -226,6 +227,8 @@ def run(
         target_model_name=config.target_model.model_name,
         concurrency=gen_config.concurrency,
         output_path=output_path,
+        backpressure_threshold=config.generation.backpressure_threshold,
+        backpressure_cooldown=config.generation.backpressure_cooldown,
     )
 
     # ── Build manifest from ALL anchors (existing + new) ──────────────────

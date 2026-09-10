@@ -135,7 +135,10 @@ All parameters are defined in `configs/config.toml`. Secret fields (`api_base`,
 | `api_key` | string | `""` | API key (secret — fill in override) |
 | `temperature` | float | `0.8` | Sampling temperature, higher = more random |
 | `max_tokens` | int | `4096` | Maximum tokens per response |
-| `timeout` | float | `180.0` | Request timeout in seconds |
+| `connect_timeout` | float | `10.0` | TCP connection + TLS handshake timeout in seconds |
+| `first_token_timeout` | float | `300.0` | Maximum wait for first token (prefill + queue), in seconds |
+| `inter_token_timeout` | float | `15.0` | Maximum wait between tokens after first, in seconds |
+| `retry_on_timeout` | bool | `false` | Whether to retry on timeout errors (requires `max_retries > 0`) |
 | `max_retries` | int | `3` | Retries on failure |
 
 ### `[target_model]` — Teacher Model
@@ -147,7 +150,10 @@ All parameters are defined in `configs/config.toml`. Secret fields (`api_base`,
 | `api_key` | string | `""` | API key (secret) |
 | `temperature` | float | `0.0` | Sampling temperature, 0.0 = deterministic |
 | `max_tokens` | int | `4096` | Maximum tokens per response |
-| `timeout` | float | `180.0` | Request timeout in seconds |
+| `connect_timeout` | float | `10.0` | TCP connection + TLS handshake timeout in seconds |
+| `first_token_timeout` | float | `300.0` | Maximum wait for first token (prefill + queue), in seconds |
+| `inter_token_timeout` | float | `15.0` | Maximum wait between tokens after first, in seconds |
+| `retry_on_timeout` | bool | `false` | Whether to retry on timeout errors (requires `max_retries > 0`) |
 | `max_retries` | int | `3` | Retries on failure |
 | `enable_thinking` | bool | `false` | Enable reasoning mode (Qwen3, DeepSeek-R1, etc.). When enabled, the model outputs `...` reasoning before the answer; both `content` and `logprobs` include reasoning tokens. **Only enable when distilling to a reasoning model** |
 

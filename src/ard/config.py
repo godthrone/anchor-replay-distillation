@@ -37,9 +37,8 @@ class _LLMConfig(BaseModel):
     model_name: str | None = None
     api_key: str | None = None  # secret — override in config.override.toml
     max_tokens: int | None = None
-    timeout: float = 180.0
     connect_timeout: float = 10.0
-    first_token_timeout: float = 60.0
+    first_token_timeout: float = 300.0
     inter_token_timeout: float = 15.0
     max_retries: int = 3
     retry_on_timeout: bool = False
@@ -91,6 +90,8 @@ class GenerationConfig(BaseModel):
     system_persona: Literal["none", "one_sentence", "appropriate", "detailed"] = "none"
     max_turns_with_image: int = Field(default=1, ge=0, le=5)
     embeddings_path: str = "data/anchor_ontology_embeddings.json"
+    backpressure_threshold: int = 3       # 连续超时触发冷却的阈值
+    backpressure_cooldown: float = 60.0   # 冷却暂停秒数
 
     @model_validator(mode="after")
     def _validate_image_turns(self) -> "GenerationConfig":

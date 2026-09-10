@@ -6,40 +6,50 @@
 # You CANNOT add new sections or fields not present in config.toml.
 
 [input_generator]
-# API endpoint URL (OpenAI-compatible)
-api_base = "REPLACE_ME"
-# Model name as registered in the API
-model_name = "REPLACE_ME"
-# API key (leave empty if not required)
-api_key = "REPLACE_ME"
-# Sampling temperature for question generation
-temperature = 0.8
+# Base URL for the OpenAI-compatible API endpoint
+# api_base = "http://localhost:8000/v1"
+# Model name to use
+# model_name = "your-model"
+# API key (leave commented if not needed)
+# api_key = ""
+# Sampling temperature (0.0 = deterministic)
+# temperature = 0.8
 # Maximum tokens per response
-max_tokens = 4096
-# Request timeout in seconds
-timeout = 180.0
+# max_tokens = 32768
+# TCP connection + TLS handshake timeout
+# connect_timeout = 10.0
+# Maximum wait for first SSE line (prefill + queue). Default: 300s
+# first_token_timeout = 300.0
+# Maximum wait between SSE lines after first token. Default: 15s
+# inter_token_timeout = 15.0
 # Number of retries on failure
-max_retries = 3
+# max_retries = 3
+# Whether to retry on timeout errors (requires max_retries > 0)
+# retry_on_timeout = false
 
 [target_model]
-# API endpoint URL (OpenAI-compatible)
-api_base = "REPLACE_ME"
-# Model name for the teacher model
-model_name = "REPLACE_ME"
-# API key (leave empty if not required)
-api_key = "REPLACE_ME"
-# Sampling temperature for answer generation (0.0 = deterministic)
-temperature = 0.0
+# Base URL for the OpenAI-compatible API endpoint
+# api_base = "http://localhost:8000/v1"
+# Model name to use
+# model_name = "your-model"
+# API key (leave commented if not needed)
+# api_key = ""
+# Sampling temperature (0.0 = deterministic)
+# temperature = 0.0
 # Maximum tokens per response
-max_tokens = 4096
-# Request timeout in seconds
-timeout = 180.0
+# max_tokens = 32768
+# TCP connection + TLS handshake timeout
+# connect_timeout = 10.0
+# Maximum wait for first SSE line (prefill + queue). Default: 300s
+# first_token_timeout = 300.0
+# Maximum wait between SSE lines after first token. Default: 15s
+# inter_token_timeout = 15.0
 # Number of retries on failure
-max_retries = 3
+# max_retries = 3
+# Whether to retry on timeout errors (requires max_retries > 0)
+# retry_on_timeout = false
 # Enable thinking/reasoning mode (Qwen3, DeepSeek-R1, etc.)
-# When True, the model outputs reasoning before the final answer.
-# Only enable when distilling to a reasoning-capable student model.
-enable_thinking = false
+# enable_thinking = false
 
 [generation]
 # Number of anchors to generate

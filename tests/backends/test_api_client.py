@@ -23,7 +23,6 @@ def test_chat_api_config_defaults():
     c = ChatAPIConfig(api_base="https://api.example.com", model_name="m", api_key="k")
     assert c.temperature == 0.7
     assert c.max_tokens is None
-    assert c.timeout == 60.0
     assert c.max_retries == 2
     assert c.chat_completions_url == "https://api.example.com/chat/completions"
 
