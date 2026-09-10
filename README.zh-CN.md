@@ -168,6 +168,19 @@ ARD 采用**分层 TOML 配置**模型。有两个配置文件：
 | `directory` | string | `""` | 输出目录（空=自动生成时间戳目录） |
 | `overwrite` | bool | `false` | 是否覆盖已有输出目录 |
 
+### 将字段设为"空"/使用 API 默认值
+
+TOML 不支持 `null` 值。要让 API 服务商自行决定某个值（如 `max_tokens`），
+请在 `config.toml` 中**注释掉或删除对应行**：
+
+\`\`\`toml
+[input_generator]
+# max_tokens = 4096   ← 注释掉 → API 使用自己的默认值
+\`\`\`
+
+pydantic 配置模型使用 `None` 作为可选字段的默认值。当字段为 `None` 时，
+它会被完全从 API 请求中省略。
+
 ## CLI
 
 ```

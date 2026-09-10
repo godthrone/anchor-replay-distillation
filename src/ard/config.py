@@ -36,7 +36,7 @@ class _LLMConfig(BaseModel):
     api_base: str | None = None
     model_name: str | None = None
     api_key: str | None = None  # secret — override in config.override.toml
-    max_tokens: int = 4096
+    max_tokens: int | None = None
     timeout: float = 180.0
     connect_timeout: float = 10.0
     first_token_timeout: float = 60.0

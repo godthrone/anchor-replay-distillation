@@ -178,6 +178,19 @@ All parameters are defined in `configs/config.toml`. Secret fields (`api_base`,
 | `directory` | string | `""` | Output directory (empty = auto-generated timestamped dir) |
 | `overwrite` | bool | `false` | Overwrite existing output directory |
 
+### Setting a field to "empty" / using API defaults
+
+TOML does not have a `null` value. To let the API provider decide a value
+(e.g. `max_tokens`), **comment out or delete the line** in `config.toml`:
+
+\`\`\`toml
+[input_generator]
+# max_tokens = 4096   ← commented out → API uses its own default
+\`\`\`
+
+The pydantic config model uses `None` as the default for optional fields.
+When a field is `None`, it is omitted from the API request entirely.
+
 ## CLI
 
 ```
