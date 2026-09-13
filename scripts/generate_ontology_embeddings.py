@@ -35,7 +35,7 @@ def parse_args() -> argparse.Namespace:
         "--ontology",
         required=True,
         type=Path,
-        help="Path to anchor_ontology.json",
+        help="Path to anchor_ontology.json (e.g. ontology/anchor_ontology.json)",
     )
     parser.add_argument(
         "--output",
