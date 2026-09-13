@@ -141,6 +141,13 @@ All parameters are defined in `configs/config.toml`. Secret fields (`api_base`,
 | `retry_on_timeout` | bool | `false` | Whether to retry on timeout errors (requires `max_retries > 0`) |
 | `max_retries` | int | `3` | Retries on failure |
 
+> **Note:** the question generator never runs in reasoning mode. It is always
+> called with `enable_thinking = false` sent explicitly to the server, and this
+> is **not** configurable — `[input_generator]` has no `enable_thinking` field,
+> and `[target_model].enable_thinking` affects the teacher model only. The
+> generated user turn is stored verbatim as the anchor's question, so reasoning
+> tokens would spend `max_tokens` on text that must not end up in the question.
+
 ### `[target_model]` — Teacher Model
 
 | Parameter | Type | Default | Description |
@@ -155,7 +162,13 @@ All parameters are defined in `configs/config.toml`. Secret fields (`api_base`,
 | `inter_token_timeout` | float | `15.0` | Maximum wait between tokens after first, in seconds |
 | `retry_on_timeout` | bool | `false` | Whether to retry on timeout errors (requires `max_retries > 0`) |
 | `max_retries` | int | `3` | Retries on failure |
-| `enable_thinking` | bool | `false` | Enable reasoning mode (Qwen3, DeepSeek-R1, etc.). When enabled, the model outputs `...` reasoning before the answer; both `content` and `logprobs` include reasoning tokens. **Only enable when distilling to a reasoning model** |
+| `enable_thinking` | bool | `false` | Enable reasoning mode (Qwen3, DeepSeek-R1, etc.). When enabled, the model outputs `...` reasoning before the answer; both `content` and `logprobs` include reasoning tokens. **Only enable when distilling to a reasoning model**. **This value is always sent to the server** — `false` explicitly disables reasoning, `true` explicitly enables it |
+
+> **⚠️ Behavior change (v0.3+):** Prior versions did **not** send `enable_thinking` to the server
+> when set to `false` — the server's chat template treated "undefined" as "reasoning ON",
+> so `false` was silently ignored. As of this version, `enable_thinking` is **always** sent
+> explicitly. If you relied on the old behavior (reasoning *on* with `enable_thinking = false`),
+> set it to `true`.
 
 ### `[generation]` — Generation Control
 
@@ -218,8 +231,52 @@ A single command handles everything:
 outputs/<dataset_name>/
 ├── anchor_bank.jsonl          # Unified anchor data (graspo-compatible)
 ├── images/                    # Multimodal images (if any)
-└── manifest.json              # Summary statistics
+├── logs/
+│   ├── ard.log                # Human-readable pipeline log (INFO+)
+│   ├── ard_debug.log          # Machine-parseable debug log (DEBUG+)
+│   └── ard_error.log          # Error log (ERROR+)
+└── manifest.json              # Summary statistics + generation health counters
 ```
+
+### `manifest.json`
+
+Besides the anchor-bank summary (`total_anchors` / `domains` / `languages` /
+`capabilities` / `output_dir`), the manifest reports how healthy the run was:
+
+```json
+"generation": {
+  "counters": {
+    "requested": 120,
+    "succeeded": 101,
+    "abandoned_total": 19,
+    "abandoned_by_reason": {"timeout": 12, "empty_content": 4, "logprobs_error": 3},
+    "written": 100,
+    "rejected_invalid_shape": 0,
+    "duplicate_ids": 1,
+    "backpressure_events": 2
+  },
+  "failures": {
+    "key_missing": 3,
+    "empty_content": 4,
+    "reasoning_only_responses": 4,
+    "truncated_empty": 4
+  }
+}
+```
+
+* `counters` — where every requested anchor ended up: produced, written, dropped
+  (with its machine-readable reason), rejected by the message-shape gate,
+  de-duplicated by id, and how many backpressure cooldowns were triggered.
+* `failures` — process-level counters: log-probs extraction failures by reason,
+  plus reasoning / empty-content counts that reveal "thinking ate the token budget".
+
+Both sub-objects are written **only when non-empty**, and zero-valued entries are
+dropped, so a healthy run gains no noise and an unhealthy one cannot look healthy.
+
+**Backward compatibility:** `generation` is optional. Manifests written before it
+existed stay readable — treat a missing field as "no generation statistics were
+recorded for that run", not as all-zero (test with `manifest.get("generation") is None`).
+The six pre-existing fields keep their meaning and shape.
 
 ### Data Format
 

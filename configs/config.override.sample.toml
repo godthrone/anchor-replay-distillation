@@ -49,6 +49,7 @@
 # Whether to retry on timeout errors (requires max_retries > 0)
 # retry_on_timeout = false
 # Enable thinking/reasoning mode (Qwen3, DeepSeek-R1, etc.)
+# Uncomment to override: false = disable reasoning, true = enable.
 # enable_thinking = false
 
 [generation]

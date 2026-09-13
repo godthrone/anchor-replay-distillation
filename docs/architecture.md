@@ -106,7 +106,7 @@ graph TD
 | **Bank** | `domain/bank.py` | 锚点存储：序列化、追加、读取、构建 manifest |
 | **Image Store** | `domain/image_store.py` | 图片扫描、格式转换（RAW/ BMP/ TIFF/ GIF/ WebP → JPG）、随机采样、复制到输出目录 |
 | **Logging** | `logging.py` | 提供 `get_logger` 辅助函数，统一所有模块的日志格式和输出目标 |
-| **API Client** | `backends/api_client.py` | 基于 httpx 的 OpenAI 兼容客户端，支持 SSE 流式生成、分层超时控制、log-probs 提取和背压传播 |
+| **API Client** | `backends/api_client.py` | 基于 httpx 的 OpenAI 兼容客户端，支持 SSE 流式生成、分层超时控制、log-probs 提取和背压传播；识别并统计 `delta.reasoning`（推理 token 只计数、绝不进入 `target_answer`），推理吃光预算导致的空正文以 `ARDEmptyContentError` 显式失败 |
 
 ### 2.3 模块间接口
 
@@ -336,6 +336,14 @@ sequenceDiagram
     API-->>ARD: {"choices": [{"message": {"content": "..."}, "logprobs": {"content": [{"token": "The", "logprob": -0.23}, ...]}}]}
 
     ARD->>ARD: 从 SSE delta chunks 收集 logprobs → {"token_ids": [...], "log_probs": [...]}
+    ARD->>ARD: delta.reasoning 仅计数（reasoning_chars/reasoning_responses）→ 不进入 content 与 messages
+```
+
+真机 chunk 形状（vLLM 0.22.0，同一 chunk 里 `reasoning` 与 `content` 可同时出现，
+未产出正文的一侧为 `null`）：
+
+```text
+data: {"choices":[{"delta":{"reasoning":"Let me think","content":null},"logprobs":{"content":null}}]}
 ```
 
 ### 5.2 输出数据格式
@@ -384,21 +392,41 @@ ARD 不依赖本地 HF 模型，而是通过远程 API 获取。
 
 ### 5.4 token_ids 的格式与跨 tokenizer 兼容性
 
-vLLM API 返回的 `token_ids` 有两种来源：
+**真机实测（vLLM 0.22.0，121 条 anchor）**：`logprobs.content[]` 的每个条目实际形状是
 
-1. **整数 ID（优先）**：vLLM 响应中 `logprobs.content[].token_id` 字段返回的整数 token ID。
-   这是 tokenizer 内部的数值表示，与 teacher 模型的 tokenizer 词汇表一一对应。
-2. **字符串 fallback**：当 `token_id` 不可用时，使用 `logprobs.content[].token` 字段的字符串表示。
-   字符串 token 是跨 tokenizer 更通用的形式，因为它是人类可读的文本表示。
+```json
+{"token": "The", "logprob": -0.23, "bytes": [84, 104, 101], "top_logprobs": [...]}
+```
 
-**标准 OPD 要求**：teacher 和 student 使用**相同的 tokenizer**。
-整数 token ID 在相同 tokenizer 下可直接用于 OPD 训练，无需额外映射。
-如果 teacher 和 student 的 tokenizer 不同，则字符串 token 形式更通用——
-下游训练框架可根据自己的 tokenizer 重新编码。
+**`token_id` 字段根本不存在**——121 条中 118 条如此（另外 3 条是早期抓取样本），
+即"整数 ID（优先）"这一分支在当前服务端上不可达。
 
-**ARD 的默认行为**：优先使用整数 `token_id`（vLLM 原生返回），
-以字符串 `token` 为 fallback。输出 JSON 中的 `token_ids` 字段名
-（历史原因保留复数形式）实际存储的是 token 的文本表示数组。
+**ARD 的实际行为**：`api_client.py` 取
+
+```python
+tid = lp.get("token") or lp.get("token_id", "")
+```
+
+即**字符串 `token` 是第一来源**，整数 `token_id` 只在服务端**确实返回**它时才会被用到
+（保留该分支是为了兼容别的 OpenAI 兼容服务端）。因此输出里的 `token_ids`
+（字段名因 graspo 兼容而保留复数形式）在真机上**几乎总是字符串数组**：
+
+```json
+"logprobs": {"token_ids": ["The", " answer"], "log_probs": [-0.23, -0.5]}
+```
+
+**跨 tokenizer 语义**：字符串 token 是人类可读的文本表示，与具体 tokenizer 的词表无关。
+它**不等于"任何一个 tokenizer 下的一个 token"**——把字符串 token 单独拿去编码，
+得到的可能是多个子词（例如 `" answer"` 在别的词表里可能被拆成 `" answer"` + 其余部分），
+也可能与生成的切分不同。因此：
+
+* teacher 与 student 使用**同一 tokenizer** 时，监督信号最精确的方式是**用该 tokenizer 重新编码
+  `content`**，并按位置与 `log_probs` 对齐；字符串 token 用于校验切分是否一致。
+* tokenizer 不同时，字符串形式是唯一可移植的表示，但下游必须按自己的词表重新编码，
+  并接受切分不对齐的代价。
+
+**整数 ID 的适用条件**：只有在服务端确实返回 `token_id` 且 teacher/student 共享词表时，
+整数才能直接用于 OPD 训练、无需额外映射。
 
 ### 5.5 流式 SSE 与分层超时
 
@@ -419,6 +447,13 @@ ARD 使用 `httpx` 替换 `urllib`，通过 SSE（Server-Sent Events）流式获
   实现分阶段超时：首个 token 前用 `first_token_timeout`，之后切换到 `inter_token_timeout`。
 - `retry_on_timeout` 默认 `false`：超时不重试，避免超时放大——每个 API 的 `max_retries` 仅用于
   非超时错误（如 HTTP 503、连接拒绝等），超时异常直接向上传播。
+- 超时/结束时除关闭 response 外，还会对读线程所阻塞的 socket 执行
+  `shutdown(SHUT_RDWR)` + `SO_LINGER(1, 0)`，确保读线程立即退出、服务端立刻收到 RST
+  并停止生成（httpx 的 `read` 超时被显式移除，论证见 `api_client.py` 的
+  `_iter_lines_with_timeout` docstring 与实测数据；实测释放耗时 5.04s → 0.79~0.93s）。
+- `delta.reasoning`（推理 token）只**计数**（`reasoning_chars` / `reasoning_responses`），
+  绝不进入 `content`、`messages` 或 `target_answer`；推理吃光 `max_tokens` 预算导致正文为空时，
+  不是"空答案"而是显式失败 `ARDEmptyContentError`。
 
 **流式 vs 非流式模式选择**：
 
@@ -464,47 +499,74 @@ sequenceDiagram
 ### 5.6 背压机制（Backpressure）
 
 当 vLLM 服务端过载时，大量并发流式请求可能同时超时，在客户端形成**僵尸请求级联**——
-所有线程阻塞等待超时，恢复后再次同时发起请求，导致服务端负载振荡。
+所有线程阻塞等待超时，恢复后再次同时发起请求，导致服务端负载振荡
+（实测形态：单次冻结 1750s、服务端 `Running:2/Waiting:27`、prompt 吞吐恒 0）。
 
-ARD 在 `generate_text_anchors()` 中实现了**背压机制**：
+**计数单位是"被放弃的 anchor"，不是"某一轮超时"。** 这是关键语义：
 
-1. `_generate_one_anchor()` 将 `httpx.TimeoutException` 显式 `raise`（不吞没），传播到调度层
-2. `generate_text_anchors()` 的 `as_completed` 循环捕获 `httpx.TimeoutException`，
-   递增 `consecutive_timeouts` 计数器
-3. 当 `consecutive_timeouts >= backpressure_threshold`（默认 3）时，
-   调用 `time.sleep(backpressure_cooldown)`（默认 60s）暂停所有并发请求
-4. 成功生成的 anchor 将计数器重置为 0
+* 一个 anchor 的任意一轮失败，都会**整体放弃该 anchor**（绝不跳过该轮——
+  跳过会造成连续同角色消息，破坏角色交替不变量）；因此"轮超时"与"anchor 失败"
+  在数量上并不同构，背压必须建立在后者之上，否则计数会被轮数稀释。
+* 每个 anchor 恰好对应一个 future，`future.result()` **只在**该 anchor 被放弃时抛异常，
+  所以调度层的 `as_completed` 循环是唯一能观察到"连续放弃"的地方。
+
+ARD 在 `generate_text_anchors()` 中实现**背压机制**：
+
+1. `_generate_one_anchor()` 中每一处失败都 `logger.exception(...)` 记录 traceback 后
+   **裸 `raise`** 重新抛出（不吞没、不改写异常类型），传播到调度层。
+2. `generate_text_anchors()` 的 `as_completed` 循环捕获异常，按**异常类型**分类
+   （`failure_reason()`，绝不按消息文本匹配），递增
+   `consecutive_server_failures` 计数器。
+3. 当 `consecutive_server_failures >= backpressure_threshold`（默认 3）时，
+   先打 WARNING（含已连续失败次数与冷却秒数），再 `time.sleep(backpressure_cooldown)`
+   （默认 60s）暂停**所有**并发请求——注意 future 仍在后台运行，冷却只是让调度层不再补发新请求。
+4. 冷却结束打 WARNING 并把计数器**重置为 0**；成功产出的 anchor 同样把计数器清零。
+
+**只有"服务端不稳"才计入背压**：`timeout`（`ARDTimeoutError`）与
+`transport_error`（`httpx.HTTPError`，如连接失败、HTTP 5xx）。
+`empty_content` / `logprobs_error` / `answer_too_short` 等**模型输出类失败**会被计数、
+会写进 manifest，但**不触发冷却**——同一 prompt 在同样预算下必然以同样方式失败，
+sleep 只是白等。
 
 ```mermaid
 flowchart TD
     START["Future 完成"] --> GET["future.result()"]
     GET --> CHECK{"异常类型?"}
 
-    CHECK -->|"httpx.TimeoutException"| INC["consecutive_timeouts += 1"]
-    INC --> THRESH{"consecutive_timeouts<br/>>= threshold?"}
-    THRESH -->|"是"| SLEEP["time.sleep(cooldown_seconds)"]
-    SLEEP --> RESET["consecutive_timeouts = 0"]
+    CHECK -->|"timeout / transport_error"| INC["consecutive_server_failures += 1"]
+    INC --> THRESH{"counter<br/>>= threshold?"}
+    THRESH -->|"是"| WARN["WARNING: 连续失败次数 + 冷却秒数"]
+    WARN --> SLEEP["sleep(cooldown_seconds)"]
+    SLEEP --> RESET["counter = 0<br/>backpressure_events += 1"]
     RESET --> NEXT["继续下一个 future"]
     THRESH -->|"否"| NEXT
 
-    CHECK -->|"成功 (GeneratedAnchor)"| RESET_OK["consecutive_timeouts = 0"]
+    CHECK -->|"empty_content / logprobs_error<br/>（模型输出类）"| COUNT["计数，但 counter 不变"]
+    COUNT --> NEXT
+
+    CHECK -->|"成功 (GeneratedAnchor)"| RESET_OK["counter = 0"]
     RESET_OK --> APPEND["追加到 anchors 列表"]
     APPEND --> NEXT
 
-    CHECK -->|"其他异常"| NEXT
+    CHECK -->|"其他异常（unexpected_error）"| NEXT
 ```
 
-**配置参数**（硬编码在 `generate_text_anchors()` 签名中，非 TOML 配置）：
+**配置参数**（`configs/config.toml` 的 `[generation]` 段，**完全可配**）：
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `backpressure_threshold` | 3 | 触发冷却的连续超时次数 |
+| `backpressure_threshold` | 3 | 触发冷却的连续服务端失败次数 |
 | `backpressure_cooldown` | 60.0 | 冷却暂停秒数 |
 
-**设计原理**：背压是 §3.3（预授权退路）的实践——超时是服务端过载的信号，
-冷却暂停改变代价（增加总耗时）但不改变结果（最终产出的 anchor 质量一致），
-且冷却参数在代码中显式声明。与 `retry_on_timeout=false` 配合：
+调用链：`configs/config.toml` → `config.py: GenerationConfig` → `pipeline.py` →
+`generate_text_anchors(backpressure_threshold=..., backpressure_cooldown=...)`，
+参数确实生效到 `text_anchor.py`。
+
+**设计原理**：背压是 §3.1（同效退路）的实践——超时放弃不改变"这一条 anchor 失败"
+这一结果，冷却只改变代价（增加总耗时）来避免雪上加霜。与 `retry_on_timeout=false` 配合：
 超时不重试（避免放大），而是通过背压让整个 Pipeline 降速等待服务端恢复。
+每次冷却都以 WARNING 显式告知（§3.2 透明退路），冷却次数写入 `manifest.json`
+的 `generation.counters.backpressure_events`。
 
 ---
 
@@ -664,10 +726,24 @@ overwrite = false       # 是否覆盖已有输出目录（预授权退路，遵
 
 **`enable_thinking` 说明**：
 
-`[target_model].enable_thinking` 控制教师模型是否输出推理过程（`...` 块）。
-默认 `false`（仅输出答案），适用于蒸馏非推理 student 模型。
-设为 `true` 后，content 和 logprobs 均包含推理 token，
-适用于蒸馏推理模型（如 Qwen3-235B → Qwen3-8B）。
+`[target_model].enable_thinking` 是**二态 bool**（`true` / `false`，没有"未配置"第三态），
+默认 `false`。该键由 `_build_payload()` **恒定显式发送**，且值必须是真正的 `bool`
+（配置层与出网前双重契约校验）。
+
+| 发送内容 | 服务端行为 | 后果 |
+|----------|-----------|------|
+| `false` | 关闭推理 | 仅输出答案，适用于蒸馏非推理 student 模型 |
+| `true` | 开启推理 | 推理以 `delta.reasoning` 单独下发，不进入 `target_answer`，但**先消耗 `max_tokens`** |
+| 省略该键 | 模板判定为 undefined → **等同于开启推理** | 与 `true` 同样危险，却没有任何显式声明 |
+| `null` | 既不切分推理、又仍开启思考 | **推理原文泄漏进 `content`**，污染蒸馏数据 |
+
+因此"未配置"不是安全的第三态：省略键和 `null` 都会开启推理，其中 `null` 还会把推理原文
+写进正文。ARD 的选择是永远显式发送真 bool。
+
+设为 `true` 时必须同时上调 `max_tokens`：推理先吃掉预算，预算不足时目标答案为空，
+该 anchor 以 `ARDEmptyContentError` 失败并被计入
+`manifest.json` 的 `generation.failures`（`empty_content` / `reasoning_only_responses` /
+`truncated_empty`）。适用于蒸馏推理模型（如 Qwen3-235B → Qwen3-8B）。
 详见 `README.zh-CN.md` 配置参考。
 
 ---
@@ -732,9 +808,47 @@ overwrite = false       # 是否覆盖已有输出目录（预授权退路，遵
     "summarization": 20,
     ...
   },
-  "output_dir": "outputs/ard_dataset_20260904_050800"
+  "output_dir": "outputs/ard_dataset_20260904_050800",
+  "generation": {
+    "counters": {
+      "requested": 120,
+      "succeeded": 101,
+      "abandoned_total": 19,
+      "abandoned_by_reason": {"timeout": 12, "empty_content": 4, "logprobs_error": 3},
+      "written": 100,
+      "rejected_invalid_shape": 0,
+      "duplicate_ids": 1,
+      "backpressure_events": 2
+    },
+    "failures": {
+      "key_missing": 3,
+      "empty_content": 4,
+      "reasoning_only_responses": 4,
+      "truncated_empty": 4,
+      "responses": 1212
+    }
+  }
 }
 ```
+
+**`generation` 段**是"这轮生成健康吗"的答案，与上面"产出了什么"互补：
+
+* `counters` — 每条被请求的 anchor 的归宿：`requested`（请求数）、`succeeded`（内存中产出）、
+  `abandoned_total` 与 `abandoned_by_reason`（被放弃及其机器可读原因）、`written`（真正落盘）、
+  `rejected_invalid_shape`（被出口形状门拦下）、`duplicate_ids`（被 id 去重拦下）、
+  `backpressure_events`（触发冷却次数）。
+* `failures` — 进程级失败计数：log-probs 提取失败按 reason 计数，
+  以及 reasoning/空正文计数（`responses`、`empty_content`、`reasoning_only_responses`、
+  `truncated_empty`）。
+
+两个子对象**只在非空时写出**，且**零值条目被丢弃**——健康的一轮不会因为新增字段而多出噪音，
+而"短了 19 条"或"logprobs 全空"的一轮**不可能**再看起来是健康的。
+
+**向后兼容**：`generation` 是**可选**字段。在它出现之前写下的 manifest 仍然可读——
+读取方必须以"字段缺失 = 该轮没有生成统计"处理，不得把缺失当成全部为零
+（检查用 `manifest.get("generation") is None`，不用真值判断）。
+`total_anchors` / `domains` / `languages` / `capabilities` / `output_dir` / `config`
+六个既有字段的语义与形状**未变**。
 
 ---
 
@@ -797,22 +911,25 @@ overwrite = false       # 是否覆盖已有输出目录（预授权退路，遵
 
 ### 核心模块
 
+> 行数为**本表更新时的实测值**（`wc -l`），会随代码演进过期；以仓库文件为准。
+
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `src/ard/cli.py` | 95 | CLI 入口 |
-| `src/ard/config.py` | 215 | 配置模型与加载 |
-| `src/ard/logging.py` | 21 | 统一日志配置（`get_logger` 辅助函数） |
-| `src/ard/pipeline.py` | 222 | 流程编排 |
+| `src/ard/cli.py` | 94 | CLI 入口 |
+| `src/ard/config.py` | 227 | 配置模型与加载 |
+| `src/ard/logging.py` | 135 | 统一日志配置（`get_logger` 辅助函数） |
+| `src/ard/pipeline.py` | 370 | 流程编排 |
 | `src/ard/core/types.py` | 93 | 核心数据类型 |
 | `src/ard/core/ontology.py` | 29 | 本体加载 |
 | `src/ard/core/embeddings.py` | 134 | 嵌入加载与 FPS 算法 |
-| `src/ard/core/_fps.py` | 346 | 分层 FPS 算法实现 |
+| `src/ard/core/_fps.py` | 350 | 分层 FPS 算法实现 |
 | `src/ard/core/sampler.py` | 151 | 锚点采样 |
-| `src/ard/core/quota.py` | 102 | 配额分配 |
-| `src/ard/domain/text_anchor.py` | 271 | 锚点生成 |
-| `src/ard/domain/bank.py` | 172 | 锚点存储 |
-| `src/ard/domain/image_store.py` | 265 | 图片管理（扫描、格式转换、采样、复制） |
-| `src/ard/backends/api_client.py` | 533 | API 客户端 |
+| `src/ard/core/quota.py` | 103 | 配额分配 |
+| `src/ard/domain/text_anchor.py` | 791 | 锚点生成（含背压计数器与失败分类） |
+| `src/ard/domain/bank.py` | 408 | 锚点存储（含写盘前形状/id 双门与 manifest 健康计数） |
+| `src/ard/domain/anchor_shape.py` | 82 | 消息形状契约（入口与出口的唯一实现） |
+| `src/ard/domain/image_store.py` | 263 | 图片管理（扫描、格式转换、采样、复制） |
+| `src/ard/backends/api_client.py` | 1338 | API 客户端 |
 
 ### 数据文件
 

@@ -131,6 +131,12 @@ ARD 采用**分层 TOML 配置**模型。有两个配置文件：
 | `retry_on_timeout` | bool | `false` | 超时后是否重试（需 `max_retries > 0`） |
 | `max_retries` | int | `3` | 请求失败重试次数 |
 
+> **注意：** 问题生成模型永远不会进入推理模式。它总是以 `enable_thinking = false`
+> 显式发送到服务端，且**不可配置** —— `[input_generator]` 没有 `enable_thinking`
+> 字段，`[target_model].enable_thinking` 只影响教师模型。生成出的 user 轮会被原样
+> 存为锚点的提问，因此推理 token 会先把 `max_tokens` 花在**不该出现在提问里**的
+> 文字上。
+
 ### `[target_model]` — 目标模型（教师模型）
 
 | 参数 | 类型 | 默认值 | 说明 |
@@ -145,7 +151,12 @@ ARD 采用**分层 TOML 配置**模型。有两个配置文件：
 | `inter_token_timeout` | float | `15.0` | 首个 token 后 token 间最大等待秒数 |
 | `retry_on_timeout` | bool | `false` | 超时后是否重试（需 `max_retries > 0`） |
 | `max_retries` | int | `3` | 请求失败重试次数 |
-| `enable_thinking` | bool | `false` | 启用推理模式（Qwen3/DeepSeek-R1 等）。开启后模型先输出 `...` 推理过程再输出答案，`content` 和 `logprobs` 均包含推理 token。**仅当蒸馏目标为推理模型时开启** |
+| `enable_thinking` | bool | `false` | 启用推理模式（Qwen3/DeepSeek-R1 等）。开启后模型先输出 `...` 推理过程再输出答案，`content` 和 `logprobs` 均包含推理 token。**仅当蒸馏目标为推理模型时开启**。该值**总会发送到服务端** — `false` 显式关闭推理，`true` 显式开启 |
+
+> **⚠️ 行为变更（v0.3+）：** 旧版本在 `enable_thinking = false` 时**不发送**该参数到服务端
+> — 服务端的 chat template 将"未定义"视为"推理开启"，因此 `false` 被静默忽略。
+> 自本版本起，`enable_thinking` 会**始终显式发送**。如果你依赖旧行为（`enable_thinking = false` 时
+> 推理仍开启），请将其设为 `true`。
 
 ### `[generation]` — 生成控制
 
@@ -208,8 +219,51 @@ ard --config <路径> [--override <路径>] [--image-dir <路径>] [--no-convert
 outputs/<dataset_name>/
 ├── anchor_bank.jsonl          # 统一锚点数据（graspo 兼容）
 ├── images/                    # 多模态图片（如有）
-└── manifest.json              # 统计摘要
+├── logs/
+│   ├── ard.log                # 人类可读流水线日志（INFO+）
+│   ├── ard_debug.log          # 机器可解析调试日志（DEBUG+）
+│   └── ard_error.log          # 错误日志（ERROR+）
+└── manifest.json              # 统计摘要 + 生成健康计数
 ```
+
+### `manifest.json`
+
+除锚点库摘要（`total_anchors` / `domains` / `languages` / `capabilities` /
+`output_dir`）外，manifest 还回答"这轮生成健康吗"：
+
+```json
+"generation": {
+  "counters": {
+    "requested": 120,
+    "succeeded": 101,
+    "abandoned_total": 19,
+    "abandoned_by_reason": {"timeout": 12, "empty_content": 4, "logprobs_error": 3},
+    "written": 100,
+    "rejected_invalid_shape": 0,
+    "duplicate_ids": 1,
+    "backpressure_events": 2
+  },
+  "failures": {
+    "key_missing": 3,
+    "empty_content": 4,
+    "reasoning_only_responses": 4,
+    "truncated_empty": 4
+  }
+}
+```
+
+* `counters` —— 每条被请求的 anchor 的归宿：产出、落盘、被放弃（含机器可读原因）、
+  被消息形状门拦下、被 id 去重拦下，以及触发背压冷却的次数。
+* `failures` —— 进程级失败计数：log-probs 提取失败按 reason 计数，
+  以及能暴露"思考吃光预算"的 reasoning / 空正文计数。
+
+两个子对象**只在非空时写出**，且**零值条目被丢弃**——健康的一轮不会因为新增字段多出噪音，
+而不健康的一轮**不可能**看起来健康。
+
+**向后兼容**：`generation` 是**可选**字段。在它出现之前写下的 manifest 仍然可读——
+字段缺失应理解为"该轮没有记录生成统计"，而不是全部为零
+（用 `manifest.get("generation") is None` 判断，不要用真值判断）。
+既有六个字段的语义与形状**未变**。
 
 ### 数据格式
 

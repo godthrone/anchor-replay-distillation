@@ -37,6 +37,7 @@ retry_on_timeout = false
 # Enable thinking/reasoning mode (Qwen3, DeepSeek-R1, etc.)
 # When True, the model outputs reasoning before the final answer.
 # Only enable when distilling to a reasoning-capable student model.
+# This value is always sent to the server: false = disable, true = enable.
 enable_thinking = false
 
 [generation]
