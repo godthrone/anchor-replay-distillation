@@ -156,10 +156,10 @@ def test_build_all_combinations_structure():
 
 def test_sample_anchors_returns_list():
     """sample_anchors 应返回 list[AnchorSpec]."""
-    ontology = json.load(open("data/anchor_ontology.json"))
+    ontology = json.load(open("ontology/anchor_ontology.json"))
     config = AnchorGenerationConfig(
         target_count=4, seed=42,
-        embeddings_path="data/anchor_ontology_embeddings.json",
+        embeddings_path="ontology/anchor_ontology_embeddings.json",
     )
     rng = random.Random(42)
     result = sample_anchors(ontology, config, rng)
@@ -172,10 +172,10 @@ def test_sample_anchors_returns_list():
 
 def test_sample_anchors_items_have_required_keys():
     """每个返回的 AnchorSpec 的 anchor_meta 应包含知识域、语言、能力、会话类型。"""
-    ontology = json.load(open("data/anchor_ontology.json"))
+    ontology = json.load(open("ontology/anchor_ontology.json"))
     config = AnchorGenerationConfig(
         target_count=4, seed=42,
-        embeddings_path="data/anchor_ontology_embeddings.json",
+        embeddings_path="ontology/anchor_ontology_embeddings.json",
     )
     rng = random.Random(42)
     result = sample_anchors(ontology, config, rng)
@@ -204,12 +204,12 @@ from ard.core._fps import (  # noqa: E402
 
 def _load_real_ontology() -> dict[str, Any]:
     """Load the real ontology from the data directory."""
-    return json.load(open("data/anchor_ontology.json"))
+    return json.load(open("ontology/anchor_ontology.json"))
 
 
 def _load_real_embeddings() -> dict[str, Any]:
     """Load the real embeddings from the data directory."""
-    return json.load(open("data/anchor_ontology_embeddings.json"))
+    return json.load(open("ontology/anchor_ontology_embeddings.json"))
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +221,7 @@ def test_farthest_domain_order_returns_18_domains():
     """_farthest_domain_order 应返回 18 个知识域 category 名。"""
     ontology = _load_real_ontology()
     result = _farthest_domain_order(
-        "data/anchor_ontology_embeddings.json", 42, ontology
+        "ontology/anchor_ontology_embeddings.json", 42, ontology
     )
     assert len(result) == 18
     assert all(isinstance(x, str) for x in result)
@@ -231,7 +231,7 @@ def test_farthest_domain_order_no_duplicates():
     """_farthest_domain_order 结果应无重复。"""
     ontology = _load_real_ontology()
     result = _farthest_domain_order(
-        "data/anchor_ontology_embeddings.json", 42, ontology
+        "ontology/anchor_ontology_embeddings.json", 42, ontology
     )
     assert len(result) == len(set(result))
 
@@ -240,10 +240,10 @@ def test_farthest_domain_order_deterministic():
     """相同 seed 应产生相同结果。"""
     ontology = _load_real_ontology()
     r1 = _farthest_domain_order(
-        "data/anchor_ontology_embeddings.json", 42, ontology
+        "ontology/anchor_ontology_embeddings.json", 42, ontology
     )
     r2 = _farthest_domain_order(
-        "data/anchor_ontology_embeddings.json", 42, ontology
+        "ontology/anchor_ontology_embeddings.json", 42, ontology
     )
     assert r1 == r2
 
@@ -252,7 +252,7 @@ def test_farthest_domain_order_all_in_ontology():
     """所有返回值应在 ontology 的 knowledge_domains 键中。"""
     ontology = _load_real_ontology()
     result = _farthest_domain_order(
-        "data/anchor_ontology_embeddings.json", 42, ontology
+        "ontology/anchor_ontology_embeddings.json", 42, ontology
     )
     onto_domains = set(ontology["knowledge_domains"].keys())
     for domain in result:
@@ -263,7 +263,7 @@ def test_farthest_domain_order_missing_embeddings_raises():
     """embeddings_path 不存在时应抛 ValueError。"""
     ontology = _load_real_ontology()
     with pytest.raises(ValueError):
-        _farthest_domain_order("data/nonexistent_file.json", 42, ontology)
+        _farthest_domain_order("ontology/nonexistent_file.json", 42, ontology)
 
 
 # ---------------------------------------------------------------------------
@@ -276,11 +276,11 @@ def test_sample_farthest_deterministic():
     ontology = _load_real_ontology()
     config1 = AnchorGenerationConfig(
         target_count=50, seed=42,
-        embeddings_path="data/anchor_ontology_embeddings.json",
+        embeddings_path="ontology/anchor_ontology_embeddings.json",
     )
     config2 = AnchorGenerationConfig(
         target_count=50, seed=42,
-        embeddings_path="data/anchor_ontology_embeddings.json",
+        embeddings_path="ontology/anchor_ontology_embeddings.json",
     )
     rng1 = random.Random(42)
     rng2 = random.Random(42)
@@ -294,7 +294,7 @@ def test_sample_farthest_coverage_n50():
     ontology = _load_real_ontology()
     config = AnchorGenerationConfig(
         target_count=50, seed=42,
-        embeddings_path="data/anchor_ontology_embeddings.json",
+        embeddings_path="ontology/anchor_ontology_embeddings.json",
     )
     rng = random.Random(42)
     result = _sample_farthest(ontology, config, rng)
@@ -309,7 +309,7 @@ def test_sample_farthest_coverage_n500():
     ontology = _load_real_ontology()
     config = AnchorGenerationConfig(
         target_count=500, seed=42,
-        embeddings_path="data/anchor_ontology_embeddings.json",
+        embeddings_path="ontology/anchor_ontology_embeddings.json",
     )
     rng = random.Random(42)
     result = _sample_farthest(ontology, config, rng)
@@ -326,7 +326,7 @@ def test_sample_farthest_no_duplicates():
     ontology = _load_real_ontology()
     config = AnchorGenerationConfig(
         target_count=50, seed=42,
-        embeddings_path="data/anchor_ontology_embeddings.json",
+        embeddings_path="ontology/anchor_ontology_embeddings.json",
     )
     rng = random.Random(42)
     result = _sample_farthest(ontology, config, rng)
@@ -346,7 +346,7 @@ def test_sample_farthest_correct_count():
     for target in [5, 10, 50]:
         config = AnchorGenerationConfig(
             target_count=target, seed=42,
-            embeddings_path="data/anchor_ontology_embeddings.json",
+            embeddings_path="ontology/anchor_ontology_embeddings.json",
         )
         rng = random.Random(42)
         result = _sample_farthest(ontology, config, rng)
@@ -365,7 +365,7 @@ def test_sample_anchors_fps_not_crash():
     ontology = _load_real_ontology()
     config = AnchorGenerationConfig(
         target_count=10, seed=42, max_turns=3,
-        embeddings_path="data/anchor_ontology_embeddings.json",
+        embeddings_path="ontology/anchor_ontology_embeddings.json",
     )
     rng = random.Random(42)
     result = sample_anchors(ontology, config, rng)
@@ -379,7 +379,7 @@ def test_sample_anchors_fps_correct_count():
     for target in [5, 10, 20]:
         config = AnchorGenerationConfig(
             target_count=target, seed=42, max_turns=3,
-            embeddings_path="data/anchor_ontology_embeddings.json",
+            embeddings_path="ontology/anchor_ontology_embeddings.json",
         )
         rng = random.Random(42)
         result = sample_anchors(ontology, config, rng)
@@ -393,11 +393,11 @@ def test_sample_anchors_fps_deterministic():
     ontology = _load_real_ontology()
     config1 = AnchorGenerationConfig(
         target_count=10, seed=42, max_turns=3,
-        embeddings_path="data/anchor_ontology_embeddings.json",
+        embeddings_path="ontology/anchor_ontology_embeddings.json",
     )
     config2 = AnchorGenerationConfig(
         target_count=10, seed=42, max_turns=3,
-        embeddings_path="data/anchor_ontology_embeddings.json",
+        embeddings_path="ontology/anchor_ontology_embeddings.json",
     )
     rng1 = random.Random(42)
     rng2 = random.Random(42)

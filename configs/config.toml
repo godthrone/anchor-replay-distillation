@@ -55,7 +55,7 @@ system_persona = "none"
 # Maximum turns with image per anchor (must be <= max_turns)
 max_turns_with_image = 1
 # Path to pre-computed ontology embeddings for farthest-point sampling
-embeddings_path = "data/anchor_ontology_embeddings.json"
+embeddings_path = "ontology/anchor_ontology_embeddings.json"
 
 # Consecutive timeouts to trigger backpressure cooldown
 backpressure_threshold = 3
@@ -63,7 +63,7 @@ backpressure_threshold = 3
 backpressure_cooldown = 60.0
 
 [ontology]
-path = "data/anchor_ontology.json"
+path = "ontology/anchor_ontology.json"
 
 [output]
 # Output directory path. Leave empty to auto-generate: outputs/ard_dataset_<timestamp>

@@ -70,11 +70,11 @@ system_persona = "none"
 # Maximum turns with image per anchor (must be <= max_turns)
 max_turns_with_image = 1
 # Path to pre-computed ontology embeddings for farthest-point sampling
-embeddings_path = "data/anchor_ontology_embeddings.json"
+embeddings_path = "ontology/anchor_ontology_embeddings.json"
 
 [ontology]
 # Path to the ontology JSON file
-path = "data/anchor_ontology.json"
+path = "ontology/anchor_ontology.json"
 
 [output]
 # Output directory (empty = auto-generated under outputs/)

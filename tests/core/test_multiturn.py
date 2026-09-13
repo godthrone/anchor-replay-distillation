@@ -263,7 +263,7 @@ def test_compute_turn_distribution_deterministic():
 
 def test_sample_anchors_count():
     """sample_anchors returns correct count."""
-    ontology = load_ontology(Path("data/anchor_ontology.json"))
+    ontology = load_ontology(Path("ontology/anchor_ontology.json"))
     config = AnchorGenerationConfig(
         target_count=100, seed=42, max_turns=3,
     )
@@ -275,7 +275,7 @@ def test_sample_anchors_count():
 
 def test_sample_anchors_turn_distribution():
     """Turn counts are distributed across 1..max_turns."""
-    ontology = load_ontology(Path("data/anchor_ontology.json"))
+    ontology = load_ontology(Path("ontology/anchor_ontology.json"))
     config = AnchorGenerationConfig(
         target_count=100, seed=42, max_turns=3,
     )
@@ -297,7 +297,7 @@ def test_sample_anchors_turn_distribution():
 
 def test_sample_anchors_single_turn():
     """max_turns=1 produces all single-turn specs."""
-    ontology = load_ontology(Path("data/anchor_ontology.json"))
+    ontology = load_ontology(Path("ontology/anchor_ontology.json"))
     config = AnchorGenerationConfig(
         target_count=50, seed=42, max_turns=1,
     )
@@ -310,7 +310,7 @@ def test_sample_anchors_single_turn():
 
 def test_sample_anchors_turns_alternate():
     """All generated specs have valid role alternation."""
-    ontology = load_ontology(Path("data/anchor_ontology.json"))
+    ontology = load_ontology(Path("ontology/anchor_ontology.json"))
     config = AnchorGenerationConfig(
         target_count=30, seed=7, max_turns=4,
     )
@@ -327,7 +327,7 @@ def test_sample_anchors_turns_alternate():
 
 def test_sample_anchors_ids_unique():
     """Each AnchorSpec has a unique id."""
-    ontology = load_ontology(Path("data/anchor_ontology.json"))
+    ontology = load_ontology(Path("ontology/anchor_ontology.json"))
     config = AnchorGenerationConfig(
         target_count=50, seed=42, max_turns=2,
     )
@@ -350,7 +350,7 @@ def test_leaf_conversation_types():
 
 def test_leaf_conversation_types_real_ontology():
     """Real ontology has 7 leaf conversation types."""
-    ontology = load_ontology(Path("data/anchor_ontology.json"))
+    ontology = load_ontology(Path("ontology/anchor_ontology.json"))
     leaves = _get_leaf_conversation_types(ontology)
     assert len(leaves) == 7
     assert "single_turn" in leaves

@@ -28,7 +28,7 @@ fi
 
 docker run --rm --network=host \
     -v "${PWD}/configs:/app/configs:ro" \
-    -v "${PWD}/data:/app/data:ro" \
+    -v "${PWD}/ontology:/app/ontology:ro" \
     -v "${PWD}/examples:/app/examples:ro" \
     -v "${PWD}/.local:/app/.local:ro" \
     -v "${PWD}/outputs:/app/outputs" \

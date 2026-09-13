@@ -26,7 +26,9 @@
 ### 环境要求
 
 - Docker
-- 嵌入数据：`data/anchor_ontology_embeddings.json`（49 个预计算嵌入向量，1024 维，供分层 FPS 采样器使用）
+- 嵌入数据：`ontology/anchor_ontology_embeddings.json` —— **已随仓库跟踪**，
+  clone 后即存在（49 个预计算嵌入向量，1024 维，供分层 FPS 采样器使用）。
+  它是只读的流水线输入，不是生成产物。
 - **可选：** `rawpy`（已包含在 `pyproject.toml` 依赖中）用于 RAW 图片格式支持
   （CR2、NEF、ARW、DNG 等 19 种）。该库以 manylinux wheel 发布，自带
   `libraw.so`，无需安装系统包。如果不需要 RAW 格式，rawpy 的导入是懒加载的，
@@ -170,13 +172,13 @@ ARD 采用**分层 TOML 配置**模型。有两个配置文件：
 | `max_turns` | int | `1` | 最大对话轮数（1=单轮，2-10=多轮） |
 | `system_persona` | string | `"none"` | 系统角色模式：`none` / `one_sentence` / `appropriate` / `detailed` |
 | `max_turns_with_image` | int | `1` | 含图片的最大轮数（≤ `max_turns`） |
-| `embeddings_path` | string | `"data/anchor_ontology_embeddings.json"` | 预计算本体论 embedding 文件路径 |
+| `embeddings_path` | string | `"ontology/anchor_ontology_embeddings.json"` | 预计算本体论 embedding 文件路径 |
 
 ### `[ontology]` — 本体论
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `path` | string | `"data/anchor_ontology.json"` | 本体论 JSON 文件路径 |
+| `path` | string | `"ontology/anchor_ontology.json"` | 本体论 JSON 文件路径 |
 
 ### `[output]` — 输出
 
@@ -372,12 +374,12 @@ api_key = "sk-..."
 
 ### 如何添加自定义本体论？
 
-将你的本体论 JSON 文件放入 `data/` 目录（或任意路径），
+将你的本体论 JSON 文件放入 `ontology/` 目录（或任意路径），
 然后在 `configs/config.toml` 中设置 `path`：
 
 ```toml
 [ontology]
-path = "data/my_ontology.json"
+path = "ontology/my_ontology.json"
 ```
 
 本体论必须遵循预期的 schema，包含 `knowledge_domains`、`capabilities`

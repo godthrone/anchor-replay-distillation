@@ -9,8 +9,8 @@ Calls the embedding API to produce 1024-dim embeddings for:
 
 Usage:
     python scripts/generate_ontology_embeddings.py \
-        --ontology data/anchor_ontology.json \
-        --output data/anchor_ontology_embeddings.json
+        --ontology ontology/anchor_ontology.json \
+        --output ontology/anchor_ontology_embeddings.json
 """
 
 from __future__ import annotations

@@ -90,4 +90,4 @@ class AnchorGenerationConfig:
     max_turns: int = 1
     max_turns_with_image: int = 1
     system_persona: str = "none"
-    embeddings_path: str = "data/anchor_ontology_embeddings.json"
+    embeddings_path: str = "ontology/anchor_ontology_embeddings.json"

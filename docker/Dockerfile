@@ -13,7 +13,7 @@ RUN --mount=type=cache,target=/root/.cache/uv pip install uv && uv sync --no-ins
 # Layer 2: source code
 COPY src ./src
 COPY configs ./configs
-COPY data ./data
+COPY ontology ./ontology
 COPY examples ./examples
 ARG VERSION=0.0.0
 ENV SETUPTOOLS_SCM_PRETEND_VERSION=${VERSION}

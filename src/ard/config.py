@@ -73,7 +73,7 @@ class OntologyConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    path: str = "data/anchor_ontology.json"
+    path: str = "ontology/anchor_ontology.json"
 
 
 class GenerationConfig(BaseModel):
@@ -89,7 +89,7 @@ class GenerationConfig(BaseModel):
     max_turns: int = Field(default=1, ge=1, le=10)
     system_persona: Literal["none", "one_sentence", "appropriate", "detailed"] = "none"
     max_turns_with_image: int = Field(default=1, ge=0, le=5)
-    embeddings_path: str = "data/anchor_ontology_embeddings.json"
+    embeddings_path: str = "ontology/anchor_ontology_embeddings.json"
     backpressure_threshold: int = 3       # 连续超时触发冷却的阈值
     backpressure_cooldown: float = 60.0   # 冷却暂停秒数
 

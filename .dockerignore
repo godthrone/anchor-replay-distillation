@@ -16,3 +16,7 @@ CLAUDE.md
 AGENTS.md
 .DS_Store
 Thumbs.db
+# Defensive, matches .gitignore. NOTE: ontology/ and ontology/*.json must NOT be
+# ignored here — docker/Dockerfile does `COPY ontology ./ontology`, and a COPY
+# whose source is excluded by .dockerignore fails the build ("not found").
+data/

@@ -21,8 +21,8 @@ from ard.core._fps import _compose_combination_vectors, _load_dimension_embeddin
 
 
 def test_embedding_file_exists() -> None:
-    """确认 ``data/anchor_ontology_embeddings.json`` 存在。"""
-    path = os.path.join("data", "anchor_ontology_embeddings.json")
+    """确认 ``ontology/anchor_ontology_embeddings.json`` 存在。"""
+    path = os.path.join("ontology", "anchor_ontology_embeddings.json")
     assert os.path.exists(path), f"Embeddings file not found: {path}"
 
 
@@ -33,7 +33,7 @@ def test_embedding_file_exists() -> None:
 
 def test_embedding_section_counts() -> None:
     """验证嵌入文件各 section 的 key 数量符合预期。"""
-    with open(os.path.join("data", "anchor_ontology_embeddings.json"), encoding="utf-8") as f:
+    with open(os.path.join("ontology", "anchor_ontology_embeddings.json"), encoding="utf-8") as f:
         data: dict = json.load(f)
 
     items = data["items"]
@@ -66,7 +66,7 @@ def test_embedding_section_counts() -> None:
 
 def test_embedding_dimension_consistent() -> None:
     """遍历所有 section 的所有向量，确认每个都是 1024-dim。"""
-    with open(os.path.join("data", "anchor_ontology_embeddings.json"), encoding="utf-8") as f:
+    with open(os.path.join("ontology", "anchor_ontology_embeddings.json"), encoding="utf-8") as f:
         data: dict = json.load(f)
 
     items = data["items"]
@@ -84,9 +84,9 @@ def test_embedding_dimension_consistent() -> None:
 
 def test_kd_names_in_ontology() -> None:
     """验证 knowledge_domains 嵌入的每个 key 与 ontology 双向一致。"""
-    with open(os.path.join("data", "anchor_ontology_embeddings.json"), encoding="utf-8") as f:
+    with open(os.path.join("ontology", "anchor_ontology_embeddings.json"), encoding="utf-8") as f:
         embed_data: dict = json.load(f)
-    with open(os.path.join("data", "anchor_ontology.json"), encoding="utf-8") as f:
+    with open(os.path.join("ontology", "anchor_ontology.json"), encoding="utf-8") as f:
         onto_data: dict = json.load(f)
 
     embed_kd_names = set(embed_data["items"]["knowledge_domains"].keys())
@@ -110,7 +110,7 @@ def test_kd_names_in_ontology() -> None:
 
 def test_compose_combination_vectors_shape() -> None:
     """验证 ``_compose_combination_vectors`` 返回 (len(pool), 4*1024) 形状。"""
-    with open(os.path.join("data", "anchor_ontology_embeddings.json"), encoding="utf-8") as f:
+    with open(os.path.join("ontology", "anchor_ontology_embeddings.json"), encoding="utf-8") as f:
         embed_data: dict = json.load(f)
 
     dim_embeddings = _load_dimension_embeddings(embed_data)

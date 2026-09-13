@@ -12,12 +12,12 @@ import pytest
 @pytest.fixture
 def ontology() -> dict:
     """Load shared anchor ontology for tests."""
-    with open("data/anchor_ontology.json", encoding="utf-8") as f:
+    with open("ontology/anchor_ontology.json", encoding="utf-8") as f:
         return json.load(f)
 
 
 @pytest.fixture
 def embeddings_data() -> dict:
     """Load shared embedding data for tests."""
-    with open("data/anchor_ontology_embeddings.json", encoding="utf-8") as f:
+    with open("ontology/anchor_ontology_embeddings.json", encoding="utf-8") as f:
         return json.load(f)

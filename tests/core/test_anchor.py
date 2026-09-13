@@ -109,7 +109,7 @@ def test_ontology_loads_valid(tmp_path):
 
 def test_ontology_loads_real_file():
     """load_ontology loads the real anchor_ontology.json."""
-    ontology = load_ontology(Path("data/anchor_ontology.json"))
+    ontology = load_ontology(Path("ontology/anchor_ontology.json"))
     assert isinstance(ontology, dict)
     assert "languages" in ontology
     assert "knowledge_domains" in ontology
@@ -128,7 +128,7 @@ def test_ontology_file_not_found():
 def test_sample_anchors_returns_list():
     """sample_anchors returns a list of AnchorSpec objects."""
     import random
-    ontology = load_ontology(Path("data/anchor_ontology.json"))
+    ontology = load_ontology(Path("ontology/anchor_ontology.json"))
     config = AnchorGenerationConfig(target_count=4, seed=1, languages=["English"], task_types=["qa"])
     rng = random.Random(config.seed)
     result = sample_anchors(ontology, config, rng)
@@ -140,7 +140,7 @@ def test_sample_anchors_returns_list():
 def test_sample_anchors_deterministic():
     """Same seed+config produces same output."""
     import random
-    ontology = load_ontology(Path("data/anchor_ontology.json"))
+    ontology = load_ontology(Path("ontology/anchor_ontology.json"))
     config = AnchorGenerationConfig(target_count=4, seed=42, languages=["English"], task_types=["qa"])
     rng1 = random.Random(config.seed)
     rng2 = random.Random(config.seed)
@@ -355,7 +355,7 @@ def test_config_section_types():
     assert g.concurrency == 4
 
     o = OntologyConfig()
-    assert o.path == "data/anchor_ontology.json"
+    assert o.path == "ontology/anchor_ontology.json"
 
     out = OutputConfig()
     assert out.directory is None
@@ -369,4 +369,4 @@ def test_ard_config_full():
     c = ARDConfig()
     assert c.generation.target_count == 100
     assert c.output.overwrite is False
-    assert c.ontology.path == "data/anchor_ontology.json"
+    assert c.ontology.path == "ontology/anchor_ontology.json"

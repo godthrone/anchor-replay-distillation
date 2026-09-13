@@ -266,7 +266,7 @@ function hierarchical_fps(ontology, embeddings, target_count):
 
 ### 4.2 嵌入粒度与覆盖保证
 
-嵌入数据来自 `data/anchor_ontology_embeddings.json`（49 个嵌入，1024 维）：
+嵌入数据来自 `ontology/anchor_ontology_embeddings.json`（49 个嵌入，1024 维）：
 
 | 类别 | 向量数 | 说明 |
 |------|--------|------|
@@ -610,8 +610,6 @@ sequenceDiagram
     end
 ```
 
-```
-
 ### 6.1.5 图片格式转换
 
 Pipeline 默认开启图片格式自动转换（可通过 `--no-convert` 关闭）：
@@ -629,6 +627,10 @@ Pipeline 默认开启图片格式自动转换（可通过 `--no-convert` 关闭�
 
 **`--no-convert` 关闭转换**：当关闭转换时，`scan_images` 仅接受 `SUPPORTED_EXTENSIONS`
 （PNG/JPEG/GIF/WEBP），遇 BMP/TIFF/RAW 格式的图片会被静默跳过。
+**静默跳过会一路传导到产物**：若跳过后目录内没有可用图片，Pipeline 只打一条
+`No images found in <dir>. All anchors will be pure text.` 的 WARNING（`pipeline.py`），
+然后照常产出**纯文本锚点**——命令成功、退出码 0，但没有任何多模态锚点。
+用户侧判据是启动日志中的这一行，以及产出锚点的 `anchor_meta.has_image`。
 
 **Resume 安全**：`convert_and_copy_images()` 检查目标文件是否已存在，已转换的图片自动跳过。
 
@@ -918,7 +920,7 @@ overwrite = false       # 是否覆盖已有输出目录（预授权退路，遵
 | `src/ard/cli.py` | 94 | CLI 入口 |
 | `src/ard/config.py` | 227 | 配置模型与加载 |
 | `src/ard/logging.py` | 135 | 统一日志配置（`get_logger` 辅助函数） |
-| `src/ard/pipeline.py` | 370 | 流程编排 |
+| `src/ard/pipeline.py` | 388 | 流程编排 |
 | `src/ard/core/types.py` | 93 | 核心数据类型 |
 | `src/ard/core/ontology.py` | 29 | 本体加载 |
 | `src/ard/core/embeddings.py` | 134 | 嵌入加载与 FPS 算法 |
@@ -935,8 +937,8 @@ overwrite = false       # 是否覆盖已有输出目录（预授权退路，遵
 
 | 文件 | 大小 | 说明 |
 |------|------|------|
-| `data/anchor_ontology.json` | — | 锚点本体定义（语言、知识域、能力、会话类型、视觉域） |
-| `data/anchor_ontology_embeddings.json` | — | 49 个预计算嵌入向量（API 生成，1024-dim） |
+| `ontology/anchor_ontology.json` | — | 锚点本体定义（语言、知识域、能力、会话类型、视觉域） |
+| `ontology/anchor_ontology_embeddings.json` | — | 49 个预计算嵌入向量（API 生成，1024-dim） |
 
 ### 配置文件
 

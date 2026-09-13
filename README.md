@@ -32,8 +32,10 @@ learning pipelines.
 ### Prerequisites
 
 - Docker
-- Embedding data: `data/anchor_ontology_embeddings.json` (49 pre-computed
-  embeddings, 1024-dim, used by the hierarchical FPS sampler)
+- Embedding data: `ontology/anchor_ontology_embeddings.json` — **tracked in this
+  repo**, so a clone already has it (49 pre-computed embeddings, 1024-dim, used
+  by the hierarchical FPS sampler). It is a read-only pipeline input, not
+  generated output.
 - **Optional:** `rawpy` (included in `pyproject.toml` dependencies) for RAW
   image format support (CR2, NEF, ARW, DNG, etc.). The library ships as a
   manylinux wheel with bundled `libraw.so` — no system packages required.
@@ -182,13 +184,13 @@ All parameters are defined in `configs/config.toml`. Secret fields (`api_base`,
 | `max_turns` | int | `1` | Max conversation turns (1 = single-turn, 2-10 = multi-turn) |
 | `system_persona` | string | `"none"` | System persona mode: `none` / `one_sentence` / `appropriate` / `detailed` |
 | `max_turns_with_image` | int | `1` | Max turns with image (≤ `max_turns`) |
-| `embeddings_path` | string | `"data/anchor_ontology_embeddings.json"` | Pre-computed ontology embedding file |
+| `embeddings_path` | string | `"ontology/anchor_ontology_embeddings.json"` | Pre-computed ontology embedding file |
 
 ### `[ontology]` — Ontology
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `path` | string | `"data/anchor_ontology.json"` | Ontology JSON file path |
+| `path` | string | `"ontology/anchor_ontology.json"` | Ontology JSON file path |
 
 ### `[output]` — Output
 
@@ -389,12 +391,12 @@ Only secrets go here; all other configuration stays in `configs/config.toml`.
 
 ### How do I add a custom ontology?
 
-Place your ontology JSON file in the `data/` directory (or any path), then
+Place your ontology JSON file in the `ontology/` directory (or any path), then
 set `path` in `configs/config.toml`:
 
 ```toml
 [ontology]
-path = "data/my_ontology.json"
+path = "ontology/my_ontology.json"
 ```
 
 The ontology must follow the expected schema with `knowledge_domains`,
