@@ -37,7 +37,7 @@
 ### 1. 构建 Docker 镜像
 
 ```bash
-git clone https://github.com/your-org/anchor-replay-distillation.git
+git clone https://github.com/godthrone/anchor-replay-distillation.git
 cd anchor-replay-distillation
 bash docker/build.sh
 ```
@@ -109,7 +109,7 @@ ARD 采用**分层 TOML 配置**模型。有两个配置文件：
 |---------|------|
 | `[input_generator]` | 生成用户提问的 VLM/LLM |
 | `[target_model]` | 生成答案（含 log-prob）的教师模型 |
-| `[generation]` | 目标数量、随机种子、并发数、最大轮数、系统角色、语言和任务类型过滤 |
+| `[generation]` | 目标数量、随机种子、并发数、最大轮数、系统角色、语言和任务类型过滤、背压阈值 |
 | `[ontology]` | 本体论文件路径 |
 | `[output]` | 输出目录设置 |
 
@@ -126,7 +126,7 @@ ARD 采用**分层 TOML 配置**模型。有两个配置文件：
 | `model_name` | string | `""` | 模型名称 |
 | `api_key` | string | `""` | API 密钥（机密，在 override 中填写） |
 | `temperature` | float | `0.8` | 采样温度，越高越随机 |
-| `max_tokens` | int | `4096` | 最大生成 token 数 |
+| `max_tokens` | int \| null | `null`（已注释） | 最大生成 token 数。基础配置中**未设置**——该行被注释掉，由 API 服务商决定；取消注释即可强制限制 |
 | `connect_timeout` | float | `10.0` | TCP 连接 + TLS 握手超时秒数 |
 | `first_token_timeout` | float | `300.0` | 等待首个 token 的最大秒数（prefill + 排队） |
 | `inter_token_timeout` | float | `15.0` | 首个 token 后 token 间最大等待秒数 |
@@ -147,7 +147,7 @@ ARD 采用**分层 TOML 配置**模型。有两个配置文件：
 | `model_name` | string | `""` | 教师模型名称 |
 | `api_key` | string | `""` | API 密钥（机密） |
 | `temperature` | float | `0.0` | 采样温度，0.0 = 确定性输出 |
-| `max_tokens` | int | `4096` | 最大生成 token 数 |
+| `max_tokens` | int \| null | `null`（已注释） | 最大生成 token 数。基础配置中**未设置**——该行被注释掉，由 API 服务商决定；取消注释即可强制限制 |
 | `connect_timeout` | float | `10.0` | TCP 连接 + TLS 握手超时秒数 |
 | `first_token_timeout` | float | `300.0` | 等待首个 token 的最大秒数（prefill + 排队） |
 | `inter_token_timeout` | float | `15.0` | 首个 token 后 token 间最大等待秒数 |
@@ -173,6 +173,8 @@ ARD 采用**分层 TOML 配置**模型。有两个配置文件：
 | `system_persona` | string | `"none"` | 系统角色模式：`none` / `one_sentence` / `appropriate` / `detailed` |
 | `max_turns_with_image` | int | `1` | 含图片的最大轮数（≤ `max_turns`） |
 | `embeddings_path` | string | `"ontology/anchor_ontology_embeddings.json"` | 预计算本体论 embedding 文件路径 |
+| `backpressure_threshold` | int | `3` | 连续服务端类失败达到该次数即触发冷却 |
+| `backpressure_cooldown` | float | `60.0` | 触发阈值后的冷却暂停秒数 |
 
 ### `[ontology]` — 本体论
 
@@ -213,13 +215,15 @@ ard --config <路径> [--override <路径>] [--image-dir <路径>] [--no-convert
 - `--image-dir` — 多模态锚点的图片目录（可选）
   - ⚠️ `input_generator` 和 `target_model` 均需支持多模态输入。如果模型不支持多模态，API 会直接报错。
 - `--no-convert` — 关闭图片格式自动转换（可选）
-  - 默认情况下，流水线会将所有图片自动转换为 JPG/PNG（PNG → 直接复制，RAW/BMP/TIFF/GIF/WebP → JPG quality=95）。使用此参数跳过转换——仅接受 PNG/JPEG/GIF/WEBP 文件，其他格式会报错。
+  - 默认情况下，流水线会将所有图片自动转换为 JPG/PNG（PNG → 直接复制，RAW/BMP/TIFF/GIF/WebP → JPG quality=95）。
+  - 使用此参数时仅接受 PNG/JPEG/GIF/WEBP；**其他格式的文件会被目录扫描静默忽略**——既不转换，也不报错。如果因此没有可用图片，流水线会打 WARNING（`No images found in <dir>. All anchors will be pure text.`），并照常产出**纯文本锚点**。若期望多模态产出，请检查启动日志中的这一行。
 
 ## 输出
 
 ```
 outputs/<dataset_name>/
 ├── anchor_bank.jsonl          # 统一锚点数据（graspo 兼容）
+├── config.json                # 合并后配置快照（保证可复现）
 ├── images/                    # 多模态图片（如有）
 ├── logs/
 │   ├── ard.log                # 人类可读流水线日志（INFO+）
@@ -265,11 +269,15 @@ outputs/<dataset_name>/
 **向后兼容**：`generation` 是**可选**字段。在它出现之前写下的 manifest 仍然可读——
 字段缺失应理解为"该轮没有记录生成统计"，而不是全部为零
 （用 `manifest.get("generation") is None` 判断，不要用真值判断）。
-既有六个字段的语义与形状**未变**。
+既有六个字段（`total_anchors` / `domains` / `languages` / `capabilities` /
+`output_dir` / `config`，最后一个为合并后配置快照）的语义与形状**未变**。
 
 ### 数据格式
 
-所有锚点写入单个 `anchor_bank.jsonl` 文件，格式与 graspo 兼容：
+所有锚点写入单个 `anchor_bank.jsonl` 文件，格式与 graspo 兼容。多轮锚点总是以
+`user` 消息开头**并**以 `user` 消息结尾，角色严格交替，因此消息形状恒为
+`U` 或 `UAU`（落盘前强制校验——违反者被拒绝并计入 `rejected_invalid_shape`）。
+完整真实记录见 `examples/anchor_bank.sample.jsonl`。
 
 ```json
 {
@@ -278,22 +286,31 @@ outputs/<dataset_name>/
   "messages": [
     {"role": "user", "content": "解释熵的概念..."},
     {"role": "assistant", "content": "熵是衡量系统无序程度的物理量..."},
-    {"role": "user", "content": "能举个例子吗？"},
-    {"role": "assistant", "content": "当然！冰融化成水..."}
+    {"role": "user", "content": "能举个例子吗？"}
   ],
   "targets": [{
     "id": "primary",
     "output": {
       "content": "当然！冰融化成水...",
       "logprobs": {
-        "token_ids": [1, 2, 3],
-        "log_probs": [-0.1, -0.2, -0.3]
+        "token_ids": ["当然", "！", "冰", "融化"],
+        "log_probs": [-0.1, -0.2, -0.3, -0.05]
       }
     }
   }],
   "anchor_meta": {"language": "简体中文", "knowledge_domain": "science"},
-  "teacher_id": "Qwen3.8-27B"
+  "teacher_id": "your-model-name"
 }
+```
+
+多模态锚点的图片内嵌在 `user` 消息的 `content` 中，此时 `content` 是部件列表
+而非纯字符串：
+
+```json
+{"role": "user", "content": [
+  {"type": "image", "image": "images/sample_01.jpg"},
+  {"type": "text", "text": "请根据图片内容，判断这张图片拍摄的场景类型。"}
+]}
 ```
 
 ## 示例
@@ -305,7 +322,7 @@ examples/
 ├── images/                    # 多模态模式样例图片
 │   ├── sample_01.jpg
 │   └── ...
-└── anchor_bank.sample.jsonl   # 样例输出（3 条锚点）
+└── anchor_bank.sample.jsonl   # 样例输出（5 条锚点：3 条纯文本 + 2 条多模态）
 ```
 
 你可以在 GitHub 上直接浏览 `examples/` 查看输入输出格式。
@@ -324,9 +341,14 @@ ARD_IMAGE=ard:latest bash run.sh --config configs/config.toml --override .local/
 
 ### 无 git 环境
 
+当无法获取 git 元数据时，`build.sh` 回退到版本号 `1.0.0`，因此构建出的镜像是 `ard:1.0.0`。
+`VERSION` 只覆盖记录在镜像**内部**的软件包版本——它**不会**重命名镜像；重命名请用 `IMAGE_NAME`。
+
 ```bash
-VERSION=1.0.0 bash docker/build.sh
+VERSION=1.0.0 IMAGE_NAME=ard:latest bash docker/build.sh
 ```
+
+脚本最后一行会打印结果镜像名（`Built: <image>`）。
 
 ## 开发
 

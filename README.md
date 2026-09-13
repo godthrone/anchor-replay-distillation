@@ -37,14 +37,14 @@ learning pipelines.
   by the hierarchical FPS sampler). It is a read-only pipeline input, not
   generated output.
 - **Optional:** `rawpy` (included in `pyproject.toml` dependencies) for RAW
-  image format support (CR2, NEF, ARW, DNG, etc.). The library ships as a
+  image format support (19 formats: CR2, NEF, ARW, DNG, etc.). The library ships as a
   manylinux wheel with bundled `libraw.so` — no system packages required.
   If RAW formats are not needed, rawpy's import is lazy and won't be triggered.
 
 ### 1. Build the Docker image
 
 ```bash
-git clone https://github.com/your-org/anchor-replay-distillation.git
+git clone https://github.com/godthrone/anchor-replay-distillation.git
 cd anchor-replay-distillation
 bash docker/build.sh
 ```
@@ -119,7 +119,7 @@ The merged result is a single config dict used throughout the program.
 |---------|---------|
 | `[input_generator]` | VLM/LLM that generates user questions |
 | `[target_model]` | Teacher model that generates answers with log-probs |
-| `[generation]` | Target count, seed, concurrency, max turns, system persona, language and task type filters |
+| `[generation]` | Target count, seed, concurrency, max turns, system persona, language and task type filters, backpressure thresholds |
 | `[ontology]` | Ontology file path |
 | `[output]` | Output directory settings |
 
@@ -136,7 +136,7 @@ All parameters are defined in `configs/config.toml`. Secret fields (`api_base`,
 | `model_name` | string | `""` | Model name |
 | `api_key` | string | `""` | API key (secret — fill in override) |
 | `temperature` | float | `0.8` | Sampling temperature, higher = more random |
-| `max_tokens` | int | `4096` | Maximum tokens per response |
+| `max_tokens` | int \| null | `null` (commented out) | Maximum tokens per response. **Not set** in the base config — the line is commented out, so the API provider decides. Uncomment to enforce a limit |
 | `connect_timeout` | float | `10.0` | TCP connection + TLS handshake timeout in seconds |
 | `first_token_timeout` | float | `300.0` | Maximum wait for first token (prefill + queue), in seconds |
 | `inter_token_timeout` | float | `15.0` | Maximum wait between tokens after first, in seconds |
@@ -158,7 +158,7 @@ All parameters are defined in `configs/config.toml`. Secret fields (`api_base`,
 | `model_name` | string | `""` | Teacher model name |
 | `api_key` | string | `""` | API key (secret) |
 | `temperature` | float | `0.0` | Sampling temperature, 0.0 = deterministic |
-| `max_tokens` | int | `4096` | Maximum tokens per response |
+| `max_tokens` | int \| null | `null` (commented out) | Maximum tokens per response. **Not set** in the base config — the line is commented out, so the API provider decides. Uncomment to enforce a limit |
 | `connect_timeout` | float | `10.0` | TCP connection + TLS handshake timeout in seconds |
 | `first_token_timeout` | float | `300.0` | Maximum wait for first token (prefill + queue), in seconds |
 | `inter_token_timeout` | float | `15.0` | Maximum wait between tokens after first, in seconds |
@@ -185,6 +185,8 @@ All parameters are defined in `configs/config.toml`. Secret fields (`api_base`,
 | `system_persona` | string | `"none"` | System persona mode: `none` / `one_sentence` / `appropriate` / `detailed` |
 | `max_turns_with_image` | int | `1` | Max turns with image (≤ `max_turns`) |
 | `embeddings_path` | string | `"ontology/anchor_ontology_embeddings.json"` | Pre-computed ontology embedding file |
+| `backpressure_threshold` | int | `3` | Consecutive server-side failures that trigger a cooldown |
+| `backpressure_cooldown` | float | `60.0` | Cooldown pause in seconds once the threshold is reached |
 
 ### `[ontology]` — Ontology
 
@@ -204,10 +206,10 @@ All parameters are defined in `configs/config.toml`. Secret fields (`api_base`,
 TOML does not have a `null` value. To let the API provider decide a value
 (e.g. `max_tokens`), **comment out or delete the line** in `config.toml`:
 
-\`\`\`toml
+```toml
 [input_generator]
 # max_tokens = 4096   ← commented out → API uses its own default
-\`\`\`
+```
 
 The pydantic config model uses `None` as the default for optional fields.
 When a field is `None`, it is omitted from the API request entirely.
@@ -225,13 +227,15 @@ A single command handles everything:
 - `--image-dir` — Image directory for multimodal anchors (optional)
   - ⚠️ Both `input_generator` and `target_model` must support multimodal inputs. If either model does not support multimodal, the API will return an error.
 - `--no-convert` — Disable automatic image format conversion (optional)
-  - By default, the pipeline auto-converts all images to JPG/PNG (PNG → PNG copy, RAW/ BMP/ TIFF/ GIF/ WebP → JPG quality=95). Use this flag to skip conversion — only PNG/JPEG/GIF/WEBP files are accepted, any other format causes an error.
+  - By default, the pipeline auto-converts all images to JPG/PNG (PNG → PNG copy, RAW/BMP/TIFF/GIF/WebP → JPG quality=95).
+  - With this flag only PNG/JPEG/GIF/WebP are accepted; **files in any other format are silently ignored by the directory scan** — they are neither converted nor reported as errors. If that leaves no usable images, the pipeline logs a WARNING (`No images found in <dir>. All anchors will be pure text.`) and still produces **text-only anchors**. Check the startup log line if you expect multimodal output.
 
 ## Output
 
 ```
 outputs/<dataset_name>/
 ├── anchor_bank.jsonl          # Unified anchor data (graspo-compatible)
+├── config.json                # Merged-config snapshot (reproducibility)
 ├── images/                    # Multimodal images (if any)
 ├── logs/
 │   ├── ard.log                # Human-readable pipeline log (INFO+)
@@ -278,12 +282,18 @@ dropped, so a healthy run gains no noise and an unhealthy one cannot look health
 **Backward compatibility:** `generation` is optional. Manifests written before it
 existed stay readable — treat a missing field as "no generation statistics were
 recorded for that run", not as all-zero (test with `manifest.get("generation") is None`).
-The six pre-existing fields keep their meaning and shape.
+The six pre-existing fields (`total_anchors` / `domains` / `languages` /
+`capabilities` / `output_dir` / `config`, the last being the merged-config
+snapshot) keep their meaning and shape.
 
 ### Data Format
 
 All anchors are written to a single `anchor_bank.jsonl` file in a format
-compatible with graspo:
+compatible with graspo. Multi-turn anchors always start **and** end with a
+`user` message with strictly alternating roles, so the message shape is either
+`U` or `UAU` (this is enforced before writing — violating anchors are rejected
+and counted under `rejected_invalid_shape`). See
+`examples/anchor_bank.sample.jsonl` for a complete real record.
 
 ```json
 {
@@ -292,22 +302,31 @@ compatible with graspo:
   "messages": [
     {"role": "user", "content": "Explain entropy..."},
     {"role": "assistant", "content": "Entropy is a measure of disorder..."},
-    {"role": "user", "content": "Can you give an example?"},
-    {"role": "assistant", "content": "Sure! Melting ice..."}
+    {"role": "user", "content": "Can you give an example?"}
   ],
   "targets": [{
     "id": "primary",
     "output": {
       "content": "Sure! Melting ice...",
       "logprobs": {
-        "token_ids": [1, 2, 3],
-        "log_probs": [-0.1, -0.2, -0.3]
+        "token_ids": ["Sure", "!", " Melting", " ice"],
+        "log_probs": [-0.1, -0.2, -0.3, -0.05]
       }
     }
   }],
   "anchor_meta": {"language": "English", "knowledge_domain": "science"},
-  "teacher_id": "Qwen3.8-27B"
+  "teacher_id": "your-model-name"
 }
+```
+
+Multimodal anchors carry the image inside the `user` message `content`, which
+becomes a list of parts instead of a plain string:
+
+```json
+{"role": "user", "content": [
+  {"type": "image", "image": "images/sample_01.jpg"},
+  {"type": "text", "text": "What natural formation is shown in this image?"}
+]}
 ```
 
 ## Examples
@@ -320,7 +339,7 @@ examples/
 ├── images/                    # Sample images for multimodal mode
 │   ├── sample_01.jpg
 │   └── ...
-└── anchor_bank.sample.jsonl   # Sample output (3 anchors)
+└── anchor_bank.sample.jsonl   # Sample output (5 anchors: 3 text + 2 multimodal)
 ```
 
 You can browse `examples/` directly on GitHub to see the input/output format.
@@ -340,9 +359,15 @@ ARD_IMAGE=ard:latest bash run.sh --config configs/config.toml --override .local/
 
 ### Without git
 
+When git metadata is unavailable, `build.sh` falls back to version `1.0.0`, so the
+built image is `ard:1.0.0`. `VERSION` only overrides the *package* version recorded
+**inside** the image — it does **not** rename the image; use `IMAGE_NAME` for that.
+
 ```bash
-VERSION=1.0.0 bash docker/build.sh
+VERSION=1.0.0 IMAGE_NAME=ard:latest bash docker/build.sh
 ```
+
+The script prints the resulting image name on its last line (`Built: <image>`).
 
 ## Development
 
@@ -460,12 +485,12 @@ Multimodal anchor diversity comes from three independent sources:
 
 ### What format are the generated token_ids?
 
-The `token_ids` returned by the vLLM API use integer token IDs
-(`logprobs.content[].token_id`) with a fallback to string tokens
-(`logprobs.content[].token`). When teacher and student share the same
-tokenizer, integer IDs can be used directly for OPD training. With
-different tokenizers, string tokens are more portable — downstream
-training can re-encode with its own tokenizer.
+The `token_ids` returned by the vLLM API prefer string tokens
+(`logprobs.content[].token`), with integer token IDs
+(`logprobs.content[].token_id`) as the fallback when the string form is absent.
+With different tokenizers, string tokens are more portable — downstream
+training can re-encode with its own tokenizer. When teacher and student share
+the same tokenizer, integer IDs can be used directly for OPD training.
 
 ### How to control the ratio of multimodal to text anchors?
 

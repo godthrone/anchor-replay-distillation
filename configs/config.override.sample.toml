@@ -71,6 +71,12 @@ system_persona = "none"
 max_turns_with_image = 1
 # Path to pre-computed ontology embeddings for farthest-point sampling
 embeddings_path = "ontology/anchor_ontology_embeddings.json"
+# Consecutive server-side failures (timeouts / transport errors) that trigger
+# the backpressure cooldown below. Model-output failures (empty content,
+# missing log-probs) are counted separately and never trigger a cooldown.
+# backpressure_threshold = 3
+# Backpressure cooldown pause in seconds, applied once the threshold is hit
+# backpressure_cooldown = 60.0
 
 [ontology]
 # Path to the ontology JSON file
