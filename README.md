@@ -331,16 +331,25 @@ becomes a list of parts instead of a plain string:
 
 ## Examples
 
-The `examples/` directory contains sample inputs and outputs to help you
-understand the project without running it:
+The `examples/` directory contains real inputs and outputs so you can
+understand the project without running it. Everything here was produced by a
+real run of the pipeline — nothing is hand-written:
 
 ```
 examples/
-├── images/                    # Sample images for multimodal mode
+├── README.md                    # What's in here and how to read it
+├── images/                      # Sample images for multimodal mode
 │   ├── sample_01.jpg
-│   └── ...
-└── anchor_bank.sample.jsonl   # Sample output (5 anchors: 3 text + 2 multimodal)
+│   └── ...                      # 10 small JPEGs (400×267), safe for smoke runs
+├── anchor_bank.sample.jsonl     # Sample output: 6 real anchors
+│                                #   (3 single-turn `U` + 3 three-turn `UAU`,
+│                                #    4 languages, 1–2 images each, full
+│                                #    token-level log-probs per record)
+└── manifest.sample.json         # The run manifest a real run writes alongside it
 ```
+
+Start with `examples/README.md` — it explains the record schema field by field
+and shows why `messages` always starts and ends with a `user` turn.
 
 You can browse `examples/` directly on GitHub to see the input/output format.
 
@@ -403,12 +412,12 @@ Then edit the file:
 [input_generator]
 api_base = "https://your-api.example.com/v1"
 model_name = "your-model-name"
-api_key = "sk-..."
+api_key = "REPLACE_WITH_YOUR_API_KEY"
 
 [target_model]
 api_base = "https://your-api.example.com/v1"
 model_name = "your-model-name"
-api_key = "sk-..."
+api_key = "REPLACE_WITH_YOUR_API_KEY"
 ```
 
 The override file is deep-merged with `configs/config.toml` at startup.

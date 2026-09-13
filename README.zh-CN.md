@@ -315,15 +315,24 @@ outputs/<dataset_name>/
 
 ## 示例
 
-`examples/` 目录包含样例输入和输出，帮助你无需运行即可了解项目：
+`examples/` 目录包含**真实**的输入与输出，帮助你无需运行即可了解项目。
+这里的内容全部由管线真实运行产出，没有任何手工编造的样例：
 
 ```
 examples/
-├── images/                    # 多模态模式样例图片
+├── README.md                    # 本目录内容说明与格式解读
+├── images/                      # 多模态模式样例图片
 │   ├── sample_01.jpg
-│   └── ...
-└── anchor_bank.sample.jsonl   # 样例输出（5 条锚点：3 条纯文本 + 2 条多模态）
+│   └── ...                      # 10 张小 JPEG（400×267），适合冒烟试跑
+├── anchor_bank.sample.jsonl     # 样例输出：6 条真实锚点
+│                                #   （3 条单轮 `U` + 3 条三轮 `UAU`、
+│                                #    4 种语言、每条 1–2 张图、
+│                                #    含完整的 token 级 log-probs）
+└── manifest.sample.json         # 真实运行会一并写出的 manifest 清单
 ```
+
+建议先读 `examples/README.md`——它逐字段解释了产物 schema，并说明为什么
+`messages` 总是以 `user` 轮开头、以 `user` 轮结尾。
 
 你可以在 GitHub 上直接浏览 `examples/` 查看输入输出格式。
 
@@ -383,12 +392,12 @@ cp configs/config.override.sample.toml .local/config.override.toml
 [input_generator]
 api_base = "https://your-api.example.com/v1"
 model_name = "your-model-name"
-api_key = "sk-..."
+api_key = "REPLACE_WITH_YOUR_API_KEY"
 
 [target_model]
 api_base = "https://your-api.example.com/v1"
 model_name = "your-model-name"
-api_key = "sk-..."
+api_key = "REPLACE_WITH_YOUR_API_KEY"
 ```
 
 启动时覆写文件会与 `configs/config.toml` 深度合并。只有机密信息放这里，

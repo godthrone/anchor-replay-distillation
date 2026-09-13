@@ -1,0 +1,37 @@
+{
+  "total_anchors": 6,
+  "domains": {
+    "art_aesthetics": 1,
+    "medicine_health": 1,
+    "software_engineering": 1,
+    "religion_myth_folklore": 1,
+    "finance_economics": 1,
+    "esoterica_belief_systems": 1
+  },
+  "languages": {
+    "日本語": 3,
+    "Español": 2,
+    "简体中文": 1
+  },
+  "capabilities": {
+    "translation": 2,
+    "math_solving": 2,
+    "rewriting": 2
+  },
+  "output_dir": "outputs/ard_dataset_<timestamp>",
+  "generation": {
+    "counters": {
+      "requested": 6,
+      "succeeded": 6,
+      "abandoned_total": 0,
+      "written": 6
+    },
+    "failures": {
+      "responses": 18,
+      "reasoning_responses": 9,
+      "reasoning_chars": 74210,
+      "empty_content": 0,
+      "truncated_empty": 0
+    }
+  }
+}
