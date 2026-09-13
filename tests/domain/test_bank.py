@@ -6,16 +6,20 @@ from pathlib import Path
 import pytest
 
 from ard.domain.bank import (
+    AppendOutcome,
     anchor_to_dict,
     append_anchor,
     build_manifest,
     build_manifest_from_records,
     count_existing_anchors,
+    count_unique_anchor_ids,
     read_anchor_bank,
     write_anchor_bank,
     write_manifest,
 )
+from ard.domain.anchor_shape import message_shape_error
 from ard.domain.text_anchor import build_input_prompt, build_target_prompt
+from ard.core.sampler import generate_anchor_id
 from ard.core.types import GeneratedAnchor, AnchorGenerationConfig
 
 
@@ -114,6 +118,168 @@ def test_append_anchor_creates_file(tmp_path):
     path.parent.mkdir(parents=True, exist_ok=True)
     append_anchor(_make_anchor(), path)
     assert path.exists()
+
+
+# ── Output gates: message shape ─────────────────────────────────────────────
+
+
+def _uau_messages():
+    return [
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "content": "a1"},
+        {"role": "user", "content": "q2"},
+    ]
+
+
+def test_message_shape_error_accepts_valid_shapes():
+    """The exit contract accepts U, UAU and UAUAU."""
+    assert message_shape_error([{"role": "user", "content": "q"}]) is None
+    assert message_shape_error(_uau_messages()) is None
+    assert message_shape_error(
+        [
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "q2"},
+            {"role": "assistant", "content": "a2"},
+            {"role": "user", "content": "q3"},
+        ]
+    ) is None
+
+
+def test_message_shape_error_rejects_uauau_and_uauu():
+    """The exit contract rejects a trailing assistant and consecutive users."""
+    trailing_assistant = _uau_messages() + [{"role": "assistant", "content": "a2"}]
+    assert message_shape_error(trailing_assistant) is not None
+    assert "last message role" in message_shape_error(trailing_assistant)
+
+    consecutive_users = [
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "content": "a1"},
+        {"role": "user", "content": "q2"},
+        {"role": "user", "content": "q3"},
+    ]
+    assert message_shape_error(consecutive_users) is not None
+    assert "alternate" in message_shape_error(consecutive_users)
+
+    assert message_shape_error([]) is not None
+    assert message_shape_error([{"role": "assistant", "content": "a"}]) is not None
+
+
+def test_append_anchor_accepts_valid_shape(tmp_path):
+    """The persistence gate writes a well-formed conversation."""
+    path = tmp_path / "bank.jsonl"
+    outcome = append_anchor(_make_anchor("ok", messages=_uau_messages()), path)
+    assert outcome is AppendOutcome.APPENDED
+    assert len(read_anchor_bank(path)) == 1
+
+
+def test_append_anchor_rejects_invalid_shape(tmp_path, caplog):
+    """A UAUU-shaped anchor is refused *and* reported — not silently dropped."""
+    path = tmp_path / "bank.jsonl"
+    broken = [
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "content": "a1"},
+        {"role": "user", "content": "q2"},
+        {"role": "user", "content": "q3"},
+    ]
+    with caplog.at_level("WARNING"):
+        outcome = append_anchor(_make_anchor("broken", messages=broken), path)
+
+    assert outcome is AppendOutcome.INVALID_SHAPE_SKIPPED
+    assert not path.exists(), "a malformed anchor must not reach the bank"
+    assert any("shape gate" in record.message for record in caplog.records)
+    assert any("broken" in record.getMessage() for record in caplog.records)
+
+
+def test_append_anchor_rejects_trailing_assistant(tmp_path):
+    """A UAUAU-shaped anchor (trailing assistant) is refused."""
+    path = tmp_path / "bank.jsonl"
+    messages = _uau_messages() + [{"role": "assistant", "content": "a2"}]
+    outcome = append_anchor(_make_anchor("tail", messages=messages), path)
+    assert outcome is AppendOutcome.INVALID_SHAPE_SKIPPED
+    assert count_existing_anchors(path) == 0
+
+
+def test_write_anchor_bank_refuses_invalid_shape(tmp_path):
+    """The bulk writer refuses a malformed conversation rather than hiding it."""
+    path = tmp_path / "bank.jsonl"
+    with pytest.raises(ValueError, match="malformed"):
+        write_anchor_bank(
+            [
+                _make_anchor("good"),
+                _make_anchor("bad", messages=[{"role": "user", "content": "q"},
+                                              {"role": "user", "content": "q2"}]),
+            ],
+            path,
+        )
+    assert not path.exists()
+
+
+# ── Output gates: id de-duplication ─────────────────────────────────────────
+
+
+def test_generate_anchor_id_is_metadata_derived():
+    """Ids are a pure function of the 4 metadata dimensions (must not change)."""
+    meta = {
+        "language": "English",
+        "knowledge_domain": "math",
+        "capability": "qa",
+        "conversation_type": "single_turn",
+    }
+    anchor_id = generate_anchor_id(meta)
+    assert anchor_id.startswith("anchor_")
+    assert len(anchor_id) == len("anchor_") + 16
+    assert generate_anchor_id(dict(meta)) == anchor_id
+
+
+def test_append_anchor_deduplicates_by_id(tmp_path, caplog):
+    """Two distinct anchors sharing an id produce exactly one bank row."""
+    path = tmp_path / "bank.jsonl"
+    meta = {
+        "language": "English",
+        "knowledge_domain": "math",
+        "capability": "qa",
+        "conversation_type": "single_turn",
+    }
+    anchor_id = generate_anchor_id(meta)
+
+    first = _make_anchor(anchor_id, anchor_meta=meta, target_answer="first answer")
+    second = _make_anchor(anchor_id, anchor_meta=meta, target_answer="second answer")
+
+    with caplog.at_level("WARNING"):
+        assert append_anchor(first, path) is AppendOutcome.APPENDED
+        assert append_anchor(second, path) is AppendOutcome.DUPLICATE_SKIPPED
+
+    records = read_anchor_bank(path)
+    assert len(records) == 1, "the duplicate id must not add a second row"
+    assert records[0]["targets"][0]["output"]["content"] == "first answer"
+    assert any("duplicate not written" in record.getMessage() for record in caplog.records)
+    # Lines and real anchors agree — the property the resume logic relies on.
+    assert count_existing_anchors(path) == count_unique_anchor_ids(path) == 1
+
+
+def test_append_anchor_dedup_survives_across_calls_without_cache(tmp_path):
+    """De-duplication is stateful per file: a rewritten bank cannot shadow new ids."""
+    path = tmp_path / "bank.jsonl"
+    assert append_anchor(_make_anchor("a"), path) is AppendOutcome.APPENDED
+    assert append_anchor(_make_anchor("a"), path) is AppendOutcome.DUPLICATE_SKIPPED
+
+    # A fresh, unrelated bank at the same path must accept a previously seen id.
+    path.unlink()
+    assert append_anchor(_make_anchor("a"), path) is AppendOutcome.APPENDED
+    assert len(read_anchor_bank(path)) == 1
+
+
+def test_write_anchor_bank_deduplicates_ids(tmp_path, caplog):
+    """The bulk writer keeps one row per id and announces the drop."""
+    path = tmp_path / "bank.jsonl"
+    anchors = [_make_anchor("dup"), _make_anchor("dup"), _make_anchor("other")]
+    with caplog.at_level("WARNING"):
+        write_anchor_bank(anchors, path)
+    records = read_anchor_bank(path)
+    assert [r["id"] for r in records] == ["dup", "other"]
+    assert count_unique_anchor_ids(path) == 2
+    assert any("duplicate" in record.getMessage() for record in caplog.records)
 
 
 # ── count_existing_anchors ──────────────────────────────────────────────────

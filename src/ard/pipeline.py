@@ -6,22 +6,30 @@ Phase 3 unified flow: all anchors (text + multimodal) are generated from
 
 from __future__ import annotations
 
+import json
 import logging
 import random
 import sys
 import time
 from pathlib import Path
 
-from ard.backends.api_client import ChatAPIClient, ChatAPIConfig
+from ard.backends.api_client import (
+    ChatAPIClient,
+    ChatAPIConfig,
+    logprobs_failure_count,
+    reasoning_stats as api_client_reasoning_stats,
+)
 from ard.config import ARDConfig
 from ard.core.ontology import load_ontology
 from ard.core.quota import allocate_images
 from ard.core.sampler import sample_anchors
 from ard.core.types import AnchorGenerationConfig
+from ard.logging import configure_file_logging
 from ard.domain.bank import (
     build_manifest_from_records,
     count_existing_anchors,
     read_anchor_bank,
+    with_generation_report,
     write_manifest,
 )
 from ard.domain.image_store import (
@@ -31,9 +39,94 @@ from ard.domain.image_store import (
     sample_images,
     scan_images,
 )
-from ard.domain.text_anchor import generate_text_anchors
+from ard.domain.text_anchor import AnchorGenerationStats, generate_text_anchors
 
 logger = logging.getLogger(__name__)
+
+
+def _counter_delta(after: dict[str, int], before: dict[str, int]) -> dict[str, int]:
+    """Return the per-key difference between two counter snapshots.
+
+    Keys present only in *before* are reported as ``0`` rather than dropped:
+    "measured, nothing seen this run" and "never measured" are different
+    statements, and only the caller can decide which one matters.
+    """
+    keys = set(after) | set(before)
+    return {key: after.get(key, 0) - before.get(key, 0) for key in keys}
+
+
+def _merge_failure_counters(
+    reasoning_delta: dict[str, int],
+    logprobs_delta: dict[str, int],
+) -> dict[str, int]:
+    """Merge the two process-level failure counter families without data loss.
+
+    Both families are flat ``tag -> count`` maps, so a tag present in both would
+    silently overwrite one of them under ``{**a, **b}``.  The tags do not
+    collide today (reasoning tags: ``responses``/``empty_content``/…;
+    log-probs tags: ``key_missing``/``partial``/…), and this guard keeps that
+    true if one is ever renamed into the other's namespace: the log-probs side
+    gets a ``logprobs_`` prefix instead of vanishing (§2.2 显式即防呆 —
+    a silent overwrite is exactly the kind of loss this project keeps paying for).
+    """
+    collisions = set(reasoning_delta) & set(logprobs_delta)
+    merged = dict(reasoning_delta)
+    merged.update(
+        {
+            (f"logprobs_{key}" if key in collisions else key): value
+            for key, value in logprobs_delta.items()
+        }
+    )
+    return merged
+
+
+def _log_target_model_reasoning_stats(
+    after: dict[str, int],
+    before: dict[str, int],
+    anchors_generated: int,
+) -> dict[str, int]:
+    """Log the reasoning-vs-content accounting of the target model (WP-F3).
+
+    Reasoning tokens (``delta.reasoning``) are dropped from the answer by
+    design, but they consume ``max_tokens`` first.  When a response spends its
+    whole budget thinking, the target answer is empty and the anchor cannot be
+    built — a silent loss unless it is counted and announced (§3.2).
+
+    A run with ``empty_content > 0`` did not produce the anchors it looks like
+    it produced; the usual cause is ``enable_thinking = true`` (or an
+    ``enable_thinking`` value that reaches the server as ``null``) combined with
+    a ``max_tokens`` that is too small to hold reasoning **and** an answer.
+
+    Returns:
+        The measured delta, so the same numbers can be published in
+        ``manifest.json`` instead of being recomputed (and drifting).
+    """
+    delta = _counter_delta(after, before)
+    responses = delta.get("responses", 0)
+    if responses == 0:
+        return delta
+    empty = delta.get("empty_content", 0)
+    reasoning_only = delta.get("reasoning_only_responses", 0)
+    truncated = delta.get("truncated_empty", 0)
+    summary = (
+        f"Target model reasoning stats: {responses} response(s), "
+        f"{delta.get('reasoning_responses', 0)} with reasoning "
+        f"({delta.get('reasoning_chars', 0)} reasoning chars), "
+        f"{empty} empty content, {reasoning_only} reasoning-only, "
+        f"{truncated} empty-and-truncated by max_tokens; "
+        f"{anchors_generated} anchor(s) generated."
+    )
+    if empty == 0:
+        logger.info(summary)
+        return delta
+    logger.warning(
+        "%s At least one target answer was empty — the failure is a model-output "
+        "problem, not a network problem. Check whether enable_thinking is on and "
+        "whether max_tokens is large enough for reasoning plus answer.",
+        summary,
+    )
+    return delta
+
 
 def run(
     config: ARDConfig,
@@ -71,6 +164,9 @@ def run(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # ── File logging (must happen after output_dir exists) ──────────────
+    configure_file_logging(output_dir)
+
     output_path = output_dir / "anchor_bank.jsonl"
 
     # ── Overwrite / checkpoint-resume ──────────────────────────────────────
@@ -79,10 +175,10 @@ def run(
         logger.info("Overwrite mode: cleared existing anchor bank at %s", output_path)
 
     # Backup merged config to output directory for reproducibility
-    import json
+    config_info = config.model_dump(mode="json")
     config_json_path = output_dir / "config.json"
     config_json_path.write_text(
-        json.dumps(config.model_dump(mode="json"), indent=2, ensure_ascii=False),
+        json.dumps(config_info, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
     logger.info("Merged config snapshot written to %s", config_json_path)
@@ -95,7 +191,10 @@ def run(
     if remaining <= 0:
         logger.info("Already have %d anchors, skipping generation.", existing_count)
         all_records = read_anchor_bank(output_path)
-        manifest = build_manifest_from_records(all_records, output_dir)
+        manifest = build_manifest_from_records(all_records, output_dir, config_info)
+        # No generation happened, so there are no run counters to report: the
+        # previous run's manifest is left as it is rather than overwritten with
+        # a clean-looking one (§3.2 — a missing field must not read as "healthy").
         write_manifest(manifest, output_dir / "manifest.json")
         logger.info("Done! Output: %s", output_dir)
         logger.info("  Total anchors: %d", len(all_records))
@@ -132,6 +231,24 @@ def run(
             inter_token_timeout=config.input_generator.inter_token_timeout,
             max_retries=config.input_generator.max_retries,
             retry_on_timeout=config.input_generator.retry_on_timeout,
+            # Explicit, not inherited from ChatAPIConfig's default (§2.2 显式即防呆).
+            #
+            # Since B3 the key is **always** emitted, so this line is the only
+            # thing standing between the input generator and the server-side
+            # template default ("``enable_thinking`` undefined" is read as *ON*).
+            # Omitting it would silently flip question generation back into
+            # reasoning mode, and ``[input_generator]`` deliberately has no
+            # ``enable_thinking`` field to fall back on — so "what the input
+            # generator does" has to be readable here, at the construction site,
+            # rather than inferred from a dataclass default.
+            #
+            # The value is fixed at ``False`` because question generation has no
+            # use for reasoning: the generated user turn is stored verbatim as
+            # the anchor's question, so reasoning tokens would spend
+            # ``max_tokens`` first and dilute what is meant to be a clean user
+            # utterance.  Only ``[target_model]`` is configurable: reasoning
+            # distils into the student model, a question does not.
+            enable_thinking=False,
         )
     )
     target_client = ChatAPIClient(
@@ -219,6 +336,20 @@ def run(
                 )
 
     # Step 3: Generate all anchors via the unified generator
+    #
+    # Reasoning observability (WP-F3): snapshot the API client's reasoning
+    # counters before and after generation.  Reasoning tokens arrive as
+    # ``delta.reasoning`` and never enter the answer, so a run whose budget was
+    # eaten by thinking produces *empty* target answers — a failure that used to
+    # be visible only as scattered per-request logs.  This delta makes the rate
+    # visible once per run (§3.2 透明退路: an affected result must be announced).
+    #
+    # Log-probs failures (WP-F2) are snapshotted the same way: the counter
+    # exists so that "64/64 anchors written with empty log-probs" can never
+    # again look like a successful run.
+    reasoning_before = api_client_reasoning_stats()
+    logprobs_failures_before = logprobs_failure_count()
+    generation_stats = AnchorGenerationStats(requested=len(specs))
     new_anchors = generate_text_anchors(
         specs=specs,
         input_client=input_client,
@@ -229,14 +360,29 @@ def run(
         output_path=output_path,
         backpressure_threshold=config.generation.backpressure_threshold,
         backpressure_cooldown=config.generation.backpressure_cooldown,
+        stats=generation_stats,
     )
+    reasoning_delta = _log_target_model_reasoning_stats(
+        api_client_reasoning_stats(), reasoning_before, len(new_anchors)
+    )
+    logprobs_delta = _counter_delta(logprobs_failure_count(), logprobs_failures_before)
 
     # ── Build manifest from ALL anchors (existing + new) ──────────────────
     all_records = read_anchor_bank(output_path)
-    manifest = build_manifest_from_records(all_records, output_dir)
+    manifest = build_manifest_from_records(all_records, output_dir, config_info)
+    # Publish the run's failures next to the anchors that survived, so a short
+    # or supervision-free bank can never be mistaken for a healthy one (§3.2).
+    with_generation_report(
+        manifest,
+        stats=generation_stats.to_manifest_dict(),
+        failures=_merge_failure_counters(reasoning_delta, logprobs_delta),
+    )
     write_manifest(manifest, output_dir / "manifest.json")
 
     total = len(all_records)
     logger.info("Done! Output: %s", output_dir)
-    logger.info("  Total anchors: %d (%d existing + %d new)", total, existing_count, total - existing_count)
+    logger.info(
+        "  Total anchors: %d (%d existing + %d new)",
+        total, existing_count, total - existing_count,
+    )
     return output_dir

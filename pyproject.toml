@@ -61,3 +61,4 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = ["--basetemp=.pytest_tmp"]
+markers = ["slow: long-running timing tests"]
