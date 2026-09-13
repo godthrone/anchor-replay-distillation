@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import requests
+import httpx
 
 
 def parse_args() -> argparse.Namespace:
@@ -157,13 +157,13 @@ def call_embedding_api(
 
     for attempt in range(1, max_retries + 1):
         try:
-            resp = requests.post(api_url, json=payload, timeout=120)
+            resp = httpx.post(api_url, json=payload, timeout=120)
             resp.raise_for_status()
             data = resp.json()
             # Sort by index to preserve order
             embeddings = sorted(data["data"], key=lambda x: x["index"])
             return [item["embedding"] for item in embeddings]
-        except requests.exceptions.RequestException as e:
+        except (httpx.HTTPError, json.JSONDecodeError) as e:
             last_error = e
             if attempt < max_retries:
                 wait = 2 ** attempt
