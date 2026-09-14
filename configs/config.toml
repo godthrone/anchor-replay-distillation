@@ -11,7 +11,7 @@ temperature = 0.8
 # Maximum tokens in the response. Comment out (or delete) to let the API
 # provider decide (recommended for most use cases).
 # Uncomment and set a value to enforce a limit.
-# max_tokens = 4096
+# max_tokens = 32768
 connect_timeout = 10.0
 # Prefill + queue wait timeout. Default: 300s (5 minutes)
 first_token_timeout = 300.0
@@ -27,7 +27,7 @@ temperature = 0.0
 # Maximum tokens in the response. Comment out (or delete) to let the API
 # provider decide (recommended for most use cases).
 # Uncomment and set a value to enforce a limit.
-# max_tokens = 4096
+# max_tokens = 32768
 connect_timeout = 10.0
 # Prefill + queue wait timeout. Default: 300s (5 minutes)
 first_token_timeout = 300.0
