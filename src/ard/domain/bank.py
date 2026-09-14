@@ -187,13 +187,18 @@ def anchor_to_dict(anchor: GeneratedAnchor) -> dict[str, Any]:
         "id": "primary",
         "output": {
           "content": "<target_answer>",
-          "logprobs": {"token_ids": [...], "log_probs": [...]}
+          "reasoning": "<teacher reasoning text or null>"
         }
       }],
       "anchor_meta": {...},
       "teacher_id": "..."
     }
     ```
+
+    ``content`` and ``reasoning`` are separate keys on purpose (§1.2 契约 2):
+    thinking is not the answer, and downstream decides on its own whether it
+    wants the reasoning.  ``reasoning`` is ``null`` when the teacher did not
+    think (``enable_thinking = false``) — never ``""``.
     """
     return {
         "id": anchor.id,
@@ -204,7 +209,7 @@ def anchor_to_dict(anchor: GeneratedAnchor) -> dict[str, Any]:
                 "id": "primary",
                 "output": {
                     "content": anchor.target_answer,
-                    "logprobs": anchor.logprobs or {"token_ids": [], "log_probs": []},
+                    "reasoning": anchor.reasoning,
                 },
             }
         ],
@@ -317,7 +322,7 @@ def build_manifest_from_records(
     from :class:`GeneratedAnchor` objects, so the full anchor bank can be
     summarised without re-materialising every ``GeneratedAnchor``.
 
-    Bank composition only: run health (abandoned anchors, log-probs failures,
+    Bank composition only: run health (abandoned anchors, reasoning failures,
     cooldowns) is not derivable from the surviving records and is attached
     separately by :func:`with_generation_report`.
     """
@@ -361,10 +366,9 @@ def with_generation_report(
 
     The manifest used to describe only the anchors that *survived*
     (``total_anchors`` / ``domains`` / …), so a run that dropped a third of its
-    anchors — or one whose log-probs were all empty — produced a manifest that
-    looked perfectly healthy.  That is the failure mode this project kept
-    paying for, so the dropped-anchor accounting now travels with the output
-    (§3.2 透明退路).
+    anchors produced a manifest that looked perfectly healthy.  That is the
+    failure mode this project kept paying for, so the dropped-anchor accounting
+    now travels with the output (§3.2 透明退路).
 
     The result is one nested ``"generation"`` object with two sub-objects:
 
@@ -373,8 +377,7 @@ def with_generation_report(
       ``abandoned_by_reason`` / ``written`` / ``rejected_invalid_shape`` /
       ``duplicate_ids`` / ``backpressure_events``.
     * ``failures`` — process-level failure counters, keyed by their own
-      machine-readable tags: log-probs extraction failures grouped by reason,
-      and reasoning/empty-content counters
+      machine-readable tags: reasoning/empty-content counters
       (``responses``, ``empty_content``, ``reasoning_only_responses``,
       ``truncated_empty``, …).
 
@@ -388,7 +391,7 @@ def with_generation_report(
         stats: :meth:`ard.domain.text_anchor.AnchorGenerationStats.to_manifest_dict`
             output, or ``None`` when the run did not generate anchors
             (checkpoint-resume path).
-        failures: Process-level counters (log-probs failures, reasoning stats).
+        failures: Process-level counters (reasoning / empty-content stats).
 
     Returns:
         The same *manifest* object, enriched.

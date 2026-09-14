@@ -3,29 +3,26 @@
 Supports text and multimodal (base64-encoded image) chat requests,
 with concurrent batch execution via ThreadPoolExecutor.
 
-All requests use streaming SSE:
-- ``chat()`` returns content via SSE with per-phase timeouts.
-- ``chat_with_logprobs()`` returns content + log-probs via SSE,
-  collecting ``choices[0].logprobs.content`` from each delta chunk.
+All requests use streaming SSE: :meth:`ChatAPIClient.chat` returns a
+:class:`ChatResponse`, which carries the assistant's answer and — when the
+server emitted one — the teacher's reasoning trace, as **two separate fields**.
 
-Log-probs live under ``choices[0].logprobs`` in the OpenAI / vLLM response
-schema — never at the chunk top level (``prompt_logprobs``, which appears at
-the top level of *non-streaming* responses, is the prompt side and is **not**
-what this module collects).  A request that asked for log-probs but did not
-receive them is **not** a success: see :exc:`ARDLogprobsError`.
+Reasoning is *persisted output*, not accounting: it arrives in
+``delta.reasoning`` (Qwen3-style chat templates: an **undefined**
+``enable_thinking`` means thinking is ON) while ``delta.content`` stays
+``null`` for the whole thinking phase.  It must never be concatenated into
+the answer — thinking and answer are different supervision targets (§1.2
+契约 2) — so the two streams are collected into separate fields and reach the
+dataset as ``targets[0].output.content`` and ``targets[0].output.reasoning``.
+
+Reasoning is also a *budget consumer*: a response whose whole budget went into
+thinking arrives with ``delta.content`` never set.  This module counts that
+(``ChatAPIStats``) and refuses to hand an empty string to the caller as if it
+were an answer (:exc:`ARDEmptyContentError`).
 
 The whole timeout policy is enforced by :func:`_iter_lines_with_timeout`;
 this module deliberately sets **no** httpx-level read timeout (see
 :func:`_send_streaming_request`).
-
-Reasoning tokens are a *budget consumer*, not output.  Real vLLM streams them
-in ``delta.reasoning`` (Qwen3-style chat templates: an **undefined**
-``enable_thinking`` means thinking is ON), so a response whose whole budget
-went into reasoning arrives with ``delta.content`` never set.  This module
-counts that (``ChatAPIStats``) and refuses to hand an empty string to the
-caller as if it were an answer (:exc:`ARDEmptyContentError`); it never merges
-reasoning text into the returned content, which would silently de-sync the
-distilled messages from the on-disk schema.
 """
 
 from __future__ import annotations
@@ -70,39 +67,14 @@ class ARDTimeoutError(RuntimeError):
     """Raised when a streaming request exceeds the configured timeout."""
 
 
-class ARDLogprobsError(RuntimeError):
-    """Raised when a response that requested log-probs carries none.
-
-    This is a **contract failure, not a degradation**: log-probs are the
-    distillation supervision signal, so silently emitting
-    ``{"token_ids": [], "log_probs": []}`` would hide a broken run behind an
-    apparently successful one (§2.3 边界校验即防呆 — validate the response
-    structure before letting it into the pipeline).
-
-    ``reason`` is a short machine-readable tag (``payload_missing_choices`` /
-    ``key_missing`` / ``value_null`` / ``content_missing`` / ``content_empty`` /
-    ``entries_skipped`` / ``partial``) used for the observable failure counter
-    and for grouping in logs.
-
-    Callers that explicitly accept an empty log-probs payload may opt out with
-    ``ChatAPIConfig.allow_missing_logprobs`` (§3.3 预授权退路 — default is to
-    fail).
-    """
-
-    def __init__(self, message: str, *, reason: str) -> None:
-        super().__init__(message)
-        self.reason = reason
-
-
 class ARDEmptyContentError(RuntimeError):
     """Raised when a completion produced no assistant text at all.
 
     This is a *model-output* failure — the token budget was consumed by hidden
     reasoning, or the server returned an unusable completion — and it is
-    deliberately a different type from :exc:`ARDTimeoutError`, from
-    :exc:`ARDLogprobsError` and from the generic ``RuntimeError`` used for
-    transport/server failures, so callers can classify it without string
-    matching (§2.2 显式即防呆).
+    deliberately a different type from :exc:`ARDTimeoutError` and from the
+    generic ``RuntimeError`` used for transport/server failures, so callers can
+    classify it without string matching (§2.2 显式即防呆).
 
     The alternative — returning ``""`` — is what let the reasoning-truncation
     failure reach the dataset generator as an "empty target answer" that the
@@ -122,48 +94,15 @@ class ARDEmptyContentError(RuntimeError):
         self.stats = stats
 
 
-# ── Failure observability ──────────────────────────────────────────────────
-#
-# A swallowed failure is the root cause of the logprobs bug this module fixed:
-# 64/64 anchors were written with empty log-probs while every layer reported
-# success.  The counter below makes the failure *countable* somewhere other
-# than a log line — ``pipeline.run()`` folds it into ``manifest.json``
-# (§3.2 透明退路: result is affected, so it must be visible to the user).
-
-_LOGPROBS_FAILURES: dict[str, int] = {}
-_LOGPROBS_FAILURES_LOCK = threading.Lock()
-
-
-def _record_logprobs_failure(reason: str) -> None:
-    """Increment the log-probs failure counter for *reason* (thread-safe)."""
-    with _LOGPROBS_FAILURES_LOCK:
-        _LOGPROBS_FAILURES[reason] = _LOGPROBS_FAILURES.get(reason, 0) + 1
-
-
-def logprobs_failure_count() -> dict[str, int]:
-    """Return a copy of the per-reason log-probs failure counts.
-
-    Cumulative since :func:`reset_logprobs_failure_count`.  A non-empty dict
-    means anchors were dropped for missing log-probs data.
-    """
-    with _LOGPROBS_FAILURES_LOCK:
-        return dict(_LOGPROBS_FAILURES)
-
-
-def reset_logprobs_failure_count() -> None:
-    """Clear the log-probs failure counter (call once at run start)."""
-    with _LOGPROBS_FAILURES_LOCK:
-        _LOGPROBS_FAILURES.clear()
-
-
 # ── Reasoning observability (WP-F3) ────────────────────────────────────────
 #
 # Reasoning tokens arrive in ``delta.reasoning`` (measured against vLLM 0.22 +
-# Qwen3.8-27B; ``delta.reasoning_content`` does not exist there) and are a pure
-# budget consumer: they are discarded from the returned content by design, but
-# a run where they ate the whole ``max_tokens`` budget must not look healthy.
-# The counters below are the observable signal; ``pipeline.run()`` prints their
-# delta around anchor generation.
+# Qwen3.8-27B; ``delta.reasoning_content`` does not exist there).  They are
+# persisted as the teacher's reasoning trace (``targets[0].output.reasoning``)
+# *and* they are a budget consumer: a run where they ate the whole
+# ``max_tokens`` budget must not look healthy.  The counters below are the
+# observable signal; ``pipeline.run()`` prints their delta around anchor
+# generation.
 
 _REASONING_STATS: dict[str, int] = {}
 _REASONING_STATS_LOCK = threading.Lock()
@@ -194,8 +133,9 @@ def reasoning_stats() -> dict[str, int]:
 
     * ``responses`` — completed streamed responses.
     * ``reasoning_responses`` — responses that carried reasoning tokens.
-    * ``reasoning_chars`` — total reasoning characters seen (*count only*, the
-      text itself is never stored, so this is safe to log or publish).
+    * ``reasoning_chars`` — total reasoning characters seen.  The text itself
+      reaches the dataset through :attr:`ChatResponse.reasoning`; these counters
+      are the run-level view of the same stream, so they stay safe to log.
     * ``reasoning_only_responses`` — responses that delivered reasoning and no
       content: every anchor built from one is guaranteed empty.
     * ``empty_content`` — responses whose assistant content was empty (a
@@ -218,8 +158,9 @@ class ChatAPIStats:
     """Per-response reasoning/content accounting (observability only).
 
     Deliberately carries **no** reasoning text: only counts, so a stats object
-    (or a log line built from it) can never leak reasoning prose into a dataset
-    or into ``manifest.json``.
+    (or a log line built from it) can never leak reasoning prose into a log
+    file or into ``manifest.json``.  The text has exactly one home — the
+    :attr:`ChatResponse.reasoning` field of the response it came from.
     """
 
     content_chars: int = 0
@@ -264,7 +205,6 @@ class ChatAPIConfig:
     max_retries: int = 2
     retry_on_timeout: bool = False  # True: retry timeouts; False: fail fast
     enable_thinking: bool = False  # two-state on purpose: see __post_init__
-    allow_missing_logprobs: bool = False  # False: fail the anchor (§3.3)
 
     def __post_init__(self) -> None:
         if self.api_base is None:
@@ -319,11 +259,29 @@ class ChatResult:
     error: str | None = None
 
 
-@dataclass(slots=True)
-class ChatResultWithLogprobs(ChatResult):
-    """Result of a chat completion request with log-prob data."""
+@dataclass(frozen=True, slots=True)
+class ChatResponse:
+    """A completed chat completion: the answer, and the reasoning behind it.
 
-    logprobs: dict[str, Any] | None = None
+    Two fields on purpose.  ``reasoning`` is the teacher's thinking trace and
+    ``content`` is its answer; they are **different supervision targets** and
+    downstream code decides independently whether it wants the reasoning (§1.2
+    契约 2 — the generator does not make that decision for the consumer).
+    Concatenating them, or returning one where the other is expected, is the
+    failure this type exists to make impossible.
+
+    Attributes:
+        content: The assistant's answer (the model's ``delta.content`` stream,
+            stripped of the surrounding whitespace at the call site).
+        reasoning: The thinking trace (``delta.reasoning``), or ``None`` when
+            the response carried none — i.e. when thinking was disabled for the
+            request.  Empty and absent are the same thing (§2.2: ``None`` is the
+            only legal empty value), so a server that sent no reasoning yields
+            ``None`` rather than ``""``.
+    """
+
+    content: str
+    reasoning: str | None = None
 
 
 # ── Image encoding utility ─────────────────────────────────────────────────
@@ -384,10 +342,11 @@ def _reasoning_text_of(delta: dict[str, Any]) -> str:
     change; a stray empty string counts as "absent" and falls through, so a
     server that pads the unused field cannot mask the real one.
 
-    The returned text is used **only** for counting.  It must never be appended
-    to the content parts: reasoning is not part of the distilled answer, and
-    mixing it into ``messages`` would de-sync the emitted conversation from the
-    schema written to disk.
+    The returned text is accumulated into :attr:`ChatResponse.reasoning` and
+    persisted as ``targets[0].output.reasoning``.  It must never be appended to
+    the content parts: reasoning is not part of the distilled answer, and mixing
+    it into ``messages`` would de-sync the emitted conversation from the schema
+    written to disk.
     """
     for field in ("reasoning", "reasoning_content"):
         value = delta.get(field)
@@ -455,8 +414,6 @@ def _build_payload(
     messages: list[dict[str, Any]],
     temperature: float | None,
     *,
-    logprobs: bool = False,
-    top_logprobs: int = 1,
     stream: bool = True,
 ) -> dict[str, Any]:
     """Build the JSON payload for a chat completions request.
@@ -485,9 +442,6 @@ def _build_payload(
     }
     if config.max_tokens is not None:
         payload["max_tokens"] = config.max_tokens
-    if logprobs:
-        payload["logprobs"] = True
-        payload["top_logprobs"] = top_logprobs
     payload["chat_template_kwargs"] = {
         "enable_thinking": _assert_enable_thinking_is_bool(
             config.enable_thinking, where="payload construction"
@@ -698,12 +652,10 @@ def _iter_lines_with_timeout(
 def _send_streaming_request(
     config: ChatAPIConfig,
     payload: dict[str, Any],
-    *,
-    collect_logprobs: bool = False,
-) -> tuple[str, str | None, dict | None, ChatAPIStats]:
+) -> tuple[str, str | None, str | None, ChatAPIStats]:
     """Send a streaming chat completions request via SSE.
 
-    Returns ``(content, finish_reason, logprobs, stats)``.
+    Returns ``(content, reasoning, finish_reason, stats)``.
 
     Uses ``httpx.Client.stream()`` to POST *payload* with ``stream: true``,
     then parses SSE ``data:`` chunks.  Timeouts are layered:
@@ -719,22 +671,17 @@ def _send_streaming_request(
     Args:
         config: Endpoint and timeout configuration.
         payload: Full JSON request body (must include ``"stream": true``).
-        collect_logprobs: If True, collect log-probabilities from each SSE chunk
-            and return them as a dict with ``token_ids`` and ``log_probs`` lists.
-            Defaults to False for plain ``chat()`` calls.
 
     Returns:
-        A tuple of ``(full_content, finish_reason, logprobs, stats)``.  *finish_reason*
-        is ``None`` if none was observed.  *logprobs* is ``None`` when *collect_logprobs*
-        is ``False``, otherwise a dict ``{"token_ids": [...], "log_probs": [...]}``.
-        *stats* counts what the response actually contained — including the
-        reasoning tokens that never enter *full_content* (see :class:`ChatAPIStats`).
+        A tuple of ``(full_content, reasoning, finish_reason, stats)``.
+        *reasoning* is the accumulated ``delta.reasoning`` text, or ``None``
+        when the response carried none.  *finish_reason* is ``None`` if none was
+        observed.  *stats* counts what the response actually contained
+        (see :class:`ChatAPIStats`).
 
     Raises:
         httpx.TimeoutException: On connect-timeout.
         RuntimeError: On HTTP errors or SSE parse errors.
-        ARDLogprobsError: If *collect_logprobs* is True and the response carries
-            no usable log-probs (unless ``config.allow_missing_logprobs``).
         ARDTimeoutError: On streaming timeouts (from :func:`_iter_lines_with_timeout`).
         TypeError: If *payload* would carry a non-bool ``enable_thinking`` (the
             last checkpoint before the request leaves the process).
@@ -765,22 +712,12 @@ def _send_streaming_request(
     http_timeout = httpx.Timeout(None, connect=config.connect_timeout, read=None)
 
     content_parts: list[str] = []
+    reasoning_parts: list[str] = []
     finish_reason: str | None = None
-    token_ids: list[int | str] = []
-    log_probs: list[float] = []
-    logprobs_observed = False  # ≥1 usable entry was collected
-    logprobs_skipped = 0  # malformed entries that could not be collected
-    anomaly_reason: str | None = None  # first real anomaly, for diagnostics
-    logprobs_null_chunks = 0  # chunks whose logprobs was null (benign per se)
-    # Reasoning accounting (WP-F3).  Reasoning text is counted and dropped — it
-    # must never reach ``content_parts`` (see _reasoning_text_of).
+    # Reasoning accounting (WP-F3).  The text is accumulated into
+    # ``reasoning_parts`` — never into ``content_parts`` (see _reasoning_text_of).
     reasoning_chars = 0
     reasoning_chunks = 0
-
-    def _note_anomaly(reason: str) -> None:
-        nonlocal anomaly_reason
-        if anomaly_reason is None:
-            anomaly_reason = reason
 
     with httpx.Client(timeout=http_timeout) as client:
         with client.stream("POST", config.chat_completions_url,
@@ -811,13 +748,9 @@ def _send_streaming_request(
 
                 choices = chunk.get("choices")
                 if not isinstance(choices, list) or not choices:
-                    if collect_logprobs:
-                        _note_anomaly("payload_missing_choices")
                     continue
                 choice0 = choices[0]
                 if not isinstance(choice0, dict):
-                    if collect_logprobs:
-                        _note_anomaly("payload_missing_choices")
                     continue
 
                 delta = choice0.get("delta")
@@ -825,104 +758,24 @@ def _send_streaming_request(
                     token = delta.get("content")
                     if isinstance(token, str) and token:
                         content_parts.append(token)
-                    # Reasoning is observed and counted only.  Appending it to
-                    # content_parts would contaminate the distilled answer, and
-                    # mixing it into the final ``messages`` would contradict the
-                    # schema written to disk.
+                    # Reasoning is a *separate output stream*.  It is collected
+                    # into its own field because the dataset persists it as
+                    # ``targets[0].output.reasoning``; appending it to
+                    # content_parts would merge thinking into the answer.
                     reasoning = _reasoning_text_of(delta)
                     if reasoning:
+                        reasoning_parts.append(reasoning)
                         reasoning_chars += len(reasoning)
                         reasoning_chunks += 1
-
-                if collect_logprobs:
-                    # OpenAI / vLLM carry log-probs under choices[0].logprobs
-                    # ({"content": [...]}); the chunk top level never has them.
-                    # "Not requested / nothing in this chunk" shows up as a
-                    # *null value* (key present), so the check must be `is None`,
-                    # never `not x` or a key-presence test (§2.2).
-                    if "logprobs" not in choice0:
-                        # Real vLLM always sends the key — even when null — so a
-                        # missing key means the response does not follow the
-                        # schema this module parses.  If entries had already been
-                        # delivered, the key vanishing mid-stream is the same
-                        # truncation as a mid-stream null: the token list stops
-                        # short of the answer and must hard-fail regardless of
-                        # ``allow_missing_logprobs`` (§3.4 — a shorter token list
-                        # changes the result, so it is a defence, not a fallback).
-                        if logprobs_observed:
-                            _note_anomaly("stream_stopped_delivering")
-                        else:
-                            _note_anomaly("key_missing")
-                    else:
-                        chunk_logprobs = choice0.get("logprobs")
-                        if chunk_logprobs is None:
-                            # Benign in exactly two places: vLLM's opening
-                            # role-only chunk and the trailing finish chunk both
-                            # carry null.  Anywhere else in the *middle* of a
-                            # stream that has already delivered entries, null
-                            # means the stream stopped delivering the supervision
-                            # signal: the token list collected so far is a
-                            # truncation, not a complete answer.  That changes
-                            # the result, so it must not pass silently (§3.4).
-                            logprobs_null_chunks += 1
-                            if logprobs_observed and choice0.get("finish_reason") is None:
-                                _note_anomaly("stream_stopped_delivering")
-                        elif not isinstance(chunk_logprobs, dict):
-                            _note_anomaly("value_not_dict")
-                        else:
-                            content_lps = chunk_logprobs.get("content")
-                            if content_lps is None:
-                                _note_anomaly("content_missing")
-                            elif not isinstance(content_lps, list):
-                                _note_anomaly("content_not_list")
-                            else:
-                                for lp in content_lps:
-                                    lp_val = lp.get("logprob") if isinstance(lp, dict) else None
-                                    if not isinstance(lp_val, (int, float)):
-                                        logprobs_skipped += 1  # malformed entry
-                                        continue
-                                    # token_ids / log_probs stay positionally
-                                    # aligned: append both or neither.
-                                    tid = lp.get("token") or lp.get("token_id", "")
-                                    if isinstance(tid, (int, str)):
-                                        token_ids.append(tid)
-                                    log_probs.append(float(lp_val))
-                                    logprobs_observed = True
-                                # An empty per-chunk list is legitimate: the
-                                # server generated no token for that chunk.
 
                 fr = choice0.get("finish_reason")
                 if fr is not None:
                     finish_reason = fr
 
-    logprobs_result: dict | None = None
-    if collect_logprobs:
-        logprobs_result = {"token_ids": token_ids, "log_probs": log_probs}
-        # Reason precedence: a malformed entry is a hard failure; otherwise the
-        # first schema anomaly; otherwise "nothing was ever delivered".
-        if logprobs_skipped > 0:
-            reason: str | None = "entries_skipped"
-        elif anomaly_reason is not None:
-            reason = anomaly_reason
-        elif not logprobs_observed:
-            reason = "no_logprobs_observed"
-        else:
-            reason = None
-        if reason is not None:
-            logger.debug(
-                "logprobs collection: %d null chunk(s), %d malformed entr(ies), reason=%s",
-                logprobs_null_chunks, logprobs_skipped, reason,
-            )
-        _validate_logprobs(
-            config,
-            logprobs_result,
-            observed=logprobs_observed,
-            skipped=logprobs_skipped,
-            reason=reason,
-            finish_reason=finish_reason,
-        )
-
     content = "".join(content_parts)
+    # Empty and absent are the same thing (§2.2): a response that carried no
+    # reasoning yields None, never "".
+    reasoning_text = "".join(reasoning_parts) or None
     stats = ChatAPIStats(
         content_chars=len(content),
         reasoning_chars=reasoning_chars,
@@ -944,79 +797,7 @@ def _send_streaming_request(
         if finish_reason == "length":
             _record_reasoning_event("truncated_empty")
 
-    return content, finish_reason, logprobs_result, stats
-
-
-def _validate_logprobs(
-    config: ChatAPIConfig,
-    logprobs: dict[str, Any],
-    *,
-    observed: bool,
-    skipped: int,
-    reason: str | None,
-    finish_reason: str | None,
-) -> None:
-    """Fail (or warn) when a log-probs request came back without usable data.
-
-    Three outcomes:
-
-    * **Healthy** (``reason is None``) — every delivered entry was collected:
-      returns quietly.  Note that ``logprobs: null`` on the opening role-only
-      chunk and on the trailing finish chunk is normal vLLM behaviour and does
-      not make a response unhealthy.
-    * **Incomplete** — entries were collected but the stream stopped
-      delivering them, or entries were malformed and dropped.  Always raises:
-      a truncated token list is corrupted supervision data and must never be
-      published as if it were complete.
-    * **Nothing at all** — no chunk carried any usable entry.  Logged at ERROR
-      and counted, then raised as :exc:`ARDLogprobsError` unless
-      ``config.allow_missing_logprobs`` is True (§3.3 预授权退路: the user must
-      declare in the config, *before* the run, that anchors may be emitted
-      without supervision signal; the default is to fail).
-
-    The failure counter is incremented exactly once per call, so the counts
-    folded into ``manifest.json`` map 1:1 to dropped/failed anchors.
-    """
-    if reason is None:
-        return
-
-    if observed or skipped > 0:
-        _record_logprobs_failure(reason)
-        raise ARDLogprobsError(
-            f"logprobs extraction incomplete (reason={reason}): the response carried "
-            f"{len(_log_probs_of(logprobs))} token log-prob(s) and dropped {skipped} "
-            f"malformed entry(ies) before the stream stopped delivering them "
-            f"(finish_reason={finish_reason!r}). A truncated token list must not be "
-            f"published as complete supervision data.",
-            reason=reason,
-        )
-
-    _record_logprobs_failure(reason)
-    detail = f"reason={reason}, finish_reason={finish_reason!r}"
-    logger.error(
-        "Requested logprobs=True but the response carried no log-probs (%s). "
-        "This anchor has no distillation supervision signal.",
-        detail,
-    )
-    if config.allow_missing_logprobs:
-        logger.warning(
-            "Emitting an empty log-probs payload because allow_missing_logprobs=true "
-            "(§3.3 pre-authorized fallback).",
-        )
-        return
-    raise ARDLogprobsError(
-        f"Response carried no log-probs ({detail}). The server accepted logprobs=True "
-        f"but returned no choices[0].logprobs.content. Refusing to emit an anchor with "
-        f"an empty supervision signal; set allow_missing_logprobs=true to accept "
-        f"empty log-probs payloads explicitly (§3.3).",
-        reason=reason,
-    )
-
-
-def _log_probs_of(logprobs: dict[str, Any]) -> list[Any]:
-    """Return the ``log_probs`` list of a log-probs payload (length = token count)."""
-    value = logprobs.get("log_probs")
-    return value if isinstance(value, list) else []
+    return content, reasoning_text, finish_reason, stats
 
 
 def _is_timeout_error(exc: Exception) -> bool:
@@ -1043,12 +824,9 @@ class ChatAPIClient:
 
     Supports text and multimodal messages.  All requests use ``httpx`` with
     streaming SSE and per-phase timeouts (connect → first_token → inter_token).
-    Log-probs are collected from ``choices[0].logprobs.content`` of SSE delta
-    chunks when requested, and their absence is a failure
-    (:exc:`ARDLogprobsError`), not a silent empty payload.
-    Reasoning tokens (``delta.reasoning``) are counted but never returned: a
-    response that delivered reasoning and no content is a failure
-    (:exc:`ARDEmptyContentError`), not an empty answer.
+    Every response comes back as a :class:`ChatResponse` — answer and reasoning
+    in separate fields; a response that delivered reasoning and no content is a
+    failure (:exc:`ARDEmptyContentError`), not an empty answer.
     Concurrency is handled by ``ThreadPoolExecutor``.
 
     Parameters:
@@ -1062,11 +840,8 @@ class ChatAPIClient:
         self,
         messages: list[dict[str, Any]],
         temperature: float | None = None,
-        *,
-        logprobs: bool = False,
-        top_logprobs: int = 1,
-    ) -> str:
-        """Send a single streaming chat request and return the content text.
+    ) -> ChatResponse:
+        """Send a single streaming chat request and return a :class:`ChatResponse`.
 
         Uses SSE streaming with per-phase timeouts (connect → first_token →
         inter_token).  On timeout the request is NOT retried when
@@ -1080,14 +855,13 @@ class ChatAPIClient:
                 "text": "..."}`` parts.
             temperature: Optional per-request temperature override.
                 When ``None``, the client's default temperature is used.
-            logprobs: If True, request log-probabilities from the API.
-                Note: This method only returns the content string.
-                Use :meth:`chat_with_logprobs` to also retrieve log-probs.
 
         Returns:
-            The text content of the assistant's response.  Reasoning text is
-            never part of it (reasoning tokens are counted in
-            :func:`reasoning_stats` and discarded).
+            A :class:`ChatResponse` whose ``content`` is the answer and whose
+            ``reasoning`` is the thinking trace (``None`` when the response
+            carried none).  The two are separate fields: reasoning is never
+            part of ``content``, and merging them is the caller's decision to
+            make, not this client's.
 
         Raises:
             ARDEmptyContentError: If the completion carried no assistant content
@@ -1095,16 +869,12 @@ class ChatAPIClient:
                 retried — the cause is deterministic for the same prompt.
             RuntimeError: After exhausting all retries.
         """
-        payload = _build_payload(
-            self._config, messages, temperature,
-            logprobs=logprobs, top_logprobs=top_logprobs,
-            stream=True,
-        )
+        payload = _build_payload(self._config, messages, temperature, stream=True)
         last_error: Exception | None = None
 
         for attempt in range(self._config.max_retries + 1):
             try:
-                content, finish_reason, _, stats = _send_streaming_request(
+                content, reasoning, finish_reason, stats = _send_streaming_request(
                     self._config, payload
                 )
                 # Order matters: "no content at all" is checked first so the
@@ -1119,136 +889,12 @@ class ChatAPIClient:
                     raise RuntimeError(TRUNCATED_BY_MAX_TOKENS)
                 if finish_reason is not None and finish_reason != "stop":
                     logger.warning("Unusual finish_reason: %s", finish_reason)
-                return content.strip()
+                return ChatResponse(content=content.strip(), reasoning=reasoning)
             except ARDEmptyContentError:
                 # Model-output failure, not a transport failure: the same
                 # prompt with the same budget would fail identically, so retry
                 # would only burn time and tokens.  The counter and the WARNING
                 # above already carry the observable signal (§3.2).
-                raise
-            except RuntimeError as exc:
-                if _is_timeout_error(exc) and not self._config.retry_on_timeout:
-                    logger.warning(
-                        "Streaming request timed out (retry_on_timeout=false, failing fast). "
-                        "Set retry_on_timeout=true to enable automatic retries."
-                    )
-                    raise
-                last_error = exc
-                if attempt < self._config.max_retries:
-                    delay = min(2.0 ** attempt, 30.0)
-                    if _is_timeout_error(exc):
-                        logger.warning(
-                            "Attempt %d/%d failed (timeout). Retrying in %.1fs...",
-                            attempt + 1, self._config.max_retries + 1, delay,
-                        )
-                    else:
-                        logger.warning(
-                            "Attempt %d/%d failed: %s. Retrying in %.1fs...",
-                            attempt + 1, self._config.max_retries + 1, exc, delay,
-                        )
-                    time.sleep(delay)
-            except httpx.TimeoutException as exc:
-                if not self._config.retry_on_timeout:
-                    logger.warning(
-                        "Streaming request timed out (retry_on_timeout=false, failing fast). "
-                        "Set retry_on_timeout=true to enable automatic retries."
-                    )
-                    raise ARDTimeoutError(
-                        f"Streaming request timed out after "
-                        f"{self._config.max_retries + 1} attempt(s)"
-                    ) from exc
-                last_error = exc
-                if attempt < self._config.max_retries:
-                    delay = min(2.0 ** attempt, 30.0)
-                    logger.warning(
-                        "Attempt %d/%d failed (timeout). Retrying in %.1fs...",
-                        attempt + 1, self._config.max_retries + 1, delay,
-                    )
-                    time.sleep(delay)
-
-        logger.error(
-            "All %d attempts failed: %s",
-            self._config.max_retries + 1, last_error,
-        )
-        raise RuntimeError(
-            f"Chat request failed after {self._config.max_retries + 1} attempt(s): {last_error}"
-        ) from last_error
-
-    def chat_with_logprobs(
-        self,
-        messages: list[dict[str, Any]],
-        temperature: float | None = None,
-        *,
-        top_logprobs: int = 1,
-    ) -> dict[str, Any]:
-        """Send a streaming chat request and return content + log-probabilities.
-
-        Uses SSE streaming mode with per-phase timeouts (connect → first_token →
-        inter_token).  Log-probs are collected from ``choices[0].logprobs.content``
-        of each SSE delta chunk via ``collect_logprobs=True`` (streaming
-        log-probs are incremental — one entry per generated token — so they are
-        accumulated chunk by chunk).
-
-        Args:
-            messages: A list of message dicts in OpenAI format.
-            temperature: Optional per-request temperature override.
-            top_logprobs: Number of top log-probs to return per token (default 1).
-
-        Returns:
-            A dict with keys:
-            - ``content`` (str): The assistant's response text.
-            - ``logprobs`` (dict): ``{"token_ids": [...], "log_probs": [...]}``.
-
-        Raises:
-            ARDEmptyContentError: If the completion carried no assistant content
-                (e.g. reasoning consumed the whole ``max_tokens`` budget).  Not
-                retried — the cause is deterministic for the same prompt.
-            ARDLogprobsError: If the response carries no usable log-probs.  There
-                is deliberately **no** silent fallback to an empty payload: an
-                anchor without a supervision signal must not look like a success
-                (set ``allow_missing_logprobs=true`` to opt into the empty
-                payload, §3.3).
-            RuntimeError: After exhausting all retries.
-        """
-        payload = _build_payload(
-            self._config, messages, temperature,
-            logprobs=True, top_logprobs=top_logprobs,
-            stream=True,
-        )
-        last_error: Exception | None = None
-
-        for attempt in range(self._config.max_retries + 1):
-            try:
-                content, finish_reason, logprobs, stats = _send_streaming_request(
-                    self._config, payload, collect_logprobs=True,
-                )
-                # See chat(): empty-content is classified before truncation so
-                # the reasoning-budget cause is never masked.
-                if stats.empty_content:
-                    raise ARDEmptyContentError(
-                        _log_empty_completion("chat_with_logprobs", stats), stats
-                    )
-                if finish_reason == "length":
-                    logger.warning(
-                        "Response truncated by max_tokens (finish_reason=length), discarding"
-                    )
-                    raise RuntimeError(TRUNCATED_BY_MAX_TOKENS)
-                if finish_reason is not None and finish_reason != "stop":
-                    logger.warning("Unusual finish_reason: %s", finish_reason)
-                assert logprobs is not None  # collect_logprobs=True
-                return {
-                    "content": content.strip(),
-                    "logprobs": logprobs,
-                }
-            except ARDLogprobsError:
-                # Deterministic contract/shape failure — retrying the same request
-                # cannot produce log-probs, so fail fast instead of burning
-                # max_retries × backoff.  The counter and log line above already
-                # carry the observable signal.
-                raise
-            except ARDEmptyContentError:
-                # Deterministic model-output failure (reasoning consumed the
-                # budget); retrying the identical prompt cannot fix it.
                 raise
             except RuntimeError as exc:
                 if _is_timeout_error(exc) and not self._config.retry_on_timeout:
@@ -1318,8 +964,11 @@ class ChatAPIClient:
 
         def _worker(index: int, req: ChatRequest) -> None:
             try:
-                content = self.chat(req.messages, req.temperature)
-                results[index] = ChatResult(content=content, success=True)
+                # Batch callers want the answers as a list of ChatResult; the
+                # reasoning trace is dropped here on purpose (ChatResult has no
+                # field for it — a caller that needs reasoning uses chat()).
+                response = self.chat(req.messages, req.temperature)
+                results[index] = ChatResult(content=response.content, success=True)
             except Exception as exc:
                 results[index] = ChatResult(
                     content="",

@@ -8,7 +8,7 @@ Two defects are frozen here:
   (two WARNINGs lived in that dead code path).  The tests below fail if a turn
   failure stops reaching the scheduler again.
 * **Failures visible only in logs.**  The counters that say "this run dropped
-  anchors / had no log-probs / triggered cooldowns" are asserted here to reach
+  anchors / triggered cooldowns" are asserted here to reach
   ``AnchorGenerationStats`` and hence ``manifest.json``.
 """
 
@@ -23,9 +23,9 @@ import pytest
 
 from ard.backends.api_client import (
     ARDEmptyContentError,
-    ARDLogprobsError,
     ARDTimeoutError,
     ChatAPIStats,
+    ChatResponse,
 )
 from ard.core.types import AnchorSpec, GeneratedAnchor, TurnSpec
 from ard.domain.bank import (
@@ -47,11 +47,10 @@ from ard.domain.text_anchor import (
 class _ScriptedClient:
     """A ``ChatAPIClient`` double driven by per-call outcomes.
 
-    Each outcome is either a ``str`` (returned as content), an ``Exception``
-    instance (raised), or a ``dict`` (returned whole, for
-    ``chat_with_logprobs``).  Outcomes are consumed in call order; the last one
-    repeats, so a scripted client is written as "3 timeouts then an answer"
-    rather than as a fixed call count.
+    Each outcome is either a ``str`` / :class:`ChatResponse` (returned from
+    ``chat``) or an ``Exception`` instance (raised).  Outcomes are consumed in
+    call order; the last one repeats, so a scripted client is written as
+    "3 timeouts then an answer" rather than as a fixed call count.
     """
 
     def __init__(self, outcomes: list[object]) -> None:
@@ -67,27 +66,23 @@ class _ScriptedClient:
             raise outcome
         return outcome
 
-    def chat(self, messages: list[dict], temperature: float | None = None) -> str:
-        return str(self._next("chat"))
-
-    def chat_with_logprobs(
-        self, messages: list[dict], temperature: float | None = None
-    ) -> dict:
-        outcome = self._next("chat_with_logprobs")
-        if not isinstance(outcome, dict):
-            raise AssertionError("chat_with_logprobs needs a dict outcome")
-        return outcome
+    def chat(self, messages: list[dict], temperature: float | None = None) -> ChatResponse:
+        outcome = self._next("chat")
+        if isinstance(outcome, ChatResponse):
+            return outcome
+        return ChatResponse(content=str(outcome))
 
 
-def _ok_logprobs(content: str = "the final target answer") -> dict:
-    return {
-        "content": content,
-        "logprobs": {"token_ids": ["the", " final"], "log_probs": [-0.1, -0.2]},
-    }
+def _ok_response(
+    content: str = "the final target answer",
+    reasoning: str | None = None,
+) -> ChatResponse:
+    """A healthy answering response, optionally carrying a reasoning trace."""
+    return ChatResponse(content=content, reasoning=reasoning)
 
 
 def _spec(spec_id: str) -> AnchorSpec:
-    """A single-turn spec (one user turn, answered with log-probs)."""
+    """A single-turn spec (one user turn, answered by the target model)."""
     return AnchorSpec(
         id=spec_id,
         anchor_meta={"language": "English", "knowledge_domain": "geography"},
@@ -152,14 +147,11 @@ def test_timeout_and_transport_are_server_instability() -> None:
 
 
 def test_model_output_failures_are_not_server_instability() -> None:
-    """Empty content / missing log-probs are deterministic — sleeping cannot fix them."""
+    """Empty content is deterministic — sleeping cannot fix it."""
     stats = ChatAPIStats(content_chars=0, reasoning_chars=120)
     empty = ARDEmptyContentError("reasoning ate the budget", stats)
-    missing = ARDLogprobsError("no log-probs", reason="key_missing")
     assert failure_reason(empty) == "empty_content"
-    assert failure_reason(missing) == "logprobs_error"
     assert is_server_instability(empty) is False
-    assert is_server_instability(missing) is False
     # An unexpected bug must not be disguised as server load.
     assert failure_reason(ValueError("boom")) == "unexpected_error"
     assert is_server_instability("unexpected_error") is False
@@ -177,7 +169,7 @@ def test_consecutive_timeouts_trigger_cooldown_and_reset_counter(
         anchors, stats, spy = _run(
             _specs(3),
             [ARDTimeoutError("timed out")],
-            [_ok_logprobs()],
+            [_ok_response()],
             backpressure_threshold=3,
             backpressure_cooldown=60.0,
             stats=stats,
@@ -210,7 +202,7 @@ def test_transport_error_counts_towards_backpressure() -> None:
     anchors, stats, spy = _run(
         _specs(2),
         [httpx.ConnectError("connection refused")],
-        [_ok_logprobs()],
+        [_ok_response()],
         backpressure_threshold=2,
         backpressure_cooldown=5.0,
     )
@@ -226,7 +218,7 @@ def test_backpressure_fires_again_after_counter_reset(caplog: pytest.LogCaptureF
         _, stats, spy = _run(
             _specs(6),
             [ARDTimeoutError("timed out")],
-            [_ok_logprobs()],
+            [_ok_response()],
             backpressure_threshold=3,
             backpressure_cooldown=1.0,
         )
@@ -235,27 +227,27 @@ def test_backpressure_fires_again_after_counter_reset(caplog: pytest.LogCaptureF
 
 
 def test_model_output_failures_never_start_a_cooldown() -> None:
-    """Empty content / missing log-probs abandon anchors but do not pause the run."""
+    """Empty content abandons anchors but does not pause the run."""
     stats = ChatAPIStats(content_chars=0, reasoning_chars=64)
     _, stats, spy = _run(
         _specs(3),
         # spec 0: the input generator returns nothing usable.
         ["a user question"],
-        # spec 1 and 2: the final turn carries no log-probs.
-        [_ok_logprobs(), ARDLogprobsError("no log-probs", reason="key_missing")],
+        # spec 1 and 2: the target model returns nothing usable.
+        [_ok_response(), ARDEmptyContentError("no content", stats)],
         backpressure_threshold=2,
         backpressure_cooldown=60.0,
     )
     assert spy.calls == [], "a deterministic model-output failure must not sleep"
     assert stats.backpressure_events == 0
-    assert stats.abandoned_by_reason == {"logprobs_error": 2}
+    assert stats.abandoned_by_reason == {"empty_content": 2}
     assert stats.succeeded == 1
 
-    # Now the empty-content path, which abandons every anchor.
+    # The all-failure variant, where every anchor is abandoned.
     _, empty_stats, empty_spy = _run(
         _specs(2),
         [ARDEmptyContentError("no content", stats)],
-        [_ok_logprobs()],
+        [_ok_response()],
         backpressure_threshold=1,
         backpressure_cooldown=60.0,
     )
@@ -268,7 +260,7 @@ def test_empty_answer_is_counted_but_does_not_pause() -> None:
     _, stats, spy = _run(
         _specs(3),
         ["a user question"],
-        [_ok_logprobs("x")],
+        [_ok_response("x")],
         backpressure_threshold=1,
         backpressure_cooldown=60.0,
         min_answer_chars=8,
@@ -288,7 +280,7 @@ def test_success_between_failures_resets_the_streak() -> None:
             ARDTimeoutError("timed out"),
             ARDTimeoutError("timed out"),
         ],
-        [_ok_logprobs()],
+        [_ok_response()],
         backpressure_threshold=3,
         backpressure_cooldown=60.0,
     )
@@ -308,7 +300,7 @@ def test_abandoned_anchor_is_reported_with_its_traceback(
         _run(
             _specs(1),
             [ARDTimeoutError("timed out")],
-            [_ok_logprobs()],
+            [_ok_response()],
             backpressure_threshold=99,
         )
     records = [record for record in caplog.records if record.levelno >= logging.WARNING]
@@ -323,7 +315,7 @@ def test_abandoned_anchor_is_reported_with_its_traceback(
 
 def test_zero_requested_run_reports_zeros() -> None:
     """A run with no specs still reports a consistent, all-zero accounting."""
-    anchors, stats, spy = _run([], ["a user question"], [_ok_logprobs()])
+    anchors, stats, spy = _run([], ["a user question"], [_ok_response()])
     assert anchors == []
     assert spy.calls == []
     assert stats.requested == 0
@@ -339,7 +331,7 @@ def test_stats_count_written_rejected_and_duplicate(tmp_path: Path) -> None:
     _, stats, _ = _run(
         specs,
         ["a user question"],
-        [_ok_logprobs()],
+        [_ok_response()],
         output_path=output_path,
     )
     assert stats.requested == 3
@@ -371,7 +363,7 @@ def test_shape_gate_rejection_is_recorded() -> None:
 
 
 def test_manifest_records_every_failure_signal(tmp_path: Path) -> None:
-    """manifest.json carries rejected / duplicate / logprobs / empty / backpressure counts."""
+    """manifest.json carries rejected / duplicate / reasoning / backpressure counts."""
     records = [
         {
             "id": "anchor_a",
@@ -393,8 +385,8 @@ def test_manifest_records_every_failure_signal(tmp_path: Path) -> None:
         manifest,
         stats=stats.to_manifest_dict(),
         failures={
-            "key_missing": 4,
-            "partial": 1,
+            "responses": 10,
+            "reasoning_responses": 7,
             "empty_content": 3,
             "reasoning_only_responses": 3,
             "truncated_empty": 3,
@@ -412,7 +404,7 @@ def test_manifest_records_every_failure_signal(tmp_path: Path) -> None:
         "empty_content": 1,
         "timeout": 2,
     }
-    assert generation["failures"]["key_missing"] == 4
+    assert generation["failures"]["reasoning_responses"] == 7
     assert generation["failures"]["empty_content"] == 3
     assert generation["failures"]["reasoning_only_responses"] == 3
     # The pre-existing fields are untouched.
@@ -432,7 +424,7 @@ def test_manifest_omits_zero_valued_counters(tmp_path: Path) -> None:
     with_generation_report(
         manifest,
         stats={"requested": 1, "written": 1, "duplicate_ids": 0, "backpressure_events": 0},
-        failures={"key_missing": 0},
+        failures={"empty_content": 0},
     )
     assert manifest["generation"] == {"counters": {"requested": 1, "written": 1}}
 

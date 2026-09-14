@@ -55,12 +55,11 @@ def test_anchor_type_defaults():
     assert a.id == "test_001"
     assert a.target_answer == "world"
     assert a.anchor_meta == {}
-    assert a.logprobs is None
+    assert a.reasoning is None
 
 
-def test_anchor_type_with_logprobs():
-    """Anchor stores logprobs when provided."""
-    logprobs = {"token_ids": [1, 2, 3], "log_probs": [-0.1, -0.2, -0.3]}
+def test_anchor_type_with_reasoning():
+    """Anchor stores the teacher's reasoning trace when provided."""
     a = GeneratedAnchor(
         id="a",
         messages=[],
@@ -68,9 +67,11 @@ def test_anchor_type_with_logprobs():
         target_model="m",
         input_generator_model="m",
         anchor_meta={},
-        logprobs=logprobs,
+        reasoning="six times seven is forty-two",
     )
-    assert a.logprobs == logprobs
+    assert a.reasoning == "six times seven is forty-two"
+    # Reasoning is not the answer: the two fields stay independent.
+    assert a.target_answer == "x"
 
 
 def test_anchor_generation_config_defaults():

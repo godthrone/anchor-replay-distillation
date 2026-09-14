@@ -44,23 +44,39 @@ def _make_anchor(id="a", **kwargs):
 
 def test_anchor_to_dict_format():
     """anchor_to_dict produces the unified JSONL format."""
-    a = _make_anchor("test_001", logprobs={"token_ids": [1, 2], "log_probs": [-0.1, -0.2]})
+    a = _make_anchor("test_001", reasoning="six times seven is forty-two")
     d = anchor_to_dict(a)
     assert d["id"] == "test_001"
     assert d["source"] == "ard"
     assert d["messages"] == [{"role": "user", "content": "q"}]
     assert d["targets"][0]["id"] == "primary"
     assert d["targets"][0]["output"]["content"] == "answer"
-    assert d["targets"][0]["output"]["logprobs"] == {"token_ids": [1, 2], "log_probs": [-0.1, -0.2]}
+    assert d["targets"][0]["output"]["reasoning"] == "six times seven is forty-two"
     assert d["anchor_meta"] == {"knowledge_domain": "math", "language": "English", "capability": "qa"}
     assert d["teacher_id"] == "target"
 
 
-def test_anchor_to_dict_logprobs_none():
-    """anchor_to_dict fills empty logprobs when None."""
-    a = _make_anchor("a", logprobs=None)
+def test_anchor_to_dict_reasoning_is_null_when_absent():
+    """Without thinking the output carries ``reasoning: null`` — never ``""``."""
+    a = _make_anchor("a")
     d = anchor_to_dict(a)
-    assert d["targets"][0]["output"]["logprobs"] == {"token_ids": [], "log_probs": []}
+    assert d["targets"][0]["output"]["reasoning"] is None
+    # The two keys are distinct: content survives, reasoning is explicitly null.
+    assert d["targets"][0]["output"]["content"] == "answer"
+    assert "logprobs" not in d["targets"][0]["output"]
+
+
+def test_anchor_to_dict_reasoning_never_merged_into_content():
+    """``content`` and ``reasoning`` stay two separate keys (§1.2 契约 2).
+
+    Each key carries *exactly* its own source text: no concatenation in either
+    direction, and no key missing from the record.
+    """
+    reasoning = "step one; step two; the answer is 42"
+    a = _make_anchor("b", target_answer="42", reasoning=reasoning)
+    output = anchor_to_dict(a)["targets"][0]["output"]
+    assert output["content"] == "42", "the answer must not absorb the reasoning"
+    assert output["reasoning"] == reasoning, "the reasoning must not absorb the answer"
 
 
 # ── Bank ────────────────────────────────────────────────────────────────────

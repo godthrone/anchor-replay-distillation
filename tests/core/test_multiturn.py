@@ -210,12 +210,11 @@ def test_generated_anchor_construction():
     )
     assert ga.id == "gen_001"
     assert ga.target_answer == "world"
-    assert ga.logprobs is None
+    assert ga.reasoning is None
 
 
-def test_generated_anchor_with_logprobs():
-    """GeneratedAnchor stores logprobs when provided."""
-    logprobs = {"token_ids": [1, 2], "log_probs": [-0.1, -0.2]}
+def test_generated_anchor_with_reasoning():
+    """GeneratedAnchor stores the reasoning trace when provided."""
     ga = GeneratedAnchor(
         id="g",
         messages=[],
@@ -223,9 +222,9 @@ def test_generated_anchor_with_logprobs():
         target_model="m",
         input_generator_model="m",
         anchor_meta={},
-        logprobs=logprobs,
+        reasoning="thinking about x",
     )
-    assert ga.logprobs == logprobs
+    assert ga.reasoning == "thinking about x"
 
 
 # ── compute_turn_distribution ───────────────────────────────────────────────

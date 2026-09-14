@@ -1,6 +1,7 @@
 """ARD — Anchor Replay Distillation.
 
-Multi-modal anchor data generation with log-prob export for OPD training.
+Multi-modal anchor data generation: prompts, teacher answers and teacher
+reasoning traces, with the reasoning kept as its own field.
 
 Version is derived by setuptools-scm from git tags — do not hardcode it here.
 """

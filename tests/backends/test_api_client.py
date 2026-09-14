@@ -14,18 +14,15 @@ try:  # preferred: the installed package
     from ard.backends import api_client as api_module
     from ard.backends.api_client import (
         ARDEmptyContentError,
-        ARDLogprobsError,
         ARDTimeoutError,
         ChatAPIClient,
         ChatAPIConfig,
         ChatRequest,
+        ChatResponse,
         ChatResult,
-        ChatResultWithLogprobs,
         _build_payload,
         encode_image_to_base64,
-        logprobs_failure_count,
         reasoning_stats,
-        reset_logprobs_failure_count,
         reset_reasoning_stats,
     )
 except ModuleNotFoundError:  # pragma: no cover - env without the full dep set
@@ -42,18 +39,15 @@ except ModuleNotFoundError:  # pragma: no cover - env without the full dep set
     _SPEC.loader.exec_module(api_module)  # type: ignore[union-attr]
 
     ARDEmptyContentError = api_module.ARDEmptyContentError
-    ARDLogprobsError = api_module.ARDLogprobsError
     ARDTimeoutError = api_module.ARDTimeoutError
     ChatAPIClient = api_module.ChatAPIClient
     ChatAPIConfig = api_module.ChatAPIConfig
     ChatRequest = api_module.ChatRequest
+    ChatResponse = api_module.ChatResponse
     ChatResult = api_module.ChatResult
-    ChatResultWithLogprobs = api_module.ChatResultWithLogprobs
     _build_payload = api_module._build_payload
     encode_image_to_base64 = api_module.encode_image_to_base64
-    logprobs_failure_count = api_module.logprobs_failure_count
     reasoning_stats = api_module.reasoning_stats
-    reset_logprobs_failure_count = api_module.reset_logprobs_failure_count
     reset_reasoning_stats = api_module.reset_reasoning_stats
 
 # Captured before any monkeypatching: the module under test creates its own
@@ -72,8 +66,6 @@ def test_chat_api_config_defaults():
     assert c.max_tokens is None
     assert c.max_retries == 2
     assert c.chat_completions_url == "https://api.example.com/chat/completions"
-    # §3.3: the pre-authorized fallback is OFF by default.
-    assert c.allow_missing_logprobs is False
 
 
 def test_chat_api_config_url_no_trailing_slash():
@@ -104,12 +96,20 @@ def test_chat_result_failure():
     assert r.error == "timeout"
 
 
-def test_chat_result_with_logprobs():
-    """ChatResultWithLogprobs stores logprobs."""
-    lp = {"token_ids": [1, 2], "log_probs": [-0.1, -0.2]}
-    r = ChatResultWithLogprobs(content="hi", success=True, logprobs=lp)
-    assert r.logprobs == lp
-    assert r.content == "hi"
+def test_chat_response_keeps_reasoning_separate_from_content():
+    """ChatResponse holds the answer and the reasoning as two fields."""
+    r = ChatResponse(content="42", reasoning="six times seven is forty-two")
+    assert r.content == "42"
+    assert r.reasoning == "six times seven is forty-two"
+    # Not concatenated, in either direction.
+    assert r.reasoning not in r.content
+    assert r.content not in r.reasoning
+
+
+def test_chat_response_reasoning_defaults_to_none():
+    """A response without reasoning carries ``None`` — never ``""`` (§2.2)."""
+    r = ChatResponse(content="42")
+    assert r.reasoning is None
 
 
 def test_chat_client_creation():
@@ -204,16 +204,13 @@ def test_build_payload_enable_thinking_default():
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
 
-# ── SSE chunk parsing — logprobs extraction (D1 regression) ─────────────────
+# ── SSE chunk parsing ───────────────────────────────────────────────────────
 #
 # These fixtures reproduce the shape measured on a real vLLM 0.22 server
-# (Qwen3.8-27B): log-probs live ONLY under ``choices[0].logprobs`` as
-# ``{"content": [...]}``, streaming log-probs are INCREMENTAL (one entry per
-# generated token), elements carry ``token`` (str) / ``logprob`` (float) /
-# ``bytes`` / ``top_logprobs`` and no ``token_id``, and when logprobs is not
-# requested the key is present with the value ``null``.
+# (Qwen3.8-27B): chunks carry the generated text under ``choices[0].delta`` and
+# the accumulated answer is the concatenation of the ``content`` fragments.
 
-_LOGPROBS_TEST_CONFIG = ChatAPIConfig(
+_TEST_CONFIG = ChatAPIConfig(
     api_base="https://api.example.com", model_name="m", api_key="k",
     max_retries=0,
 )
@@ -229,55 +226,16 @@ def _sse_data(payload: dict | str) -> str:
 def _chunk(
     delta: dict,
     *,
-    logprobs: dict | None | str = "omit",
     finish_reason: str | None = None,
 ) -> dict:
-    """Build one streaming chunk.
-
-    ``logprobs="omit"`` builds a chunk *without* the key at all; ``None`` builds
-    one carrying an explicit JSON ``null``.
-    """
-    choice: dict = {"index": 0, "delta": delta}
-    if logprobs != "omit":
-        choice["logprobs"] = logprobs
-    choice["finish_reason"] = finish_reason
+    """Build one streaming chunk around *delta*."""
     return {
         "id": "chatcmpl-test",
         "object": "chat.completion.chunk",
         "created": 1789264293,
         "model": "Qwen3.8-27B",
-        "choices": [choice],
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
     }
-
-
-def _entry(token: str, logprob: float) -> dict:
-    """One log-prob entry exactly as vLLM emits it (no ``token_id`` field)."""
-    return {
-        "token": token,
-        "logprob": logprob,
-        "bytes": list(token.encode("utf-8")),
-        "top_logprobs": [
-            {"token": token, "logprob": logprob, "bytes": list(token.encode("utf-8"))}
-        ],
-    }
-
-
-def _vllm_logprobs_stream() -> list[str]:
-    """A three-chunk stream with incremental log-probs (1, then 2 tokens).
-
-    Content is ``"hello world"``; the collected log_probs must have exactly
-    three entries with the values below, in order.
-    """
-    return [
-        _sse_data(_chunk({"role": "assistant", "content": ""}, logprobs=None)),
-        _sse_data(_chunk({"content": "hello"}, logprobs={"content": [_entry("hello", -0.03)]})),
-        _sse_data(_chunk({"content": " world"}, logprobs={"content": [
-            _entry(" world", -0.5),
-            _entry("!", -0.25),
-        ]})),
-        _sse_data(_chunk({"content": ""}, logprobs=None, finish_reason="stop")),
-        _sse_data("[DONE]"),
-    ]
 
 
 def _sse_transport(lines: list[str], *, delay: float = 0.0) -> httpx.MockTransport:
@@ -322,191 +280,6 @@ def inject_sse_transport(monkeypatch):
     return _inject
 
 
-def test_streaming_logprobs_extracted_from_choices(inject_sse_transport):
-    """D1 regression: log-probs are read from ``choices[0].logprobs.content``.
-
-    Reproduces the real wire shape: the chunk top level has NO ``logprobs``
-    key at all, so the old ``chunk.get("logprobs")`` returned ``None`` for
-    51/51 measured chunks and every anchor was written with empty log-probs.
-    """
-    reset_logprobs_failure_count()
-    inject_sse_transport(_vllm_logprobs_stream())
-
-    result = ChatAPIClient(_LOGPROBS_TEST_CONFIG).chat_with_logprobs(
-        [{"role": "user", "content": "hi"}]
-    )
-
-    assert result["content"] == "hello world"
-    # Incremental accumulation: 1 + 2 entries, in arrival order.
-    assert result["logprobs"]["token_ids"] == ["hello", " world", "!"]
-    assert result["logprobs"]["log_probs"] == [-0.03, -0.5, -0.25]
-    assert logprobs_failure_count() == {}
-
-
-def test_streaming_logprobs_not_taken_from_chunk_top_level(inject_sse_transport):
-    """A chunk-top-level ``logprobs`` key must NOT be used (prompt-side trap).
-
-    The top level of a *non-streaming* response carries ``prompt_logprobs``;
-    picking the wrong level silently attaches the wrong token list.
-    """
-    reset_logprobs_failure_count()
-    decoy = _chunk({"content": "hi"}, logprobs=None)
-    decoy["logprobs"] = {"content": [_entry("WRONG", -99.0)]}  # top-level decoy
-    inject_sse_transport([
-        _sse_data(decoy),
-        _sse_data(_chunk({}, logprobs=None, finish_reason="stop")),
-        _sse_data("[DONE]"),
-    ])
-
-    with pytest.raises(ARDLogprobsError):
-        ChatAPIClient(_LOGPROBS_TEST_CONFIG).chat_with_logprobs(
-            [{"role": "user", "content": "hi"}]
-        )
-
-
-def test_null_logprobs_is_not_silent_success(inject_sse_transport):
-    """``logprobs: null`` (requested flag not honoured) must not pass silently.
-
-    ``is None`` is the correct empty check (§2.2): the key is present with a
-    null value, so ``"logprobs" in choice`` is True and a truthiness check is
-    ambiguous.  The response still parses, but the missing supervision signal
-    fails the anchor instead of emitting ``{"token_ids": [], "log_probs": []}``.
-    """
-    reset_logprobs_failure_count()
-    inject_sse_transport([
-        _sse_data(_chunk({"role": "assistant", "content": ""}, logprobs=None)),
-        _sse_data(_chunk({"content": "answer"}, logprobs=None)),
-        _sse_data(_chunk({"content": ""}, logprobs=None, finish_reason="stop")),
-        _sse_data("[DONE]"),
-    ])
-
-    with pytest.raises(ARDLogprobsError) as excinfo:
-        ChatAPIClient(_LOGPROBS_TEST_CONFIG).chat_with_logprobs(
-            [{"role": "user", "content": "hi"}]
-        )
-
-    assert excinfo.value.reason == "no_logprobs_observed"
-    assert "no log-probs" in str(excinfo.value)
-    assert logprobs_failure_count() == {"no_logprobs_observed": 1}
-
-
-def test_missing_logprobs_key_raises_and_logs(inject_sse_transport, caplog):
-    """A chunk that omits the ``logprobs`` key entirely fails the same way."""
-    reset_logprobs_failure_count()
-    inject_sse_transport([
-        _sse_data(_chunk({"content": "answer"}, logprobs="omit")),
-        _sse_data(_chunk({}, logprobs="omit", finish_reason="stop")),
-        _sse_data("[DONE]"),
-    ])
-
-    with caplog.at_level(logging.ERROR, logger="ard.backends.api_client"):
-        with pytest.raises(ARDLogprobsError) as excinfo:
-            ChatAPIClient(_LOGPROBS_TEST_CONFIG).chat_with_logprobs(
-                [{"role": "user", "content": "hi"}]
-            )
-
-    assert excinfo.value.reason == "key_missing"
-    # Observable signal: an ERROR log line, not only an exception.
-    assert any(r.levelno >= logging.ERROR for r in caplog.records)
-    assert logprobs_failure_count() == {"key_missing": 1}
-
-
-def test_allow_missing_logprobs_opt_in_degrades_with_warning(inject_sse_transport, caplog):
-    """§3.3: the empty-payload fallback needs an explicit opt-in and warns."""
-    reset_logprobs_failure_count()
-    config = ChatAPIConfig(
-        api_base="https://api.example.com", model_name="m", api_key="k",
-        max_retries=0, allow_missing_logprobs=True,
-    )
-    inject_sse_transport([
-        _sse_data(_chunk({"content": "answer"}, logprobs=None)),
-        _sse_data(_chunk({}, logprobs=None, finish_reason="stop")),
-        _sse_data("[DONE]"),
-    ])
-
-    with caplog.at_level(logging.WARNING, logger="ard.backends.api_client"):
-        result = ChatAPIClient(config).chat_with_logprobs(
-            [{"role": "user", "content": "hi"}]
-        )
-
-    assert result["logprobs"] == {"token_ids": [], "log_probs": []}
-    assert any(r.levelno >= logging.WARNING for r in caplog.records)
-    # Still counted — the user can see how many anchors degraded.
-    assert logprobs_failure_count() == {"no_logprobs_observed": 1}
-
-
-def test_incomplete_logprobs_raises_even_when_opt_in(inject_sse_transport):
-    """A truncated token list is corrupt data — the opt-in does not cover it."""
-    reset_logprobs_failure_count()
-    config = ChatAPIConfig(
-        api_base="https://api.example.com", model_name="m", api_key="k",
-        max_retries=0, allow_missing_logprobs=True,
-    )
-    inject_sse_transport([
-        _sse_data(_chunk({"content": "hello"}, logprobs={"content": [_entry("hello", -0.03)]})),
-        _sse_data(_chunk({"content": " world"}, logprobs=None)),  # stream lost them
-        _sse_data(_chunk({}, logprobs=None, finish_reason="stop")),
-        _sse_data("[DONE]"),
-    ])
-
-    with pytest.raises(ARDLogprobsError) as excinfo:
-        ChatAPIClient(config).chat_with_logprobs([{"role": "user", "content": "hi"}])
-
-    assert "incomplete" in str(excinfo.value)
-    # The reason is the *specific* one: delivery stopped mid-stream after entries
-    # had already arrived. ``no_logprobs_observed`` would be the wrong diagnosis
-    # here (something was observed) and would hide the truncation.
-    assert logprobs_failure_count() == {"stream_stopped_delivering": 1}
-
-
-def test_logprobs_key_vanishing_midstream_is_incomplete(inject_sse_transport):
-    """The ``logprobs`` key itself disappearing mid-stream is also truncation.
-
-    Same failure as a mid-stream ``null``, reached through a different schema
-    violation: the key is simply absent from later chunks.  Both are "entries
-    were delivered and then delivery stopped", so both must hard-fail, and
-    neither may be excused by ``allow_missing_logprobs`` (that flag is about a
-    response that never had log-probs at all — §3.4: a truncated token list is a
-    defence, not a fallback).
-    """
-    reset_logprobs_failure_count()
-    config = ChatAPIConfig(
-        api_base="https://api.example.com", model_name="m", api_key="k",
-        max_retries=0, allow_missing_logprobs=True,  # must NOT cover this
-    )
-    inject_sse_transport([
-        _sse_data(_chunk({"content": "hello"}, logprobs={"content": [_entry("hello", -0.03)]})),
-        _sse_data(_chunk({"content": " world"})),  # key absent entirely
-        _sse_data(_chunk({"content": "!"}, logprobs={"content": []})),
-        _sse_data(_chunk({}, logprobs=None, finish_reason="stop")),
-        _sse_data("[DONE]"),
-    ])
-
-    with pytest.raises(ARDLogprobsError) as excinfo:
-        ChatAPIClient(config).chat_with_logprobs([{"role": "user", "content": "hi"}])
-
-    assert "incomplete" in str(excinfo.value)
-    assert logprobs_failure_count() == {"stream_stopped_delivering": 1}
-
-
-def test_malformed_logprob_entries_are_rejected_not_skipped(inject_sse_transport):
-    """Entries without a usable ``logprob`` must fail, not shrink silently."""
-    reset_logprobs_failure_count()
-    bad = {"token": "x", "bytes": [120], "top_logprobs": []}  # no "logprob"
-    inject_sse_transport([
-        _sse_data(_chunk({"content": "x"}, logprobs={"content": [bad]})),
-        _sse_data(_chunk({}, logprobs=None, finish_reason="stop")),
-        _sse_data("[DONE]"),
-    ])
-
-    with pytest.raises(ARDLogprobsError) as excinfo:
-        ChatAPIClient(_LOGPROBS_TEST_CONFIG).chat_with_logprobs(
-            [{"role": "user", "content": "hi"}]
-        )
-
-    assert excinfo.value.reason == "entries_skipped"
-
-
 # ── Timeout policy: no httpx read deadline, first-token wait wins (D2) ──────
 #
 # MockTransport cannot model a slow first byte: the mock handler is invoked
@@ -516,7 +289,7 @@ def test_malformed_logprob_entries_are_rejected_not_skipped(inject_sse_transport
 # that sends headers immediately and only then stalls the body.
 
 _SLOW_SSE_LINES = [
-    _sse_data(_chunk({"content": "late"}, logprobs="omit", finish_reason="stop")),
+    _sse_data(_chunk({"content": "late"}, finish_reason="stop")),
     _sse_data("[DONE]"),
 ]
 
@@ -610,13 +383,13 @@ def test_httpx_timeout_has_no_read_deadline(monkeypatch):
     # model-output failure rather than an empty string, so the call is expected
     # to raise — the point of this test is the timeout object, not the content.
     with pytest.raises(ARDEmptyContentError) as excinfo:
-        ChatAPIClient(_LOGPROBS_TEST_CONFIG).chat([{"role": "user", "content": "hi"}])
+        ChatAPIClient(_TEST_CONFIG).chat([{"role": "user", "content": "hi"}])
 
     assert "no assistant content" in str(excinfo.value)
     timeout = captured["timeout"]
     assert isinstance(timeout, httpx.Timeout)
     assert timeout.read is None, f"read deadline must be None, got {timeout.read!r}"
-    assert timeout.connect == _LOGPROBS_TEST_CONFIG.connect_timeout
+    assert timeout.connect == _TEST_CONFIG.connect_timeout
 
 
 def test_first_token_timeout_still_fires_and_releases_reader(slow_sse_server):
@@ -667,10 +440,10 @@ def test_first_token_wait_not_capped_at_30s(slow_sse_server):
     )
 
     started = time.monotonic()
-    content = ChatAPIClient(config).chat([{"role": "user", "content": "hi"}])
+    response = ChatAPIClient(config).chat([{"role": "user", "content": "hi"}])
     elapsed = time.monotonic() - started
 
-    assert content == "late"
+    assert response.content == "late"
     assert elapsed > 30.0, f"server delay was not exercised ({elapsed:.1f}s)"
     assert elapsed < 60.0, f"request took {elapsed:.1f}s"
 
@@ -724,51 +497,28 @@ def test_encode_image_to_base64_unsupported_format(tmp_path):
 # ``delta.reasoning`` (NOT ``reasoning_content``), and while the model thinks
 # ``delta.content`` stays ``null``.  The template treats "enable_thinking
 # undefined" as ON, so a production run with ``enable_thinking = true`` streams
-# a long reasoning phase first.  The old parser collected only ``content``, so
-# the reasoning tokens vanished from the accounting and an exhausted budget
-# produced an empty string that the dataset layer silently dropped.
-
-_REASONING_TEST_CONFIG = ChatAPIConfig(
-    api_base="https://api.example.com", model_name="m", api_key="k",
-    max_retries=0,
-)
-
+# a long reasoning phase first.  Reasoning is now *persisted* — it is returned
+# as ``ChatResponse.reasoning`` and lands in ``targets[0].output.reasoning`` —
+# and it is still a budget consumer, so an exhausted budget must not silently
+# produce an empty answer.
 
 def _reasoning_chunk(text: str, *, finish_reason: str | None = None) -> dict:
     """One thinking-phase chunk: ``content`` is ``null``, only ``reasoning`` set."""
-    return _chunk({"role": "assistant", "reasoning": text, "content": None},
-                  logprobs=None, finish_reason=finish_reason)
+    return _chunk({"role": "assistant", "reasoning": text, "content": None}, finish_reason=finish_reason)
 
 
 def _empty_content_only_chunk(*, finish_reason: str) -> dict:
     """A finish chunk with neither content nor reasoning (no-thinking case)."""
-    return _chunk({"content": None}, logprobs=None, finish_reason=finish_reason)
-
-
-def _reasoning_only_with_logprobs_stream() -> list[str]:
-    """Same as above, but the server *did* deliver log-probs.
-
-    Isolates the empty-content classification from the log-probs contract: with
-    usable log-probs present, the only thing wrong with this response is that
-    reasoning consumed the whole budget.
-    """
-    return [
-        _sse_data(_chunk({"role": "assistant", "content": None}, logprobs=None)),
-        _sse_data(_chunk({"role": "assistant", "reasoning": "thinking, thinking"},
-                         logprobs={"content": [_entry("thinking", -0.01)]})),
-        _sse_data(_chunk({"content": None}, logprobs={"content": []},
-                         finish_reason="length")),
-        _sse_data("[DONE]"),
-    ]
+    return _chunk({"content": None}, finish_reason=finish_reason)
 
 
 def _reasoning_only_truncated_stream() -> list[str]:
     """Reasoning, then the budget runs out before any content: the production bug."""
     return [
-        _sse_data(_chunk({"role": "assistant", "content": None}, logprobs=None)),
+        _sse_data(_chunk({"role": "assistant", "content": None})),
         _sse_data(_reasoning_chunk("Let me think about this. ")),
         _sse_data(_reasoning_chunk("Step one: the answer is 42, but I must check.")),
-        _sse_data(_chunk({"content": None}, logprobs=None, finish_reason="length")),
+        _sse_data(_chunk({"content": None}, finish_reason="length")),
         _sse_data("[DONE]"),
     ]
 
@@ -776,31 +526,41 @@ def _reasoning_only_truncated_stream() -> list[str]:
 def _reasoning_then_answer_stream() -> list[str]:
     """Reasoning followed by a real answer: the healthy thinking case."""
     return [
-        _sse_data(_chunk({"role": "assistant", "content": None}, logprobs=None)),
+        _sse_data(_chunk({"role": "assistant", "content": None})),
         _sse_data(_reasoning_chunk("The user asks for a number. ")),
         _sse_data(_reasoning_chunk("Six times seven is forty-two.")),
-        _sse_data(_chunk({"content": "Six"}, logprobs=None)),
-        _sse_data(_chunk({"content": " times seven"}, logprobs=None)),
-        _sse_data(_chunk({"content": " is 42."}, logprobs=None, finish_reason="stop")),
+        _sse_data(_chunk({"content": "Six"})),
+        _sse_data(_chunk({"content": " times seven"})),
+        _sse_data(_chunk({"content": " is 42."}, finish_reason="stop")),
         _sse_data("[DONE]"),
     ]
 
 
-def test_reasoning_field_is_recognised_not_content(inject_sse_transport):
-    """F3: ``delta.reasoning`` is counted; content collection ignores it."""
+def test_reasoning_text_is_captured_and_kept_out_of_content(inject_sse_transport):
+    """``delta.reasoning`` becomes ``ChatResponse.reasoning``, not content.
+
+    The two streams are captured into two fields (§1.2 契约 2): thinking must
+    never be merged into the answer, because downstream persists them as
+    separate keys (``content`` / ``reasoning``).
+    """
     reset_reasoning_stats()
     inject_sse_transport(_reasoning_then_answer_stream())
 
-    content = ChatAPIClient(_REASONING_TEST_CONFIG).chat(
+    response = ChatAPIClient(_TEST_CONFIG).chat(
         [{"role": "user", "content": "what is 6*7"}]
     )
 
     # ① content is exactly the answer — no reasoning prose leaked into it.
-    assert content == "Six times seven is 42."
-    assert "The user asks" not in content
-    assert "forty-two" not in content
+    assert response.content == "Six times seven is 42."
+    assert "The user asks" not in response.content
+    assert "forty-two" not in response.content
 
-    # ② the reasoning is observable: counters, no text.
+    # ② the reasoning text itself is available, whole and in arrival order.
+    assert response.reasoning == (
+        "The user asks for a number. Six times seven is forty-two."
+    )
+
+    # ③ it is still observable at run level: counters, no text.
     stats = reasoning_stats()
     assert stats["responses"] == 1
     assert stats["reasoning_responses"] == 1
@@ -826,7 +586,7 @@ def test_reasoning_only_truncated_raises_and_warns(
 
     with caplog.at_level(logging.WARNING, logger=api_module.logger.name):
         with pytest.raises(ARDEmptyContentError) as excinfo:
-            ChatAPIClient(_REASONING_TEST_CONFIG).chat([{"role": "user", "content": "hi"}])
+            ChatAPIClient(_TEST_CONFIG).chat([{"role": "user", "content": "hi"}])
 
     message = str(excinfo.value)
     # Distinguishable from a network/timeout failure: it says what happened.
@@ -855,14 +615,14 @@ def test_empty_content_without_reasoning_is_not_a_timeout(inject_sse_transport, 
     """
     reset_reasoning_stats()
     inject_sse_transport([
-        _sse_data(_chunk({"role": "assistant", "content": None}, logprobs=None)),
+        _sse_data(_chunk({"role": "assistant", "content": None})),
         _sse_data(_empty_content_only_chunk(finish_reason="stop")),
         _sse_data("[DONE]"),
     ])
 
     with caplog.at_level(logging.WARNING, logger=api_module.logger.name):
         with pytest.raises(ARDEmptyContentError) as excinfo:
-            ChatAPIClient(_REASONING_TEST_CONFIG).chat([{"role": "user", "content": "hi"}])
+            ChatAPIClient(_TEST_CONFIG).chat([{"role": "user", "content": "hi"}])
 
     assert "no assistant content" in str(excinfo.value)
     stats = reasoning_stats()
@@ -910,17 +670,19 @@ def test_empty_content_is_not_retried(inject_sse_transport, monkeypatch):
     assert len(calls) == 1, "an empty-content response must fail fast, not retry"
 
 
-def test_chat_with_logprobs_empty_content_raises_before_logprobs_check(inject_sse_transport):
-    """Reasoning-only truncation is reported as empty content, not as missing logprobs.
+def test_reasoning_only_truncation_still_fails_without_content(inject_sse_transport):
+    """Reasoning without an answer is a failure, never a reasoning-only anchor.
 
-    Both are failures of the same response; the empty-content cause is the one
-    that explains *why* the budget ran out, so it wins and it is not retried.
+    Guards the boundary of the new field: a persisted ``reasoning`` does **not**
+    make an answer-less response acceptable.  The anchor has no ``content``, so
+    it must be abandoned (:exc:`ARDEmptyContentError`), and the reasoning text
+    must not be promoted into the answer to rescue it.
     """
     reset_reasoning_stats()
-    inject_sse_transport(_reasoning_only_with_logprobs_stream())
+    inject_sse_transport(_reasoning_only_truncated_stream())
 
     with pytest.raises(ARDEmptyContentError):
-        ChatAPIClient(_REASONING_TEST_CONFIG).chat_with_logprobs(
+        ChatAPIClient(_TEST_CONFIG).chat(
             [{"role": "user", "content": "hi"}]
         )
 
@@ -933,16 +695,18 @@ def test_reasoning_content_fallback_field_is_supported(inject_sse_transport):
     """``delta.reasoning_content`` (DeepSeek spelling) is also recognised."""
     reset_reasoning_stats()
     inject_sse_transport([
-        _sse_data(_chunk({"role": "assistant", "content": None}, logprobs=None)),
-        _sse_data(_chunk({"reasoning_content": "thinking with the other spelling"},
-                         logprobs=None)),
-        _sse_data(_chunk({"content": "answer"}, logprobs=None, finish_reason="stop")),
+        _sse_data(_chunk({"role": "assistant", "content": None})),
+        _sse_data(_chunk({"reasoning_content": "thinking with the other spelling"})),
+        _sse_data(_chunk({"content": "answer"}, finish_reason="stop")),
         _sse_data("[DONE]"),
     ])
 
-    content = ChatAPIClient(_REASONING_TEST_CONFIG).chat([{"role": "user", "content": "hi"}])
+    response = ChatAPIClient(_TEST_CONFIG).chat(
+        [{"role": "user", "content": "hi"}]
+    )
 
-    assert content == "answer"
+    assert response.content == "answer"
+    assert response.reasoning == "thinking with the other spelling"
     stats = reasoning_stats()
     assert stats["reasoning_responses"] == 1
     assert stats["reasoning_chars"] == len("thinking with the other spelling")
@@ -957,7 +721,8 @@ def test_stats_dataclass_reports_reasoning_only():
     assert stats.empty_content is True
     assert "reasoning_chars=1234" in stats.describe()
     assert "1234" in stats.describe()
-    # No field can hold reasoning text (count-only contract).
+    # Still no field can hold reasoning text (count-only contract): the text
+    # lives on ChatResponse.reasoning, the counters stay publishable.
     assert all(
         not isinstance(getattr(stats, field), str) or field == "finish_reason"
         for field in stats.__slots__

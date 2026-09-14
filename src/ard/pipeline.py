@@ -16,7 +16,6 @@ from pathlib import Path
 from ard.backends.api_client import (
     ChatAPIClient,
     ChatAPIConfig,
-    logprobs_failure_count,
     reasoning_stats as api_client_reasoning_stats,
 )
 from ard.config import ARDConfig
@@ -53,31 +52,6 @@ def _counter_delta(after: dict[str, int], before: dict[str, int]) -> dict[str, i
     """
     keys = set(after) | set(before)
     return {key: after.get(key, 0) - before.get(key, 0) for key in keys}
-
-
-def _merge_failure_counters(
-    reasoning_delta: dict[str, int],
-    logprobs_delta: dict[str, int],
-) -> dict[str, int]:
-    """Merge the two process-level failure counter families without data loss.
-
-    Both families are flat ``tag -> count`` maps, so a tag present in both would
-    silently overwrite one of them under ``{**a, **b}``.  The tags do not
-    collide today (reasoning tags: ``responses``/``empty_content``/…;
-    log-probs tags: ``key_missing``/``partial``/…), and this guard keeps that
-    true if one is ever renamed into the other's namespace: the log-probs side
-    gets a ``logprobs_`` prefix instead of vanishing (§2.2 显式即防呆 —
-    a silent overwrite is exactly the kind of loss this project keeps paying for).
-    """
-    collisions = set(reasoning_delta) & set(logprobs_delta)
-    merged = dict(reasoning_delta)
-    merged.update(
-        {
-            (f"logprobs_{key}" if key in collisions else key): value
-            for key, value in logprobs_delta.items()
-        }
-    )
-    return merged
 
 
 def _log_target_model_reasoning_stats(
@@ -339,16 +313,12 @@ def run(
     #
     # Reasoning observability (WP-F3): snapshot the API client's reasoning
     # counters before and after generation.  Reasoning tokens arrive as
-    # ``delta.reasoning`` and never enter the answer, so a run whose budget was
-    # eaten by thinking produces *empty* target answers — a failure that used to
-    # be visible only as scattered per-request logs.  This delta makes the rate
+    # ``delta.reasoning``, are persisted as ``targets[0].output.reasoning``, and
+    # also consume ``max_tokens`` first — so a run whose budget was eaten by
+    # thinking produces *empty* target answers, a failure that used to be
+    # visible only as scattered per-request logs.  This delta makes the rate
     # visible once per run (§3.2 透明退路: an affected result must be announced).
-    #
-    # Log-probs failures (WP-F2) are snapshotted the same way: the counter
-    # exists so that "64/64 anchors written with empty log-probs" can never
-    # again look like a successful run.
     reasoning_before = api_client_reasoning_stats()
-    logprobs_failures_before = logprobs_failure_count()
     generation_stats = AnchorGenerationStats(requested=len(specs))
     new_anchors = generate_text_anchors(
         specs=specs,
@@ -365,17 +335,16 @@ def run(
     reasoning_delta = _log_target_model_reasoning_stats(
         api_client_reasoning_stats(), reasoning_before, len(new_anchors)
     )
-    logprobs_delta = _counter_delta(logprobs_failure_count(), logprobs_failures_before)
 
     # ── Build manifest from ALL anchors (existing + new) ──────────────────
     all_records = read_anchor_bank(output_path)
     manifest = build_manifest_from_records(all_records, output_dir, config_info)
     # Publish the run's failures next to the anchors that survived, so a short
-    # or supervision-free bank can never be mistaken for a healthy one (§3.2).
+    # bank can never be mistaken for a healthy one (§3.2).
     with_generation_report(
         manifest,
         stats=generation_stats.to_manifest_dict(),
-        failures=_merge_failure_counters(reasoning_delta, logprobs_delta),
+        failures=reasoning_delta,
     )
     write_manifest(manifest, output_dir / "manifest.json")
 

@@ -64,9 +64,9 @@ class AnchorSpec:
 class GeneratedAnchor:
     """A fully generated anchor, ready for serialization.
 
-    This is the output of the anchor generation pipeline — all messages,
-    the target answer, and optional logprobs have been produced by the
-    respective models.
+    This is the output of the anchor generation pipeline — all messages, the
+    target answer, and (when the teacher thought before answering) the teacher's
+    reasoning trace have been produced by the respective models.
     """
 
     id: str
@@ -75,7 +75,13 @@ class GeneratedAnchor:
     target_model: str
     input_generator_model: str
     anchor_meta: dict[str, Any]
-    logprobs: dict[str, Any] | None = None
+    reasoning: str | None = None
+    """The teacher's reasoning trace for the final answer, or ``None``.
+
+    ``None`` — not ``""`` — is the empty value (§2.2): it is what a run with
+    ``enable_thinking = false`` produces, because the server then emits no
+    reasoning at all.  Serialized as ``targets[0].output.reasoning``.
+    """
 
 
 @dataclass(slots=True)

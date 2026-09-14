@@ -5,9 +5,11 @@ Role-driven generation: every :class:`TurnSpec` yields exactly one message.
 2. ``role == "assistant"`` → target_model generates the assistant reply.
 
 The final turn is always a ``user`` turn (guaranteed by
-:mod:`ard.core.sampler`): there the target model answers with token-level
-logprobs, which is the distillation signal.  The message list therefore always
-starts with ``user``, ends with ``user`` and alternates — the same invariant
+:mod:`ard.core.sampler`): there the target model answers, and — when thinking is
+enabled for it — its reasoning trace is kept as a separate field, because
+thinking is not the answer (``targets[0].output.content`` vs
+``targets[0].output.reasoning``).  The message list therefore always starts
+with ``user``, ends with ``user`` and alternates — the same invariant
 :class:`ard.core.types.AnchorSpec` enforces on the way in, and which
 :func:`message_shape_error` re-checks on the way out.
 
@@ -41,7 +43,6 @@ from tqdm import tqdm
 
 from ard.backends.api_client import (
     ARDEmptyContentError,
-    ARDLogprobsError,
     ARDTimeoutError,
     ChatAPIClient,
 )
@@ -64,7 +65,6 @@ MODEL_OUTPUT_REASONS: frozenset[str] = frozenset(
         "empty_content",
         "empty_user_message",
         "empty_assistant_message",
-        "logprobs_error",
         "answer_too_short",
         "answer_too_long",
         "invalid_shape",
@@ -135,8 +135,8 @@ def failure_reason(exc: BaseException) -> str:
     (§2.2 显式即防呆).  The order of the branches is the classification
     contract:
 
-    1. :exc:`ARDEmptyContentError` / :exc:`ARDLogprobsError` — model-output and
-       contract failures: deterministic for the same prompt, no cooldown.
+    1. :exc:`ARDEmptyContentError` — model-output failure: deterministic for the
+       same prompt, no cooldown.
     2. :exc:`ARDTimeoutError` — the layered timeout fired: server instability.
     3. :class:`httpx.HTTPError` — transport/server status failure: instability.
     4. anything else — unexpected; counted as ``unexpected_error`` and never
@@ -144,8 +144,6 @@ def failure_reason(exc: BaseException) -> str:
     """
     if isinstance(exc, ARDEmptyContentError):
         return "empty_content"
-    if isinstance(exc, ARDLogprobsError):
-        return "logprobs_error"
     if isinstance(exc, ARDTimeoutError):
         return "timeout"
     if isinstance(exc, httpx.HTTPError):
@@ -380,8 +378,10 @@ def _generate_one_anchor(
 
     Role-driven generation — each turn appends exactly one message:
     user turns are produced by *input_client*, assistant turns by
-    *target_client*.  The final (user) turn is answered by *target_client*
-    with token-level logprobs, which is the distillation signal.
+    *target_client*.  The final (user) turn is answered by *target_client*; its
+    answer becomes ``targets[0].output.content`` and its reasoning trace (present
+    only when thinking is enabled for the target model) becomes
+    ``targets[0].output.reasoning``.
 
     Any turn that fails (timeout, empty content, unknown role) abandons the
     whole anchor: the conversation is dropped and logged rather than left in
@@ -408,7 +408,6 @@ def _generate_one_anchor(
     Raises:
         ARDTimeoutError: A turn exceeded the layered timeout.
         ARDEmptyContentError: A turn returned no assistant content.
-        ARDLogprobsError: The final turn carried no usable log-probs.
         httpx.HTTPError: Transport/server failure.
     """
     if stats is None:
@@ -438,7 +437,7 @@ def _generate_one_anchor(
                         image_data_url=image_data_url,
                     ),
                     temperature=0.7,
-                )
+                ).content.strip()
             except ARDTimeoutError:
                 # Timeout mid-conversation: abandon the whole anchor.  Retrying
                 # the turn would cost an extra request for a different sample
@@ -457,7 +456,6 @@ def _generate_one_anchor(
                 # generator bug must not look like an empty anchor bank.
                 logger.exception("Anchor %s: error generating user turn: %s", spec.id, exc)
                 raise
-            user_msg = user_msg.strip()
             if not user_msg:
                 logger.warning(
                     "Anchor %s: empty user message at turn %d/%d — abandoning anchor",
@@ -472,7 +470,7 @@ def _generate_one_anchor(
             # user question.  Generating one here (the historical bug) shifted
             # every later message and produced UAUAU-shaped output.
             try:
-                assist_msg = target_client.chat(messages, temperature=0.0)
+                assist_msg = target_client.chat(messages, temperature=0.0).content.strip()
             except ARDTimeoutError:
                 logger.exception(
                     "Anchor %s: timeout generating assistant turn %d/%d — "
@@ -485,7 +483,6 @@ def _generate_one_anchor(
                     "Anchor %s: error generating assistant turn: %s", spec.id, exc
                 )
                 raise
-            assist_msg = assist_msg.strip()
             if not assist_msg:
                 logger.warning(
                     "Anchor %s: empty assistant message at turn %d/%d — abandoning anchor",
@@ -517,10 +514,13 @@ def _generate_one_anchor(
         if not turn.is_final:
             continue
 
-        # ── Final turn (always a user turn): target_model with logprobs ─────
-        # The logprobs of this single response are the distillation signal.
-        # Check the accumulated roles against the spec before spending the
-        # request: the answer is only meaningful for the intended turn.
+        # ── Final turn (always a user turn): target_model answers ───────────
+        # The response carries the answer (``content``) and, when thinking is
+        # enabled, the teacher's reasoning trace (``reasoning``).  The two are
+        # kept apart all the way to the bank: thinking is not the answer
+        # (§1.2 契约 2).  Check the accumulated roles against the spec before
+        # spending the request: the answer is only meaningful for the intended
+        # turn.
         actual_roles = [m["role"] for m in messages]
         if actual_roles != expected_roles or message_shape_error(messages) is not None:
             logger.warning(
@@ -531,11 +531,11 @@ def _generate_one_anchor(
             stats.record_abandon("role_mismatch")
             return None
         try:
-            result = target_client.chat_with_logprobs(messages, temperature=0.0)
+            response = target_client.chat(messages, temperature=0.0)
         except ARDTimeoutError:
             logger.exception(
                 "Anchor %s: timeout generating final user turn %d/%d — "
-                "abandoning this anchor (logprobs are the distillation signal)",
+                "abandoning this anchor",
                 spec.id, turn_idx + 1, total_turns,
             )
             raise
@@ -544,8 +544,10 @@ def _generate_one_anchor(
                 "Anchor %s: error generating final user turn: %s", spec.id, exc
             )
             raise
-        target_answer = result["content"].strip()
-        logprobs = result["logprobs"]
+        target_answer = response.content.strip()
+        reasoning = response.reasoning
+        if reasoning is not None:
+            reasoning = reasoning.strip() or None
         if len(target_answer) < min_answer_chars:
             logger.warning(
                 "Anchor %s: target answer too short (%d < %d chars) — skipping",
@@ -581,7 +583,7 @@ def _generate_one_anchor(
             target_model=target_model_name,
             input_generator_model=input_model_name,
             anchor_meta=spec.anchor_meta,
-            logprobs=logprobs,
+            reasoning=reasoning,
         )
 
     # Only reachable if spec.turns had no is_final turn; AnchorSpec allows it
@@ -622,9 +624,9 @@ def generate_text_anchors(
     :data:`SERVER_INSTABILITY_REASONS`) is kept as results are collected; when
     it reaches *backpressure_threshold* the run pauses *backpressure_cooldown*
     seconds to let vLLM drain its queue, then the counter restarts from zero.
-    Anchors abandoned for *model-output* reasons (empty answer, missing
-    log-probs, too short) are counted but never trigger a cooldown: the same
-    prompt would fail identically, so sleeping only wastes wall clock.
+    Anchors abandoned for *model-output* reasons (empty answer, too short) are
+    counted but never trigger a cooldown: the same prompt would fail
+    identically, so sleeping only wastes wall clock.
 
     Whatever persists an anchor here (``append_anchor``) validates its message
     shape and de-duplicates by id; both rejections are counted and announced

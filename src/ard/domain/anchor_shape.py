@@ -25,10 +25,10 @@ def expected_message_roles(spec: AnchorSpec) -> list[str]:
     """Return the role sequence ``messages`` must have for *spec*.
 
     One message per ``TurnSpec``: user turns are produced by the input
-    generator / with logprobs, assistant turns by the target model.  Because
-    every turn yields exactly one message, the expected sequence is simply
-    the declared turn roles.  ``AnchorSpec`` already guarantees this
-    sequence starts with ``user``, ends with ``user`` and alternates.
+    generator, assistant turns by the target model.  Because every turn yields
+    exactly one message, the expected sequence is simply the declared turn
+    roles.  ``AnchorSpec`` already guarantees this sequence starts with
+    ``user``, ends with ``user`` and alternates.
 
     Args:
         spec: Anchor specification.
