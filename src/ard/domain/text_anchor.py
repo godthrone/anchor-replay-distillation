@@ -521,8 +521,18 @@ def _generate_one_anchor(
         # (§1.2 契约 2).  Check the accumulated roles against the spec before
         # spending the request: the answer is only meaningful for the intended
         # turn.
+        #
+        # v3.0.0 D1: an optional *single leading* ``system`` message is allowed
+        # and is validated by the shared contract (:func:`message_shape_error`),
+        # which rejects a misplaced or repeated system.  The turn-derived
+        # ``expected_roles`` never contains a system, so before comparing them
+        # the (already validated) system is stripped from the actual roles.
         actual_roles = [m["role"] for m in messages]
-        if actual_roles != expected_roles or message_shape_error(messages) is not None:
+        conversation_roles = [r for r in actual_roles if r != "system"]
+        if (
+            message_shape_error(messages) is not None
+            or conversation_roles != expected_roles
+        ):
             logger.warning(
                 "Anchor %s: message roles %r do not match spec roles %r — "
                 "abandoning anchor",

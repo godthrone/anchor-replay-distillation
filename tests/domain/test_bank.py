@@ -181,6 +181,106 @@ def test_message_shape_error_rejects_uauau_and_uauu():
     assert message_shape_error([{"role": "assistant", "content": "a"}]) is not None
 
 
+# ── v3.0.0 D1: optional single leading ``system`` ───────────────────────────
+
+
+def _with_system(messages, content="You are a helpful assistant."):
+    """Prepend a single leading ``system`` message (D1, position 0)."""
+    return [{"role": "system", "content": content}, *messages]
+
+
+def test_message_shape_error_accepts_optional_leading_system():
+    """A single leading ``system`` is allowed for U, UAU and UAUAU (D1)."""
+    assert message_shape_error(_with_system([{"role": "user", "content": "q"}])) is None
+    assert message_shape_error(_with_system(_uau_messages())) is None
+    assert message_shape_error(
+        _with_system(
+            [
+                {"role": "user", "content": "q1"},
+                {"role": "assistant", "content": "a1"},
+                {"role": "user", "content": "q2"},
+                {"role": "assistant", "content": "a2"},
+                {"role": "user", "content": "q3"},
+            ]
+        )
+    ) is None
+
+
+def test_message_shape_error_rejects_system_not_in_first_position():
+    """A ``system`` message anywhere but position 0 is explicitly refused."""
+    misplaced = [
+        {"role": "user", "content": "q"},
+        {"role": "system", "content": "late system"},
+    ]
+    err = message_shape_error(misplaced)
+    assert err is not None
+    assert "system" in err and "first" in err
+
+    # Behind an assistant/earlier slot: also refused.
+    mid = [
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "content": "a1"},
+        {"role": "system", "content": "mid system"},
+        {"role": "user", "content": "q2"},
+    ]
+    assert message_shape_error(mid) is not None
+
+
+def test_message_shape_error_rejects_multiple_system_messages():
+    """More than one ``system`` message is refused (D1: at most one)."""
+    dup = [
+        {"role": "system", "content": "s1"},
+        {"role": "system", "content": "s2"},
+        {"role": "user", "content": "q"},
+    ]
+    err = message_shape_error(dup)
+    assert err is not None
+    assert "at most one" in err
+
+
+def test_message_shape_error_rejects_system_only_and_system_after_strip_invalid():
+    """A bare ``system`` (nothing to strip to) is refused; so is a system
+    followed by a non-alternating conversation."""
+    assert message_shape_error([{"role": "system", "content": "only"}]) is not None
+    # system + [user, user] must still fail the alternation contract.
+    non_alt = _with_system(
+        [
+            {"role": "user", "content": "q1"},
+            {"role": "user", "content": "q2"},
+        ]
+    )
+    err = message_shape_error(non_alt)
+    assert err is not None
+    assert "alternate" in err
+
+
+def test_append_anchor_accepts_leading_system(tmp_path):
+    """The persistence gate writes a conversation opened by a ``system``."""
+    path = tmp_path / "bank.jsonl"
+    outcome = append_anchor(
+        _make_anchor("sys-ok", messages=_with_system(_uau_messages())),
+        path,
+    )
+    assert outcome is AppendOutcome.APPENDED
+    records = read_anchor_bank(path)
+    assert len(records) == 1
+    roles = [m["role"] for m in records[0]["messages"]]
+    assert roles == ["system", "user", "assistant", "user"]
+
+
+def test_append_anchor_rejects_misplaced_system(tmp_path):
+    """A non-leading ``system`` is refused by the real persistence gate."""
+    path = tmp_path / "bank.jsonl"
+    misplaced = [
+        {"role": "user", "content": "q1"},
+        {"role": "system", "content": "late"},
+        {"role": "user", "content": "q2"},
+    ]
+    outcome = append_anchor(_make_anchor("sys-bad", messages=misplaced), path)
+    assert outcome is AppendOutcome.INVALID_SHAPE_SKIPPED
+    assert count_existing_anchors(path) == 0
+
+
 def test_append_anchor_accepts_valid_shape(tmp_path):
     """The persistence gate writes a well-formed conversation."""
     path = tmp_path / "bank.jsonl"
