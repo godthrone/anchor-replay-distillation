@@ -82,6 +82,15 @@ class GeneratedAnchor:
     ``enable_thinking = false`` produces, because the server then emits no
     reasoning at all.  Serialized as ``targets[0].output.reasoning``.
     """
+    data_source: str = "ard_text"
+    """OPD multi-teacher routing key for the record.
+
+    Identifies which ARD source sub-corpus a record belongs to.  The
+    vocabulary is ``ard_text`` / ``ard_multi``; the current text pipeline's
+    anchors are ``ard_text``, and a later batch that produces multimodal
+    records sets ``ard_multi`` explicitly at construction time.  Serialized
+    as a top-level field, set once here (single source of truth, §1.4).
+    """
 
 
 @dataclass(slots=True)

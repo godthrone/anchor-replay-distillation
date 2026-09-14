@@ -504,7 +504,10 @@ def test_encode_image_to_base64_unsupported_format(tmp_path):
 
 def _reasoning_chunk(text: str, *, finish_reason: str | None = None) -> dict:
     """One thinking-phase chunk: ``content`` is ``null``, only ``reasoning`` set."""
-    return _chunk({"role": "assistant", "reasoning": text, "content": None}, finish_reason=finish_reason)
+    return _chunk(
+        {"role": "assistant", "reasoning": text, "content": None},
+        finish_reason=finish_reason,
+    )
 
 
 def _empty_content_only_chunk(*, finish_reason: str) -> dict:

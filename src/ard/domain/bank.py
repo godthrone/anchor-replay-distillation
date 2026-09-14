@@ -32,6 +32,11 @@ from ard.domain.anchor_shape import message_shape_error
 
 logger = logging.getLogger(__name__)
 
+# Output-schema version of every record persisted through this module (v3.0.0).
+# Single source of truth (§1.4): the anchor format's version is written here,
+# once, as a top-level ``schema_version`` field on each record.
+SCHEMA_VERSION = "3.0.0"
+
 
 class AppendOutcome(Enum):
     """What happened when an anchor was offered to the bank."""
@@ -177,11 +182,13 @@ def count_unique_anchor_ids(path: Path | str) -> int:
 def anchor_to_dict(anchor: GeneratedAnchor) -> dict[str, Any]:
     """Convert a :class:`GeneratedAnchor` to a dict in the unified JSONL format.
 
-    Output format (aligned with graspo):
+    Output format (aligned with graspo + OPD v3.0.0 additions):
     ```json
     {
       "id": "anchor_<sha256_hex16>",
       "source": "ard",
+      "data_source": "ard_text",
+      "schema_version": "3.0.0",
       "messages": [...],
       "targets": [{
         "id": "primary",
@@ -191,6 +198,7 @@ def anchor_to_dict(anchor: GeneratedAnchor) -> dict[str, Any]:
         }
       }],
       "anchor_meta": {...},
+      "input_generator_model": "...",
       "teacher_id": "..."
     }
     ```
@@ -199,10 +207,17 @@ def anchor_to_dict(anchor: GeneratedAnchor) -> dict[str, Any]:
     thinking is not the answer, and downstream decides on its own whether it
     wants the reasoning.  ``reasoning`` is ``null`` when the teacher did not
     think (``enable_thinking = false``) — never ``""``.
+
+    ``data_source`` (per-record OPD routing key, set at anchor construction),
+    ``schema_version`` (the single format version, §1.4) and
+    ``input_generator_model`` are top-level fields so downstream can route and
+    version records without re-deriving them.
     """
     return {
         "id": anchor.id,
         "source": "ard",
+        "data_source": anchor.data_source,
+        "schema_version": SCHEMA_VERSION,
         "messages": anchor.messages,
         "targets": [
             {
@@ -214,6 +229,7 @@ def anchor_to_dict(anchor: GeneratedAnchor) -> dict[str, Any]:
             }
         ],
         "anchor_meta": anchor.anchor_meta,
+        "input_generator_model": anchor.input_generator_model,
         "teacher_id": anchor.target_model,
     }
 
