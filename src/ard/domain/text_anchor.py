@@ -312,16 +312,29 @@ def _convert_images_to_paths(
     API calls need base64-encoded images, but the output JSONL should use
     ``{"type": "image", "image": "images/xxx.jpg"}`` format (Graspo-compatible).
 
-    One message per :class:`TurnSpec`, in order, so message *i* belongs to
-    ``spec.turns[i]``: only a turn that owns an ``image_path`` has image parts
-    to rewrite.  Messages beyond the turn list are carried over unchanged
-    rather than dropped, so the function is length-preserving and never
-    silently truncates an anchor's history.
+    One *conversation* message per :class:`TurnSpec`, in order, so the
+    conversation message at position *n* belongs to ``spec.turns[n]`` — an
+    optional leading ``system`` message is not a turn and therefore shifts every
+    conversation message by one.  The offset is derived from the message list
+    itself rather than assumed, because assuming a 1:1 ``messages``/``turns``
+    alignment is precisely what kept the image in its inline form: ``messages[1]``
+    (turn 0, the image owner) was looked up as ``turns[1]``, which has no
+    ``image_path``, so the rewrite was skipped and the base64 travelled into the
+    bank.
+
+    Only a turn that owns an ``image_path`` has image parts to rewrite.
+    Messages beyond the turn list are carried over unchanged rather than
+    dropped, so the function is length-preserving and never silently truncates
+    an anchor's history.
     """
+    # ``message_shape_error`` (the single shape contract) allows a system
+    # message only at position 0, so a one-message prefix check is exact.
+    turn_offset = 1 if messages and messages[0].get("role") == "system" else 0
     result: list[dict[str, Any]] = []
     for msg_idx, raw_msg in enumerate(messages):
         msg = dict(raw_msg)  # shallow copy
-        turn = spec.turns[msg_idx] if msg_idx < len(spec.turns) else None
+        turn_idx = msg_idx - turn_offset
+        turn = spec.turns[turn_idx] if 0 <= turn_idx < len(spec.turns) else None
         if turn is not None and turn.image_path and isinstance(msg.get("content"), list):
             new_content: list[dict[str, Any]] = []
             for item in msg["content"]:
@@ -395,7 +408,7 @@ def _generate_one_anchor(
         input_client: API client for generating user messages.
         target_client: API client for generating target answers.
         input_model_name: Name of the input-generator model.
-        target_model_name: Name of the target model.
+        target_model_name: Name of the target-model.
         min_answer_chars: Minimum answer length in characters.
         max_answer_chars: Optional maximum answer length.
         stats: Optional counters; soft abandons (empty / too short / unknown
