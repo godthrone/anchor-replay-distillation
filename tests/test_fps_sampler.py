@@ -111,11 +111,30 @@ def test_get_leaf_conversation_types_malformed():
 
 
 def test_build_all_combinations_count():
-    """组合数 = languages × domains × capabilities × conv_types。"""
+    """组合数 = languages × domains × capabilities × conv_types × system prompt 模式。
+
+    合成本体没有 ``system_prompt_presence`` / ``system_prompt_style``，
+    system prompt 维度退化为单值（``none``），倍率仍为 1。
+    """
     ontology = _make_minimal_ontology()
     combos = _build_all_combinations(ontology, languages=[], task_types=[])
     # 3 languages × 2 domains × 3 capabilities × 2 conv_types = 36
     assert len(combos) == 36
+
+
+def test_build_all_combinations_system_prompt_multiplies():
+    """带 system prompt 维度的本体，组合数按模式数倍增。"""
+    ontology = _make_minimal_ontology()
+    ontology["system_prompt_presence"] = ["none", "present"]
+    ontology["system_prompt_style"] = {
+        "minimal_persona": {"anchor_concepts": ["deduction"]},
+        "detailed_persona": {"anchor_concepts": ["induction"]},
+    }
+    combos = _build_all_combinations(ontology, languages=[], task_types=[])
+    # 36 × (1 absent + 2 styles) = 108
+    assert len(combos) == 108
+    modes = {c["system_prompt_mode"] for c in combos}
+    assert modes == {"none", "minimal_persona", "detailed_persona"}
 
 
 def test_build_all_combinations_language_filter():
@@ -137,7 +156,7 @@ def test_build_all_combinations_task_type_filter():
 
 
 def test_build_all_combinations_structure():
-    """每个组合应包含 4 个必需字段。"""
+    """每个组合应包含全部必需字段（含 system prompt 三个字段）。"""
     ontology = _make_minimal_ontology()
     combos = _build_all_combinations(ontology, languages=[], task_types=[])
     for combo in combos:
@@ -146,6 +165,9 @@ def test_build_all_combinations_structure():
             "knowledge_domain",
             "capability",
             "conversation_type",
+            "system_prompt_presence",
+            "system_prompt_style",
+            "system_prompt_mode",
         }
 
 
@@ -322,7 +344,12 @@ def test_sample_farthest_coverage_n500():
 
 
 def test_sample_farthest_no_duplicates():
-    """结果应无重复（用 (language, knowledge_domain, capability, conversation_type) 去重）。"""
+    """结果应无重复（去重键含 system_prompt_mode 这第 5 维）。
+
+    Two anchors that share the first four dimensions but differ in their system
+    prompt are different training samples, so ``system_prompt_mode`` belongs in
+    the key — leaving it out is what makes a correct result look duplicated.
+    """
     ontology = _load_real_ontology()
     config = AnchorGenerationConfig(
         target_count=50, seed=42,
@@ -332,12 +359,31 @@ def test_sample_farthest_no_duplicates():
     result = _sample_farthest(ontology, config, rng)
     keys = [
         (item["language"], item["knowledge_domain"],
-         item["capability"], item["conversation_type"])
+         item["capability"], item["conversation_type"], item["system_prompt_mode"])
         for item in result
     ]
     assert len(keys) == len(set(keys)), (
         f"Found {len(keys) - len(set(keys))} duplicate(s)"
     )
+
+
+def test_sample_farthest_covers_the_system_prompt_dimension():
+    """FPS 采样应覆盖到 system prompt 维度（含「无 system」这一取值）。"""
+    ontology = _load_real_ontology()
+    config = AnchorGenerationConfig(
+        target_count=100, seed=42,
+        embeddings_path="ontology/anchor_ontology_embeddings.json",
+    )
+    rng = random.Random(42)
+    result = _sample_farthest(ontology, config, rng)
+    modes = {item["system_prompt_mode"] for item in result}
+    assert modes == {
+        "none",
+        "minimal_persona",
+        "detailed_persona",
+        "task_constraint",
+        "domain_style",
+    }, modes
 
 
 def test_sample_farthest_correct_count():

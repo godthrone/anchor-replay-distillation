@@ -255,9 +255,10 @@ function hierarchical_fps(ontology, embeddings, target_count):
     results = []
     per_domain = target_count / N
     for domain in selected_domains:
-        combos = build_combinations(domain, capabilities, languages, conv_types)
-        // Concat: domain_emb + cap_emb + lang_emb + conv_emb → 4096-dim
-        combo_embeddings = [concat(e_domain, e_cap, e_lang, e_conv) for combo in combos]
+        combos = build_combinations(domain, capabilities, languages, conv_types, system_prompt_modes)
+        // Concat the unit-normalised slots: domain + cap + lang + conv + presence + style
+        combo_embeddings = [concat(unit(e_domain), unit(e_cap), unit(e_lang), unit(e_conv),
+                                   unit(e_presence), style_onehot) for combo in combos]
         selected_combos = fps(combo_embeddings, per_domain)
         results.extend(selected_combos)
 
@@ -266,7 +267,7 @@ function hierarchical_fps(ontology, embeddings, target_count):
 
 ### 4.2 嵌入粒度与覆盖保证
 
-嵌入数据来自 `ontology/anchor_ontology_embeddings.json`（49 个嵌入，1024 维）：
+嵌入数据来自 `ontology/anchor_ontology_embeddings.json`（55 个嵌入，1024 维）：
 
 | 类别 | 向量数 | 说明 |
 |------|--------|------|
@@ -274,14 +275,53 @@ function hierarchical_fps(ontology, embeddings, target_count):
 | `capabilities` | 20 | 能力类型（5 个大类，20 个叶子） |
 | `languages` | 4 | 语言（English, 简体中文, Español, 日本語） |
 | `conversation_types` | 7 | 会话类型（5 个大类，7 个叶子） |
+| `system_prompt` | 6 | system prompt 维度的取值向量（2 个 presence + 4 个风格），由能力向量确定性派生，不走 API |
 
 嵌入数据以 `items` 字典组织，每个类别是一个 `{name: [1024 floats]}` 映射，
-由 API 生成，维度 1024，距离度量为余弦距离。
+由 API 生成（`system_prompt` 一节除外），维度 1024，距离度量为余弦距离。
+
+**组合向量布局（v3.0.0）**：域内 FPS 的每个组合由 6 个槽位拼接而成，
+每个槽位先归一化为单位长度再等权拼接（避免某一维的向量模长意外主导距离）：
+
+```
+[ domain | capability | language | conversation_type | presence | style ]
+```
+
+最后两个槽位是 system prompt 维度，见 §4.5。
 
 **覆盖保证**：分层 FPS 确保：
 - 第一层 FPS 保证知识域覆盖的多样性（知识域是最重要的维度，变化最大）
-- 第二层 FPS 通过拼接组合嵌入（4096 维）保证每个域内组合的多样性
+- 第二层 FPS 通过拼接组合嵌入（6 × 1024 = 6144 维）保证每个域内组合的多样性
 - 当 `target_count` 增大到组合总数时，FPS 退化为全选，覆盖率 = 100%
+
+### 4.5 system prompt 采样维度（v3.0.0）
+
+`system prompt` 不是全局开关，而是**采样维度**：真实对话数据里既有完全不带
+system 的，也有各种风格的 system，要让数据集覆盖这个分布，它就必须像其他维度
+一样进入 ontology 与 FPS。
+
+它由两个**正交**维度组成（`ontology/anchor_ontology.json`）：
+
+| 维度 | 取值 | 语义 |
+|------|------|------|
+| `system_prompt_presence` | `none` / `present` | 这条锚点到底带不带 system |
+| `system_prompt_style` | `minimal_persona` / `detailed_persona` / `task_constraint` / `domain_style` | 带 system 时怎么写 |
+
+「不带 system」没有风格可言，因此 `none` presence 只与 `none` 风格配对；两维合并后的
+单一标签写在 `anchor_meta["system_prompt_mode"]`（`none` 或某个风格名），供下游
+路由与统计使用。
+
+**几何处理**：`none` 不是一段文本，在风格向量空间里没有自然位置，所以它在
+presence 槽位取「风格质心的反方向」——与所有风格尽可能远；风格槽位是 4 个风格的
+一维独热（正交），不带 system 时为零向量。这样「有没有 system」与「什么风格」在
+距离上都真正可分辨。
+
+**文本生成与落盘**：风格只是一个**规格**，具体文本由 input_generator 现场生成，
+并要求与 `knowledge_domain` / `capability` 呼应；生成的文本写入 `messages[0]`
+（`messages` 是 system prompt 的唯一真相源），不新增顶层文本字段。
+
+**anchor id**：id 的哈希维度由 4 维变为 5 维（增加 `system_prompt_mode`），
+**v2 产出与 v3 产出的 id 不可比**。
 
 ### 4.3 收敛性定义与度量
 
@@ -296,8 +336,9 @@ ARD 使用最远点采样（Farthest Point Sampling, FPS）作为唯一采样策
 
 ### 4.4 实际组合空间与覆盖率
 
-当前本体定义的实际组合空间为 **10,080**（18 知识域 × 20 能力 × 4 语言 × 7 会话类型），
-而非 117,040（此数字源于旧版本体的 209 个知识域，现已精简为 18 个顶级域）。
+当前本体定义的实际组合空间为 **50,400**（18 知识域 × 20 能力 × 4 语言 × 7 会话类型 ×
+5 个 system prompt 取值），而非 117,040（此数字源于旧版本体的 209 个知识域，
+现已精简为 18 个顶级域）。
 
 在 `target_count = 100` 时，各维度的覆盖率表现如下：
 
@@ -307,6 +348,7 @@ ARD 使用最远点采样（Farthest Point Sampling, FPS）作为唯一采样策
 | 语言 | 4 | **100%** | 语言数量少，100 个样本足以全覆盖 |
 | 能力 | 20 | **~75-90%** | 能力是覆盖的短板，因为 20 种能力需要在 100 个样本中分配 |
 | 会话类型 | 7 | **~85-100%** | 7 种会话类型通常可全覆盖，但能力维度竞争配额时可能受影响 |
+| system prompt | 5 | **100%** | 实测 100 条样本中 5 个取值（`none` + 4 种风格）均被选中 |
 
 **建议**：当 `target_count ≥ 200` 时，能力覆盖率趋于 100%，
 各维度均可实现全覆盖。对于需要能力维度全覆盖的训练场景，

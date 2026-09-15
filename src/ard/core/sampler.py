@@ -12,6 +12,7 @@ import random
 from typing import Any
 
 from ard.core._fps import _sample_farthest
+from ard.core.system_prompt import get_system_prompt_values, system_prompt_mode
 from ard.core.types import AnchorGenerationConfig, AnchorSpec, TurnSpec
 
 
@@ -107,7 +108,11 @@ def _build_all_combinations(
     languages: list[str],
     task_types: list[str],
 ) -> list[dict[str, Any]]:
-    """Build all possible ontology combinations."""
+    """Build all possible ontology combinations.
+
+    One combination = one candidate anchor: language × knowledge domain ×
+    capability × conversation type × system-prompt mode (presence × style).
+    """
     available_langs = ontology.get("languages", [])
     if not available_langs:
         available_langs = ["English"]
@@ -126,27 +131,47 @@ def _build_all_combinations(
 
     # Read conversation types dynamically from ontology
     conv_types = _get_leaf_conversation_types(ontology)
+    system_prompt_pairs = get_system_prompt_values(ontology)
 
     combinations: list[dict[str, Any]] = []
     for lang in available_langs:
         for domain_name in domains:
             for cap in all_caps:
                 for conv_name in conv_types:
-                    combinations.append({
-                        "language": lang,
-                        "knowledge_domain": domain_name,
-                        "capability": cap,
-                        "conversation_type": conv_name,
-                    })
+                    for presence, style in system_prompt_pairs:
+                        combinations.append({
+                            "language": lang,
+                            "knowledge_domain": domain_name,
+                            "capability": cap,
+                            "conversation_type": conv_name,
+                            "system_prompt_presence": presence,
+                            "system_prompt_style": style,
+                            "system_prompt_mode": system_prompt_mode(presence, style),
+                        })
     return combinations
 
 
+#: The anchor-id dimensions, in hash order.  v3.0.0 added
+#: ``system_prompt_mode`` (a 5th dimension), so **ids are not comparable across
+#: the v2 → v3 boundary** — an intentional consequence of making the system
+#: prompt a sampling dimension (the format change is already MAJOR, §18.1).
+ANCHOR_ID_DIMENSIONS: tuple[str, ...] = (
+    "language",
+    "knowledge_domain",
+    "capability",
+    "conversation_type",
+    "system_prompt_mode",
+)
+
+
 def generate_anchor_id(meta: dict[str, Any]) -> str:
-    """Generate a stable anchor ID from meta dict."""
-    raw = (
-        f"{meta.get('language', '')}|"
-        f"{meta.get('knowledge_domain', '')}|"
-        f"{meta.get('capability', '')}|"
-        f"{meta.get('conversation_type', '')}"
-    )
+    """Generate a stable anchor ID from meta dict.
+
+    The id is a hash over :data:`ANCHOR_ID_DIMENSIONS` in that order.  Every
+    dimension that can make two anchors different must be part of it: two
+    anchors that differ only in their system prompt are different training
+    samples, and collapsing them onto one id would make the bank's
+    uniqueness gate drop a legitimate record.
+    """
+    raw = "|".join(str(meta.get(key, "")) for key in ANCHOR_ID_DIMENSIONS)
     return "anchor_" + hashlib.sha256(raw.encode()).hexdigest()[:16]
