@@ -170,7 +170,7 @@ ARD 采用**分层 TOML 配置**模型。有两个配置文件：
 | `languages` | list | `[]` | 语言过滤（空=全部）。可选：`zh-CN`, `en`, `ja`, `ko` |
 | `task_types` | list | `[]` | 任务类型过滤（空=全部） |
 | `max_turns` | int | `1` | 最大对话轮数（1=单轮，2-10=多轮） |
-| `system_persona` | string | `"none"` | 系统角色模式：`none` / `one_sentence` / `appropriate` / `detailed` |
+| — | — | — | 系统提示词不再是配置开关：由本体采样决定（`system_prompt_presence` / `system_prompt_style`），带 system 的锚点其文本在运行时生成并写入 `messages[0]` |
 | `max_turns_with_image` | int | `1` | 含图片的最大轮数（≤ `max_turns`） |
 | `embeddings_path` | string | `"ontology/anchor_ontology_embeddings.json"` | 预计算本体论 embedding 文件路径 |
 | `backpressure_threshold` | int | `3` | 连续服务端类失败达到该次数即触发冷却 |

@@ -182,7 +182,7 @@ All parameters are defined in `configs/config.toml`. Secret fields (`api_base`,
 | `languages` | list | `[]` | Language filter (empty = all). Options: `zh-CN`, `en`, `ja`, `ko` |
 | `task_types` | list | `[]` | Task type filter (empty = all) |
 | `max_turns` | int | `1` | Max conversation turns (1 = single-turn, 2-10 = multi-turn) |
-| `system_persona` | string | `"none"` | System persona mode: `none` / `one_sentence` / `appropriate` / `detailed` |
+| — | — | — | The system prompt is no longer a config switch: the ontology samples it (`system_prompt_presence` / `system_prompt_style`), and each anchor that has one gets its text generated at run time and stored in `messages[0]` |
 | `max_turns_with_image` | int | `1` | Max turns with image (≤ `max_turns`) |
 | `embeddings_path` | string | `"ontology/anchor_ontology_embeddings.json"` | Pre-computed ontology embedding file |
 | `backpressure_threshold` | int | `3` | Consecutive server-side failures that trigger a cooldown |

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -87,7 +87,6 @@ class GenerationConfig(BaseModel):
     languages: list[str] = Field(default_factory=list)
     task_types: list[str] = Field(default_factory=list)
     max_turns: int = Field(default=1, ge=1, le=10)
-    system_persona: Literal["none", "one_sentence", "appropriate", "detailed"] = "none"
     max_turns_with_image: int = Field(default=1, ge=0, le=5)
     embeddings_path: str = "ontology/anchor_ontology_embeddings.json"
     backpressure_threshold: int = 3       # 连续超时触发冷却的阈值

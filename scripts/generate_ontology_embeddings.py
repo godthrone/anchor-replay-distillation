@@ -7,6 +7,10 @@ Calls the embedding API to produce 1024-dim embeddings for:
   - 4 languages (Layer 2)
   - 7 conversation types (Layer 2)
 
+The ``system_prompt`` section (2 presence values + 4 style values, v3.0.0) is
+**derived** from the capability vectors rather than embedded — see
+:func:`derive_system_prompt_embeddings`.
+
 Usage:
     python scripts/generate_ontology_embeddings.py \
         --ontology ontology/anchor_ontology.json \
@@ -25,6 +29,9 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import numpy as np
+
+from ard.core.system_prompt import style_centroid_direction
 
 
 def parse_args() -> argparse.Namespace:
@@ -96,6 +103,9 @@ def build_texts(ontology: dict[str, Any]) -> dict[str, dict[str, str]]:
         "capabilities": {},
         "languages": {},
         "conversation_types": {},
+        # No API-callable text: derived from the capability vectors instead
+        # (see :func:`derive_system_prompt_embeddings`).
+        "system_prompt": {},
     }
 
     # 18 knowledge domain categories
@@ -140,6 +150,82 @@ def build_texts(ontology: dict[str, Any]) -> dict[str, dict[str, str]]:
             result["conversation_types"][ct_name] = text
 
     return result
+
+
+def derive_system_prompt_embeddings(
+    ontology: dict[str, Any],
+    capabilities: dict[str, list[float]],
+) -> dict[str, list[float]]:
+    """Derive the ``system_prompt`` *presence* embeddings from ontology vectors.
+
+    The system-prompt dimension of the ontology (``system_prompt_presence`` /
+    ``system_prompt_style``) has **no standalone text** that could be sent to
+    an embedding API: one presence value is the *absence* of a system prompt,
+    and each style is a specification ("write a one-sentence persona"), not a
+    prompt itself.
+
+    So each value is anchored on real ontology vectors, which keeps the derived
+    vectors in the same space as the capability / language / conversation-type
+    vectors the sampler already uses:
+
+    * a named style = mean of its ``anchor_concepts`` capability vectors;
+    * ``present`` = mean of **all** capability vectors, the generic "some
+      assistant" position;
+    * ``none`` = the direction *away from the style centroid*
+      (:func:`ard.core.system_prompt.style_centroid_direction`) — "no system
+      prompt" is not a style, so it is placed as far from every style as the
+      space allows instead of at their centre.
+
+    Only ``none`` and ``present`` are composed into the sampler's vectors: the
+    style slot is a one-hot over the real styles
+    (:func:`ard.core.system_prompt.named_style_vector`).  The named-style rows
+    are still written because they are what defines the centroid that ``none``
+    is derived from, and because they document the dimension's geometry.
+
+    Derivation is deterministic and needs no network access, so the embeddings
+    file stays reproducible and the already-published vectors (knowledge
+    domains, capabilities, languages, conversation types) are untouched.
+
+    Args:
+        ontology: Loaded ontology dict; reads ``system_prompt_style``.
+        capabilities: ``{capability_name: vector}`` from the capabilities
+            section of the embeddings file.
+
+    Returns:
+        ``{value: vector}`` covering every ``system_prompt_presence`` value and
+        every ``system_prompt_style`` key.
+
+    Raises:
+        KeyError: If a style references an ``anchor_concepts`` name that has no
+            capability vector (the vocabulary must stay in sync).
+    """
+    dim = len(next(iter(capabilities.values())))
+
+    def _mean(vectors: list[list[float]]) -> list[float]:
+        return [
+            sum(vector[i] for vector in vectors) / len(vectors)
+            for i in range(dim)
+        ]
+
+    def _unit(vector: list[float]) -> np.ndarray:
+        array = np.asarray(vector, dtype=np.float64)
+        return array / float(np.linalg.norm(array))
+
+    styles: dict[str, list[float]] = {}
+    for style_name, style_data in ontology["system_prompt_style"].items():
+        concept_vectors = [capabilities[concept] for concept in style_data["anchor_concepts"]]
+        styles[style_name] = _mean(concept_vectors)
+
+    names = sorted(styles)
+    absent_direction = style_centroid_direction(
+        [_unit(styles[name]) for name in names]
+    )
+    derived: dict[str, list[float]] = {
+        "none": [float(value) for value in absent_direction],
+        "present": _mean(list(capabilities.values())),
+    }
+    derived.update(styles)
+    return derived
 
 
 def call_embedding_api(
@@ -229,11 +315,15 @@ def main() -> None:
     n_langs = len(text_items["languages"])
     n_ctypes = len(text_items["conversation_types"])
     total = n_domains + n_caps + n_langs + n_ctypes
+    n_system_modes = (
+        len(ontology["system_prompt_presence"]) + len(ontology["system_prompt_style"])
+    )
     print(f"  knowledge_domains: {n_domains}")
     print(f"  capabilities:      {n_caps}")
     print(f"  languages:         {n_langs}")
     print(f"  conversation_types:{n_ctypes}")
-    print(f"  total:             {total}")
+    print(f"  total (API):       {total}")
+    print(f"  system_prompt:     {n_system_modes} (derived, no API call)")
 
     if total != 49:
         print(f"WARNING: expected 49 items, got {total}", file=sys.stderr)
@@ -250,6 +340,13 @@ def main() -> None:
         embeddings[section_name] = batch_call_api(
             args.api_url, args.model, section_items, args.batch_size
         )
+
+    # system_prompt values have no embeddable text — derive them from the
+    # capability vectors that were just computed (deterministic, no API call).
+    print("\n[Section: system_prompt] (derived from capabilities, no API call)")
+    embeddings["system_prompt"] = derive_system_prompt_embeddings(
+        ontology, embeddings["capabilities"]
+    )
 
     # Verify dimensions
     for section_name, section_embs in embeddings.items():

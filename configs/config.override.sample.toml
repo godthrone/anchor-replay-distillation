@@ -65,8 +65,9 @@ languages = []
 task_types = []
 # Maximum conversation turns (1 = single-turn, 2-10 = multi-turn)
 max_turns = 1
-# System persona mode: "none" | "one_sentence" | "appropriate" | "detailed"
-system_persona = "none"
+# System prompt is a sampling dimension, not a config switch: the ontology
+# (system_prompt_presence / system_prompt_style) decides whether each anchor
+# carries one and in which style. See docs/architecture.md.
 # Maximum turns with image per anchor (must be <= max_turns)
 max_turns_with_image = 1
 # Path to pre-computed ontology embeddings for farthest-point sampling

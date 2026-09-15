@@ -188,7 +188,6 @@ def run(
         task_types=config.generation.task_types,
         max_turns=config.generation.max_turns,
         max_turns_with_image=config.generation.max_turns_with_image,
-        system_persona=config.generation.system_persona,
         embeddings_path=config.generation.embeddings_path,
     )
 

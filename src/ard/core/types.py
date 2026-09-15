@@ -6,7 +6,25 @@ All types are plain dataclasses with slots=True. No external dependencies.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
+
+
+class DataSource(StrEnum):
+    """Controlled vocabulary for the per-record OPD routing key (§2.1 契约即防呆).
+
+    ``data_source`` tells the training side (verl / slime route by this key)
+    which ARD sub-corpus a record came from.  It is an enum rather than a free
+    string because a typo used to be written to the bank silently — the
+    training framework would then route on a value nobody produces.
+
+    Attributes:
+        ARD_TEXT: A text-only anchor, produced by the text pipeline.
+        ARD_MULTI: A multimodal anchor (at least one turn carries an image).
+    """
+
+    ARD_TEXT = "ard_text"
+    ARD_MULTI = "ard_multi"
 
 
 @dataclass(slots=True)
@@ -82,15 +100,26 @@ class GeneratedAnchor:
     ``enable_thinking = false`` produces, because the server then emits no
     reasoning at all.  Serialized as ``targets[0].output.reasoning``.
     """
-    data_source: str = "ard_text"
-    """OPD multi-teacher routing key for the record.
+    data_source: DataSource = DataSource.ARD_TEXT
+    """OPD multi-teacher routing key for the record (controlled vocabulary).
 
-    Identifies which ARD source sub-corpus a record belongs to.  The
-    vocabulary is ``ard_text`` / ``ard_multi``; the current text pipeline's
-    anchors are ``ard_text``, and a later batch that produces multimodal
-    records sets ``ard_multi`` explicitly at construction time.  Serialized
+    Identifies which ARD source sub-corpus a record belongs to.  The value is
+    checked in :meth:`__post_init__` **and** at the write gate
+    (:func:`ard.domain.bank.data_source_error`), because an annotation is not a
+    contract: a plain enum annotation still accepts a raw string at run time (it
+    is a dataclass, not a pydantic model), so without the check a typo would
+    reach the bank as silently as it did when the field was a bare ``str``.  A
+    record whose routing key is out of vocabulary is one no consumer ever picks
+    up, so it must not be constructible quietly (§2.1 契约即防呆).  Serialized
     as a top-level field, set once here (single source of truth, §1.4).
     """
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.data_source, DataSource):
+            raise ValueError(
+                f"data_source must be a DataSource, got {self.data_source!r} "
+                f"(allowed: {[member.value for member in DataSource]})"
+            )
 
 
 @dataclass(slots=True)
@@ -104,5 +133,4 @@ class AnchorGenerationConfig:
     task_types: list[str] = field(default_factory=list)
     max_turns: int = 1
     max_turns_with_image: int = 1
-    system_persona: str = "none"
     embeddings_path: str = "ontology/anchor_ontology_embeddings.json"

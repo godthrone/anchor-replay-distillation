@@ -370,16 +370,22 @@ def test_config_max_turns_default():
     from ard.config import GenerationConfig
     g = GenerationConfig()
     assert g.max_turns == 1
-    assert g.system_persona == "none"
     assert g.max_turns_with_image == 1
 
 
-def test_config_rejects_invalid_system_persona():
-    """system_persona rejects invalid values."""
+def test_config_has_no_system_persona_field():
+    """`system_persona` is gone — the ontology samples the system prompt (B3).
+
+    Kept as a test rather than as a comment because the field was reachable
+    from three layers (config → generation config → generator) and any of them
+    could reintroduce it: with ``extra="forbid"`` a config file that still
+    carries the key now fails loudly instead of silently doing nothing.
+    """
     from ard.config import GenerationConfig
     from pydantic import ValidationError
     with pytest.raises(ValidationError):
-        GenerationConfig(system_persona="invalid_value")  # type: ignore[arg-type]
+        GenerationConfig(system_persona="none")  # type: ignore[call-arg]
+    assert "system_persona" not in GenerationConfig.model_fields
 
 
 def test_config_rejects_image_turns_exceeds_max():
@@ -398,12 +404,20 @@ def test_config_accepts_valid_combination():
     assert g.max_turns_with_image == 2
 
 
-def test_config_system_persona_valid_values():
-    """All 4 Literal values are accepted."""
+def test_config_system_prompt_is_not_configurable():
+    """No system-prompt *config* key exists — it is a sampling dimension (B3).
+
+    The old ``system_persona`` switch only ever had four fixed values and
+    reached nothing, so it was deleted rather than migrated (§18.1 不留负债).
+    The behaviour it was supposed to produce is covered by
+    ``tests/core/test_system_prompt.py`` (dimension) and
+    ``tests/domain/test_system_prompt_anchor.py`` (generation + persistence).
+    """
     from ard.config import GenerationConfig
-    for val in ("none", "one_sentence", "appropriate", "detailed"):
-        g = GenerationConfig(system_persona=val)  # type: ignore[arg-type]
-        assert g.system_persona == val
+
+    config_fields = set(GenerationConfig.model_fields)
+    assert "system_persona" not in config_fields
+    assert not any("system_prompt" in name for name in config_fields)
 
 
 # ── load_config with new fields ─────────────────────────────────────────────
@@ -425,11 +439,9 @@ def test_load_config_with_new_fields(tmp_path):
         'api_key = "sk-target"\n'
         "[generation]\n"
         "max_turns = 3\n"
-        'system_persona = "appropriate"\n'
         "max_turns_with_image = 2\n"
     )
     config = load_config(str(config_path))
     assert isinstance(config, ARDConfig)
     assert config.generation.max_turns == 3
-    assert config.generation.system_persona == "appropriate"
     assert config.generation.max_turns_with_image == 2
