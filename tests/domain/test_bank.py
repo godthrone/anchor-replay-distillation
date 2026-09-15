@@ -20,7 +20,7 @@ from ard.domain.bank import (
 from ard.domain.anchor_shape import message_shape_error
 from ard.domain.text_anchor import build_input_prompt, build_target_prompt
 from ard.core.sampler import generate_anchor_id
-from ard.core.types import GeneratedAnchor, AnchorGenerationConfig
+from ard.core.types import DataSource, GeneratedAnchor, AnchorGenerationConfig
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -85,13 +85,21 @@ def test_anchor_to_dict_persists_new_v3_fields():
     a = _make_anchor(
         "c",
         input_generator_model="input-model",
-        data_source="ard_multi",
+        # B3 tightened this field into the controlled vocabulary: the routing key
+        # is a DataSource member now, not an arbitrary string (W-1).
+        data_source=DataSource.ARD_MULTI,
     )
     d = anchor_to_dict(a)
     assert d["data_source"] == "ard_multi"
     assert d["schema_version"] == "3.0.0"
     assert d["input_generator_model"] == "input-model"
     assert d["teacher_id"] == "target"  # untouched sibling key
+
+
+def test_generated_anchor_rejects_off_vocabulary_data_source():
+    """A raw string outside the vocabulary cannot build an anchor (W-1)."""
+    with pytest.raises(ValueError, match="must be a DataSource"):
+        _make_anchor("c2", data_source="ard_multi")
 
 
 def test_anchor_to_dict_defaults_data_source_to_ard_text():

@@ -45,10 +45,16 @@ from ard.backends.api_client import (
     ARDEmptyContentError,
     ARDTimeoutError,
     ChatAPIClient,
+    ChatAPIStats,
 )
-from ard.core.types import AnchorSpec, GeneratedAnchor, TurnSpec
+from ard.core.system_prompt import (
+    SYSTEM_PROMPT_GENERATION_INSTRUCTIONS,
+    SYSTEM_PROMPT_NONE,
+    build_system_prompt_prompt,
+)
+from ard.core.types import AnchorSpec, DataSource, GeneratedAnchor, TurnSpec
 from ard.domain.anchor_shape import expected_message_roles, message_shape_error
-from ard.domain.bank import AppendOutcome, append_anchor
+from ard.domain.bank import AppendOutcome, append_anchor, data_source_error
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +71,7 @@ MODEL_OUTPUT_REASONS: frozenset[str] = frozenset(
         "empty_content",
         "empty_user_message",
         "empty_assistant_message",
+        "empty_system_message",
         "answer_too_short",
         "answer_too_long",
         "invalid_shape",
@@ -92,6 +99,8 @@ class AnchorGenerationStats:
         written: Anchors accepted by :func:`append_anchor` (0 when no
             ``output_path`` was given).
         rejected_invalid_shape: Anchors refused by the bank's shape gate.
+        rejected_invalid_data_source: Anchors refused by the bank's
+            ``data_source`` vocabulary gate.
         duplicate_ids: Anchors refused by the bank's id-uniqueness gate.
         backpressure_events: Cooldowns triggered (each one paused the run).
         consecutive_server_failures: Counter value at the end of the run; it is
@@ -104,6 +113,7 @@ class AnchorGenerationStats:
     abandoned_by_reason: dict[str, int] = field(default_factory=dict)
     written: int = 0
     rejected_invalid_shape: int = 0
+    rejected_invalid_data_source: int = 0
     duplicate_ids: int = 0
     backpressure_events: int = 0
     consecutive_server_failures: int = 0
@@ -122,6 +132,7 @@ class AnchorGenerationStats:
             "abandoned_by_reason": dict(sorted(self.abandoned_by_reason.items())),
             "written": self.written,
             "rejected_invalid_shape": self.rejected_invalid_shape,
+            "rejected_invalid_data_source": self.rejected_invalid_data_source,
             "duplicate_ids": self.duplicate_ids,
             "backpressure_events": self.backpressure_events,
         }
@@ -313,14 +324,15 @@ def _convert_images_to_paths(
     ``{"type": "image", "image": "images/xxx.jpg"}`` format (Graspo-compatible).
 
     One *conversation* message per :class:`TurnSpec`, in order, so the
-    conversation message at position *n* belongs to ``spec.turns[n]`` — an
-    optional leading ``system`` message is not a turn and therefore shifts every
-    conversation message by one.  The offset is derived from the message list
-    itself rather than assumed, because assuming a 1:1 ``messages``/``turns``
-    alignment is precisely what kept the image in its inline form: ``messages[1]``
-    (turn 0, the image owner) was looked up as ``turns[1]``, which has no
-    ``image_path``, so the rewrite was skipped and the base64 travelled into the
-    bank.
+    conversation message at position *n* belongs to ``spec.turns[n]`` — the
+    optional leading ``system`` message (v3.0.0 D1) is not a turn and therefore
+    shifts every conversation message by one.  The offset is derived from the
+    message list itself rather than assumed, because assuming a 1:1
+    ``messages``/``turns`` alignment is precisely what made every anchor with a
+    system prompt keep its base64 inline: ``messages[1]`` (turn 0, the image
+    owner) was looked up as ``turns[1]``, which has no ``image_path``, so the
+    rewrite was skipped and the base64 travelled into the bank (§2.2 — the
+    offset is read, not assumed).
 
     Only a turn that owns an ``image_path`` has image parts to rewrite.
     Messages beyond the turn list are carried over unchanged rather than
@@ -356,6 +368,67 @@ def _abs_to_rel_path(abs_path: str) -> str:
     return abs_path
 
 
+#: Message part types that mean "this conversation carries an image".  Both
+#: forms are images that a consumer would have to decode, so both must route to
+#: the multimodal sub-corpus:
+#:
+#: * ``image`` — the referenced-path form (``image`` is ``images/x.jpg``) that
+#:   :func:`_convert_images_to_paths` writes for the persisted anchor.  This is
+#:   what both the default and the ``--no-convert`` run produce: ``--no-convert``
+#:   decides whether image *files* are transcoded when copied into the output
+#:   directory, and never touches the message parts;
+#: * ``image_url`` — the inline form (``image_url.url`` is a base64 data URI)
+#:   that the API call needs.  It is supposed to survive only in records written
+#:   before the alignment fix in :func:`_convert_images_to_paths`, but it is
+#:   matched whenever it appears, because a rule that only accepts the shape the
+#:   current writer happens to emit is a rule that goes quiet the moment the
+#:   writer changes.
+#:
+#: Missing one of them is exactly the failure this set exists to prevent: the
+#: first version only matched ``image``, so anchors whose parts were still in
+#: the API's inline form were labelled ``ard_text`` while plainly containing an
+#: image (§2.2).  Do not narrow this set back to the *expected* persisted form:
+#: the point of deriving the routing key from the stored parts is that it stays
+#: true for records the current writer did not produce.
+IMAGE_PART_TYPES: frozenset[str] = frozenset({"image", "image_url"})
+
+
+def anchor_data_source(messages: list[dict[str, Any]]) -> DataSource:
+    """Derive the OPD routing key from the anchor's own message content.
+
+    ``data_source`` splits the ARD corpus into the sub-corpora the training side
+    routes on, and the split that exists in practice is **text-only** vs
+    **multimodal**.  It is therefore decided per anchor from the messages that
+    were actually persisted — any message carrying a part in
+    :data:`IMAGE_PART_TYPES` — and never from a run-level flag: ``--image-dir``
+    with an empty or exhausted pool produces text-only anchors (see
+    :func:`ard.core.quota.allocate_images`), and labelling those ``ard_multi``
+    would put records in the wrong sub-corpus with nothing in the record to
+    reveal it.
+
+    Args:
+        messages: The final, persisted message list of one anchor — i.e. what
+            :func:`_generate_one_anchor` hands to :class:`GeneratedAnchor`
+            *after* :func:`_convert_images_to_paths` has run, so this sees the
+            same parts the bank will contain.
+
+    Returns:
+        :data:`~ard.core.types.DataSource.ARD_MULTI` when at least one message
+        carries an image part, otherwise
+        :data:`~ard.core.types.DataSource.ARD_TEXT`.
+    """
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        if any(
+            isinstance(part, dict) and part.get("type") in IMAGE_PART_TYPES
+            for part in content
+        ):
+            return DataSource.ARD_MULTI
+    return DataSource.ARD_TEXT
+
+
 def _user_message(
     user_msg: str,
     image_data_url: str | None,
@@ -377,6 +450,104 @@ def _user_message(
     }
 
 
+def _generate_system_message(
+    spec: AnchorSpec,
+    input_client: ChatAPIClient,
+) -> dict[str, Any] | None:
+    """Generate the anchor's system message, when it has one.
+
+    The sampler decides *whether* the anchor carries a system prompt and in
+    which style (``anchor_meta["system_prompt_mode"]``, a sampling dimension);
+    the concrete text is generated here, per anchor, because "generalisation"
+    is the point: a fixed sentence reused for every anchor would make the
+    dimension no more than a flag.  The prompt asks for text that fits the
+    anchor's own ``knowledge_domain`` / ``capability`` (scheme §5.4).
+
+    The message is returned, not appended: the caller keeps the ordering of
+    ``messages`` in one place, so a leaked system message can never end up
+    anywhere except position 0 (the shape contract rejects any other position).
+
+    Args:
+        spec: Anchor specification (its ``anchor_meta`` carries the mode).
+        input_client: API client for generating user messages and system
+            prompts (both are generator-side text, never teacher answers).
+
+    Returns:
+        ``{"role": "system", "content": ...}``, or ``None`` when the anchor has
+        no system prompt (mode :data:`SYSTEM_PROMPT_NONE`) — the majority case
+        in real conversation data.
+
+    Raises:
+        ARDTimeoutError: The generator request exceeded the layered timeout.
+        httpx.HTTPError: Transport/server failure.
+    """
+    mode = spec.anchor_meta.get("system_prompt_mode", SYSTEM_PROMPT_NONE)
+    if mode == SYSTEM_PROMPT_NONE:
+        return None
+
+    # An unknown mode is a sampler/ontology bug, not a server problem: raise
+    # rather than silently generating no system prompt, which would make the
+    # anchor claim a style it does not have (§2.2 显式即防呆).
+    if mode not in SYSTEM_PROMPT_GENERATION_INSTRUCTIONS:
+        raise ValueError(
+            f"unknown system prompt mode {mode!r} for anchor {spec.id}; "
+            f"known modes: "
+            f"{sorted(SYSTEM_PROMPT_GENERATION_INSTRUCTIONS)} "
+            f"and {SYSTEM_PROMPT_NONE!r}"
+        )
+
+    try:
+        system_text = input_client.chat(
+            [
+                {
+                    "role": "system",
+                    "content": build_system_prompt_prompt(spec.anchor_meta, mode),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Write the system prompt ({mode}) for this "
+                        f"conversation now."
+                    ),
+                },
+            ],
+            temperature=0.7,
+        ).content.strip()
+    except ARDTimeoutError:
+        logger.exception(
+            "Anchor %s: timeout generating the %s system prompt — "
+            "abandoning this anchor",
+            spec.id, mode,
+        )
+        raise
+    except Exception as exc:
+        logger.exception(
+            "Anchor %s: error generating the %s system prompt: %s",
+            spec.id, mode, exc,
+        )
+        raise
+    if not system_text:
+        # No message rather than an empty one: an empty system message would
+        # pass the shape gate (it is still a leading ``system``) while claiming
+        # a style the anchor does not actually carry.
+        #
+        # Raised as ARDEmptyContentError — the same type the API client uses for
+        # "the model returned nothing usable" — so the run's failure accounting
+        # classifies it as a model-output failure without a second code path
+        # (§1.4).  The stats are empty on purpose: the API client builds them
+        # from the streaming response, so an adapter that hands back only text
+        # has none to pass on.
+        logger.exception(
+            "Anchor %s: empty %s system prompt — abandoning anchor",
+            spec.id, mode,
+        )
+        raise ARDEmptyContentError(
+            f"system prompt generation returned no text for anchor {spec.id} ({mode})",
+            ChatAPIStats(),
+        )
+    return {"role": "system", "content": system_text}
+
+
 def _generate_one_anchor(
     spec: AnchorSpec,
     input_client: ChatAPIClient,
@@ -395,6 +566,15 @@ def _generate_one_anchor(
     answer becomes ``targets[0].output.content`` and its reasoning trace (present
     only when thinking is enabled for the target model) becomes
     ``targets[0].output.reasoning``.
+
+    When the anchor's sampled ``system_prompt_mode`` is not ``none``, the
+    system message is generated first and placed at ``messages[0]`` (v3.0.0 D1:
+    the ``messages`` array is the single source of truth for the system prompt).
+    The input generator's own prompts for user turns do **not** carry it: those
+    requests ask the model to impersonate a user, and the system message there
+    is tooling instruction (scheme §3.1 A), not conversation content.  The
+    target model does see it, because the system prompt is part of the prefix a
+    student is later trained on (scheme §3.3 ①).
 
     Any turn that fails (timeout, empty content, unknown role) abandons the
     whole anchor: the conversation is dropped and logged rather than left in
@@ -421,12 +601,23 @@ def _generate_one_anchor(
     Raises:
         ARDTimeoutError: A turn exceeded the layered timeout.
         ARDEmptyContentError: A turn returned no assistant content.
+        ValueError: The anchor's ``system_prompt_mode`` is not in the
+            vocabulary (an ontology/sampler bug, not a model failure).
         httpx.HTTPError: Transport/server failure.
     """
     if stats is None:
         stats = AnchorGenerationStats()
     messages: list[dict[str, Any]] = []
     expected_roles = expected_message_roles(spec)
+
+    system_message = _generate_system_message(spec, input_client)
+    #: How many messages in ``messages`` are *not* conversation turns.  The
+    #: per-turn bookkeeping below compares turn messages against turn indices,
+    #: so this offset has to be part of that arithmetic.
+    system_offset = 0
+    if system_message is not None:
+        messages.append(system_message)
+        system_offset = 1
 
     total_turns = len(spec.turns)
     for turn_idx, turn in enumerate(spec.turns):
@@ -515,11 +706,15 @@ def _generate_one_anchor(
         # Fail fast: a turn that did not append its message would silently
         # shift the whole conversation.  Cheap, and it catches generator bugs
         # at the turn boundary rather than at the persistence boundary.
-        if len(messages) != turn_idx + 1:
+        # The optional leading system message is not a turn, so it is counted
+        # separately: without the offset every anchor that carries a system
+        # prompt would be abandoned here as "history not advanced".
+        turn_messages = len(messages) - system_offset
+        if turn_messages != turn_idx + 1:
             logger.warning(
-                "Anchor %s: after turn %d/%d the history has %d message(s), "
-                "expected %d — abandoning anchor",
-                spec.id, turn_idx + 1, total_turns, len(messages), turn_idx + 1,
+                "Anchor %s: after turn %d/%d the history has %d conversation "
+                "message(s), expected %d — abandoning anchor",
+                spec.id, turn_idx + 1, total_turns, turn_messages, turn_idx + 1,
             )
             stats.record_abandon("history_not_advanced")
             return None
@@ -586,6 +781,13 @@ def _generate_one_anchor(
             stats.record_abandon("answer_too_long")
             return None
 
+        # ``converted`` is exactly what the bank will contain: the rewritten
+        # ``image`` parts.  An ``image_url`` part survives here only if its turn
+        # was not matched (see ``_convert_images_to_paths``: the alignment is
+        # derived from the message list, so a leading ``system`` message no
+        # longer hides the image owner).  The routing key is derived from *this*
+        # list, not from ``messages``, so it can never describe a form the
+        # record does not actually carry.
         converted = _convert_images_to_paths(messages, spec)
         shape_error = message_shape_error(converted)
         if shape_error is not None:
@@ -607,6 +809,12 @@ def _generate_one_anchor(
             input_generator_model=input_model_name,
             anchor_meta=spec.anchor_meta,
             reasoning=reasoning,
+            # The routing key follows the anchor that was actually built, not
+            # the run that built it: a run started with ``--image-dir`` whose
+            # image pool was empty (or exhausted) produces text-only anchors,
+            # and those must not claim to be multimodal (§1.4 单一真相源 —
+            # the record itself is the only evidence of what it contains).
+            data_source=anchor_data_source(converted),
         )
 
     # Only reachable if spec.turns had no is_final turn; AnchorSpec allows it
@@ -693,6 +901,7 @@ def generate_text_anchors(
     # Persistence-gate tallies (exit-boundary defence, §2.3 / §3.2).
     written = 0
     invalid_shape: list[tuple[str, str]] = []
+    invalid_data_source: list[tuple[str, str]] = []
     duplicate_ids: list[str] = []
 
     pbar = tqdm(total=target_count, desc="Text anchors", unit="anchor", disable=disable_progress)
@@ -773,6 +982,10 @@ def generate_text_anchors(
                         invalid_shape.append(
                             (anchor.id, message_shape_error(anchor.messages) or "unknown")
                         )
+                    elif outcome is AppendOutcome.INVALID_DATA_SOURCE_SKIPPED:
+                        invalid_data_source.append(
+                            (anchor.id, data_source_error(anchor) or "unknown")
+                        )
                 # A produced anchor is positive evidence that the server is
                 # serving again, so it clears the streak.
                 consecutive_server_failures = 0
@@ -786,6 +999,7 @@ def generate_text_anchors(
     stats.succeeded = len(anchors)
     stats.written = written
     stats.rejected_invalid_shape = len(invalid_shape)
+    stats.rejected_invalid_data_source = len(invalid_data_source)
     stats.duplicate_ids = len(duplicate_ids)
     stats.consecutive_server_failures = consecutive_server_failures
 
@@ -799,13 +1013,17 @@ def generate_text_anchors(
                 for reason, count in sorted(stats.abandoned_by_reason.items())
             ),
         )
-    if invalid_shape or duplicate_ids:
+    if invalid_shape or invalid_data_source or duplicate_ids:
         logger.warning(
             "Anchor bank %s accepted %d anchor(s); rejected %d with an invalid "
-            "message shape and %d duplicate id(s).",
-            output_path, written, len(invalid_shape), len(duplicate_ids),
+            "message shape, %d with a data_source outside the vocabulary and "
+            "%d duplicate id(s).",
+            output_path, written, len(invalid_shape), len(invalid_data_source),
+            len(duplicate_ids),
         )
     for anchor_id, reason in invalid_shape:
+        logger.warning("  rejected %s: %s", anchor_id, reason)
+    for anchor_id, reason in invalid_data_source:
         logger.warning("  rejected %s: %s", anchor_id, reason)
     for duplicate_id in duplicate_ids:
         logger.warning(
