@@ -12,7 +12,7 @@
 # model_name = "your-model"
 # API key (leave commented if not needed)
 # api_key = ""
-# Sampling temperature (0.0 = deterministic)
+# Sampling temperature (default 0.8 — input/question-generator side, §R12)
 # temperature = 0.8
 # Maximum tokens per response
 # max_tokens = 32768
@@ -34,8 +34,8 @@
 # model_name = "your-model"
 # API key (leave commented if not needed)
 # api_key = ""
-# Sampling temperature (0.0 = deterministic)
-# temperature = 0.0
+# Sampling temperature for the target/teacher model (默认：目标作答模型=教师端)
+# temperature = 0.1
 # Maximum tokens per response
 # max_tokens = 32768
 # TCP connection + TLS handshake timeout
@@ -55,8 +55,10 @@
 [generation]
 # Number of anchors to generate
 target_count = 100
-# Random seed for reproducibility
-seed = 42
+# Sampling seed (optional). Omit — the default — and every run draws a fresh
+# seed from the system random source; set an integer to pin this run's sampling
+# order. The seed actually used is recorded in <output_dir>/config.json.
+# seed = 42
 # Number of concurrent API requests (higher = faster, but may hit rate limits)
 concurrency = 4
 # Language filter (empty = use all available from ontology)
@@ -73,8 +75,8 @@ max_turns_with_image = 1
 # Path to pre-computed ontology embeddings for farthest-point sampling
 embeddings_path = "ontology/anchor_ontology_embeddings.json"
 # Consecutive server-side failures (timeouts / transport errors) that trigger
-# the backpressure cooldown below. Model-output failures (empty content,
-# missing log-probs) are counted separately and never trigger a cooldown.
+# the backpressure cooldown below. Model-output failures (empty content) are
+# counted separately and never trigger a cooldown.
 # backpressure_threshold = 3
 # Backpressure cooldown pause in seconds, applied once the threshold is hit
 # backpressure_cooldown = 60.0

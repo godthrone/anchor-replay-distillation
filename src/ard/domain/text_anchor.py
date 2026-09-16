@@ -54,7 +54,8 @@ from ard.core.system_prompt import (
 )
 from ard.core.types import AnchorSpec, DataSource, GeneratedAnchor, TurnSpec
 from ard.domain.anchor_shape import expected_message_roles, message_shape_error
-from ard.domain.bank import AppendOutcome, append_anchor, data_source_error
+from ard.domain.append_outcome import AppendOutcome
+from ard.domain.bank import append_anchor, data_source_error
 
 logger = logging.getLogger(__name__)
 
@@ -511,7 +512,10 @@ def _generate_system_message(
                     ),
                 },
             ],
-            temperature=0.7,
+            # §1.4 单一真相源: no per-request temperature here.  The sampling
+            # temperature for the input side comes from the *client* config,
+            # which the pipeline builds from ``[input_generator].temperature``
+            # (default 0.8) — a per-request override used to defeat it (§R12).
         ).content.strip()
     except ARDTimeoutError:
         logger.exception(
@@ -640,7 +644,9 @@ def _generate_one_anchor(
                         image_path=turn.image_path,
                         image_data_url=image_data_url,
                     ),
-                    temperature=0.7,
+                    # No per-request temperature: input-side sampling follows
+                    # the client config (pipeline ← ``[input_generator]
+                    # .temperature``) — the single source of truth (§1.4, §R12).
                 ).content.strip()
             except ARDTimeoutError:
                 # Timeout mid-conversation: abandon the whole anchor.  Retrying
@@ -674,7 +680,10 @@ def _generate_one_anchor(
             # user question.  Generating one here (the historical bug) shifted
             # every later message and produced UAUAU-shaped output.
             try:
-                assist_msg = target_client.chat(messages, temperature=0.0).content.strip()
+                # No per-request temperature: target-side sampling follows the
+                # client config (pipeline ← ``[target_model].temperature``) —
+                # the single source of truth (§1.4, §R12).
+                assist_msg = target_client.chat(messages).content.strip()
             except ARDTimeoutError:
                 logger.exception(
                     "Anchor %s: timeout generating assistant turn %d/%d — "
@@ -748,8 +757,11 @@ def _generate_one_anchor(
             )
             stats.record_abandon("role_mismatch")
             return None
+        # No per-request temperature: the teacher's sampling temperature comes
+        # from the client config (pipeline ← ``[target_model].temperature``,
+        # default 0.1) — the single source of truth (§1.4, §R12).
         try:
-            response = target_client.chat(messages, temperature=0.0)
+            response = target_client.chat(messages)
         except ARDTimeoutError:
             logger.exception(
                 "Anchor %s: timeout generating final user turn %d/%d — "

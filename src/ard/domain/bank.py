@@ -16,10 +16,25 @@ reaches the anchor bank has passed three gates here:
 3. **Id uniqueness** — one record per anchor id.  ``anchor id`` is derived
    from 5-dimensional metadata (see :func:`ard.core.sampler.generate_anchor_id`),
    so two specs can legitimately carry the same id; writing both inflates the
-   bank while the resume logic in :mod:`ard.pipeline` counts lines, not ids.
+   bank while the resume logic in :mod:`ard.pipeline` counts records, not ids.
+
+All three read paths — :func:`count_existing_anchors` (the resume counter),
+:func:`read_anchor_bank` and the id scan behind :func:`append_anchor` — agree on
+what a record *is*: a **parseable** non-blank JSON line.  They used to disagree
+(the counter counted every non-blank line), so one truncated trailing line was
+enough to make the resume path see ``N+1`` anchors and then crash while reading
+them — i.e. an interrupted run was exactly the run that could not be resumed.
 
 All gates reject loudly: the caller receives an :class:`AppendOutcome` and
 logs it (§2.3 边界校验即防呆, §3.2 透明退路).
+
+The outcome vocabulary is **not** defined here: :class:`AppendOutcome` lives in
+:mod:`ard.domain.append_outcome`, the module whose name mirrors the class name
+(§12.2 类名与路径互映).  An ``Enum`` is not a §12.2 data-container exemption
+case — that exemption lists frozen dataclasses and pydantic models only — so
+filing it under its own name is required, instead of attaching it to the
+``append_anchor`` function family.  This module imports it strictly for its own
+return values; it does **not** re-export it (§18.1 不留负债).
 """
 
 from __future__ import annotations
@@ -27,12 +42,12 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from enum import Enum
 from pathlib import Path
 from typing import Any
 
 from ard.core.types import DataSource, GeneratedAnchor
 from ard.domain.anchor_shape import message_shape_error
+from ard.domain.append_outcome import AppendOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -40,22 +55,6 @@ logger = logging.getLogger(__name__)
 # Single source of truth (§1.4): the anchor format's version is written here,
 # once, as a top-level ``schema_version`` field on each record.
 SCHEMA_VERSION = "3.0.0"
-
-
-class AppendOutcome(Enum):
-    """What happened when an anchor was offered to the bank."""
-
-    APPENDED = "appended"
-    """The anchor was written to the bank."""
-
-    DUPLICATE_SKIPPED = "duplicate_skipped"
-    """An anchor with this id is already in the bank — nothing was written."""
-
-    INVALID_SHAPE_SKIPPED = "invalid_shape_skipped"
-    """The anchor's messages violated the conversation-shape contract."""
-
-    INVALID_DATA_SOURCE_SKIPPED = "invalid_data_source_skipped"
-    """The anchor's ``data_source`` was outside the controlled vocabulary."""
 
 
 # Ids already present per bank file.  The value is ``(fingerprint, ids)`` where
@@ -75,11 +74,26 @@ def _bank_fingerprint(path: Path) -> tuple[int, int] | None:
     return (stat.st_mtime_ns, stat.st_size)
 
 
-def _read_ids(path: Path) -> set[str]:
-    """Collect the anchor ids already stored in *path* (tolerating bad lines)."""
-    ids: set[str] = set()
+def _parsed_records(path: Path) -> list[dict[str, Any]]:
+    """Return every parseable record in *path*, in file order.
+
+    One unreadable line must not condemn the whole bank: this file is written
+    incrementally (``append_anchor`` flushes after every record), so a run that
+    was killed mid-write — or a disk that filled up — can leave a trailing
+    fragment.  The old behaviour was to raise :class:`json.JSONDecodeError` from
+    wherever the bank was being read, which is the worst possible outcome for
+    that file: the anchors behind the fragment are perfectly good and the caller
+    is the *resume* path, i.e. the one code path whose job is to carry on after
+    an interrupted run.
+
+    Damaged lines are therefore skipped loudly rather than fatally (§3.2 透明退路:
+    a lossy result is announced), and the surviving records are returned.  The
+    same definition of "a record" drives :func:`count_existing_anchors`, so the
+    resume counter can never count a line that the reader would refuse.
+    """
+    records: list[dict[str, Any]] = []
     if not path.exists():
-        return ids
+        return records
     with open(path, encoding="utf-8") as f:
         for line_no, line in enumerate(f, start=1):
             line = line.strip()
@@ -89,13 +103,63 @@ def _read_ids(path: Path) -> set[str]:
                 record = json.loads(line)
             except json.JSONDecodeError:
                 logger.warning(
-                    "Ignoring unreadable line %d while scanning ids in %s",
-                    line_no, path,
+                    "Ignoring unreadable line %d in %s (%d byte(s)) — it is "
+                    "excluded from the bank's record count; the remaining "
+                    "records are kept",
+                    line_no, path, len(line),
                 )
                 continue
-            record_id = record.get("id")
-            if isinstance(record_id, str):
-                ids.add(record_id)
+            records.append(record)
+    return records
+
+
+def _ensure_line_boundary(fh: Any, path: Path) -> bool:
+    """Make sure an append starts on a fresh line; return whether it had to be repaired.
+
+    Caller holds ``fh`` open for append **and** read (``"a+"``).  ``append_anchor``
+    flushes after every record, but a run killed *during* a write — or a disk that
+    filled up — can leave a fragment without its trailing newline.  Every later
+    append would then concatenate onto that fragment and turn two records into one
+    unparseable line, so the damage would spread to records that were never
+    damaged at all.  Separating them with a newline keeps the bank line-oriented
+    (the format's one invariant) and leaves the fragment visible to the reader as
+    exactly what it is: one unreadable line, skipped and warned about.
+
+    Newline (not truncation) is deliberate: rewriting the tail of a data file to
+    erase evidence is a destructive act (§2.4 操作防呆), and the fragment is the
+    only trace of the anchors the interrupted run lost.
+
+    The check is two syscalls (``tell`` + one byte read) on a file this process is
+    already flushing once per anchor, and it is re-evaluated on every append: a
+    cached "already checked" answer would go stale the moment another process
+    wrote to the same bank.
+    """
+    fh.flush()  # make the on-disk tail visible before inspecting it
+    fh.seek(0, 2)
+    size = fh.tell()
+    if size == 0:
+        return False
+    fh.seek(size - 1)
+    if fh.read(1) == "\n":
+        return False
+    fh.seek(0, 2)
+    fh.write("\n")
+    logger.warning(
+        "Bank %s did not end with a newline (an interrupted write). Separated "
+        "the trailing fragment from the next record; the fragment itself stays "
+        "on disk and is skipped as an unreadable line.",
+        path,
+    )
+    return True
+
+
+def _read_ids(path: Path) -> set[str]:
+    """Collect the anchor ids already stored in *path* (tolerating bad lines)."""
+    ids: set[str] = set()
+    for record in _parsed_records(path):
+        record_id = record.get("id")
+        if isinstance(record_id, str):
+            ids.add(record_id)
     return ids
 
 
@@ -154,6 +218,11 @@ def append_anchor(anchor: GeneratedAnchor, path: Path) -> AppendOutcome:
     the line is immediately written to disk so that an interrupted run
     can resume from the last committed anchor.
 
+    An interrupted earlier write can leave a fragment without its trailing
+    newline; :func:`_ensure_line_boundary` separates it from this record first, so
+    one truncated line can never concatenate with — and thereby corrupt — the
+    records that follow it.
+
     Args:
         anchor: The anchor to persist.
         path: Target JSONL file (created if absent; parent dir must exist).
@@ -190,7 +259,8 @@ def append_anchor(anchor: GeneratedAnchor, path: Path) -> AppendOutcome:
                 anchor.id, path,
             )
             return AppendOutcome.DUPLICATE_SKIPPED
-        with open(path, "a", encoding="utf-8") as f:
+        with open(path, "a+", encoding="utf-8") as f:
+            _ensure_line_boundary(f, path)
             f.write(line)
             f.flush()
         known.add(anchor.id)
@@ -198,26 +268,26 @@ def append_anchor(anchor: GeneratedAnchor, path: Path) -> AppendOutcome:
 
 
 def count_existing_anchors(path: Path) -> int:
-    """Count existing anchors in a JSONL file.
+    """Count the anchors already stored in a JSONL file.
+
+    This is the resume counter: :func:`ard.pipeline.run` subtracts it from
+    ``generation.target_count`` to decide how many anchors are still missing.
+    It therefore counts exactly what :func:`read_anchor_bank` will hand back —
+    parseable, non-blank lines — and not blank or damaged ones.  Counting raw
+    lines made the two disagree, and the disagreement surfaced as a crash on the
+    very run the checkpoint exists to rescue (see :func:`_parsed_records`).
 
     Returns 0 if the file does not exist.
     """
-    if not path.exists():
-        return 0
-    count = 0
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            if line.strip():
-                count += 1
-    return count
+    return len(_parsed_records(path))
 
 
 def count_unique_anchor_ids(path: Path | str) -> int:
     """Count *distinct* anchor ids in a JSONL file.
 
-    The line count (:func:`count_existing_anchors`) is what the resume logic
+    The record count (:func:`count_existing_anchors`) is what the resume logic
     in :mod:`ard.pipeline` compares against ``target_count``; this function
-    makes the difference between lines and real anchors visible.
+    makes the difference between records and real anchors visible.
     """
     return len(_read_ids(Path(path)))
 
@@ -338,18 +408,17 @@ def write_anchor_bank(anchors: list[GeneratedAnchor], output_path: str | Path) -
 
 
 def read_anchor_bank(path: str | Path) -> list[dict[str, Any]]:
-    """Read anchors from a JSONL file.
+    """Read the records of a JSONL anchor bank, in file order.
+
+    Unreadable lines are skipped with a warning instead of raising, so an
+    interrupted run's trailing fragment cannot take the rest of the bank down
+    with it (see :func:`_parsed_records`); the count reported by
+    :func:`count_existing_anchors` excludes exactly those lines.
 
     Returns:
         List of parsed record dicts.
     """
-    records: list[dict[str, Any]] = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                records.append(json.loads(line))
-    return records
+    return _parsed_records(Path(path))
 
 
 def _manifest_breakdown(

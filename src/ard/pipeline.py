@@ -9,9 +9,11 @@ from __future__ import annotations
 import json
 import logging
 import random
+import re
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from ard.backends.api_client import (
     ChatAPIClient,
@@ -41,6 +43,146 @@ from ard.domain.image_store import (
 from ard.domain.text_anchor import AnchorGenerationStats, generate_text_anchors
 
 logger = logging.getLogger(__name__)
+
+# ── Secret redaction for the config snapshot (§2.3 boundary check) ────────
+#
+# The merged config carries credentials (``input_generator.api_key``,
+# ``target_model.api_key``).  Those values must never reach the output
+# directory: users share/pack output dirs, so a snapshot written verbatim
+# leaks the keys.  Redaction is applied once, to the single ``config_info``
+# dict that feeds **both** ``config.json`` and the manifest's ``config``
+# section — one definition, both sinks (§1.4).
+
+REDACTED_PLACEHOLDER = "***REDACTED***"
+"""Stand-in written in place of any secret value in an output snapshot."""
+
+REDACTED_KEY_WORDS: tuple[str, ...] = (
+    "api_key",
+    "apikey",
+    "key",
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "bearer",
+    "credential",
+    "auth",
+)
+"""Credential words that mark a config key as secret-bearing.
+
+A key matches when **any of its words** is one of these, or when its flattened
+form equals one of them.  Splitting on ``_``/``-``/spaces and camelCase
+boundaries, ``api_key``, ``API-KEY``, ``apiKey``, ``some_api_key``,
+``aws_access_key_id``, ``client_secret``, ``access_token``, ``hf_token``,
+``DB_PASSWORD`` and ``Authorization-Bearer`` all match.
+
+This is deliberately **word** matching, not substring matching: ``max_tokens``
+splits into ``max`` + ``tokens``, and ``tokens`` is not ``token``, so it does
+not match.  Same for ``max_tokens_with_image`` and ``first_token_timeout``.
+Those fields are sizes/durations — masking them would destroy the snapshot's
+ability to reproduce the run (§2.3: redact secrets, do not corrupt the record).
+
+``api_base`` is deliberately absent — an endpoint is a location, not a
+credential (see the R7 report for the accepted residual risk).
+"""
+
+
+def _split_key(key: str) -> list[str]:
+    """Split a key name into lower-cased words on separators and camelCase.
+
+    ``"api_key"`` → ``["api", "key"]``, ``"clientSecret"`` →
+    ``["client", "secret"]``, ``"max_tokens"`` → ``["max", "tokens"]``.
+    """
+    with_boundaries = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", key)
+    return [word for word in re.split(r"[^a-zA-Z0-9]+", with_boundaries.lower()) if word]
+
+
+def _flatten_key(key: str) -> str:
+    """Key words joined without separators: ``"api_key"`` → ``"apikey"``."""
+    return "".join(_split_key(key))
+
+
+REDACTED_KEY_WORD_SET: frozenset[str] = frozenset(REDACTED_KEY_WORDS)
+"""Word-level comparison set — the single definition of "is a secret key"."""
+
+REDACTED_KEY_FLAT_SET: frozenset[str] = frozenset(
+    _flatten_key(word) for word in REDACTED_KEY_WORDS
+)
+"""Flattened names, so single-token spellings like ``apikey`` also match."""
+
+NOT_SECRET_KEY_WORDS: frozenset[str] = frozenset({"timeout", "timeouts"})
+"""Words that look like credentials but name a duration, never a value.
+
+``first_token_timeout`` / ``inter_token_timeout`` contain the word ``token``
+yet hold seconds.  Providing/omitting a timeout cannot leak a key, so these are
+exempt — the snapshot must keep them to reproduce the run.  This list is the
+explicit, auditable place where "looks like a secret but is not one" is
+recorded (§2.2 显式即防呆); it is not a heuristic escape hatch.
+"""
+
+
+def _is_secret_key(key: object) -> bool:
+    """Whether *key* names a credential field that must be masked.
+
+    Matches when any word of the key is a credential word, or when the key's
+    flattened spelling is one — see :data:`REDACTED_KEY_WORDS` for why this is
+    word matching rather than substring matching (``max_tokens`` must survive).
+    """
+    if not isinstance(key, str):
+        return False
+    words = _split_key(key)
+    if any(word in NOT_SECRET_KEY_WORDS for word in words):
+        return False
+    if any(word in REDACTED_KEY_WORD_SET for word in words):
+        return True
+    return "".join(words) in REDACTED_KEY_FLAT_SET
+
+
+def _redact_value(value: object, found: set[str]) -> object:
+    """Recursively copy *value*, masking credential values, collecting keys hit.
+
+    Containers are rebuilt (never mutated in place) so the caller's config
+    dict is left untouched.
+    """
+    if isinstance(value, dict):
+        redacted: dict[object, object] = {}
+        for key, item in value.items():
+            if _is_secret_key(key) and item is not None and item != "":
+                redacted[key] = REDACTED_PLACEHOLDER
+                found.add(str(key))
+            else:
+                redacted[key] = _redact_value(item, found)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_value(item, found) for item in value]
+    return value
+
+
+def _redact_secrets(config_info: dict[str, Any]) -> dict[str, Any]:
+    """Return *config_info* with every credential value replaced by a mask.
+
+    Recurses through nested dicts and lists, so structured config sections
+    (``[input_generator]``, ``[target_model]``) are covered as well as any
+    future nesting.  A value that is ``None`` or ``""`` is left as-is: those
+    mean "no key configured" (§2.2 — ``None`` is the only empty value), and
+    masking them would make an absent credential indistinguishable from a
+    redacted one.  Every other value under a matching key is masked, so the
+    key name never vouches for a secret's absence.
+
+    The hit keys are logged at WARNING (§3.2 — redaction is not silent).
+    """
+    found: set[str] = set()
+    redacted_info = _redact_value(config_info, found)
+    if found:
+        logger.warning(
+            "Redacted %d credential field(s) from the config snapshot: %s. "
+            "Values are replaced with %r so output directories can be shared "
+            "safely; real values stay in the config file / override TOML.",
+            len(found),
+            ", ".join(sorted(found)),
+            REDACTED_PLACEHOLDER,
+        )
+    return redacted_info
 
 
 def _counter_delta(after: dict[str, int], before: dict[str, int]) -> dict[str, int]:
@@ -148,8 +290,11 @@ def run(
         output_path.unlink()
         logger.info("Overwrite mode: cleared existing anchor bank at %s", output_path)
 
-    # Backup merged config to output directory for reproducibility
-    config_info = config.model_dump(mode="json")
+    # Backup merged config to output directory for reproducibility.
+    # Credentials are masked first (§2.3 — the output directory is a boundary
+    # users share); the same redacted dict feeds the manifest's `config`
+    # section below, so both sinks are covered by this single definition.
+    config_info = _redact_secrets(config.model_dump(mode="json"))
     config_json_path = output_dir / "config.json"
     config_json_path.write_text(
         json.dumps(config_info, indent=2, ensure_ascii=False),
@@ -182,7 +327,7 @@ def run(
     # ── Generation config (adjusted for remaining) ────────────────────────
     gen_config = AnchorGenerationConfig(
         target_count=remaining,
-        seed=config.generation.seed,
+        seed=config.generation.resolved_seed,
         concurrency=config.generation.concurrency,
         languages=config.generation.languages,
         task_types=config.generation.task_types,

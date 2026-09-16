@@ -3,6 +3,8 @@
 # Secret fields (API keys, endpoints) are left empty — fill them in config.override.toml
 # See configs/config.override.sample.toml for an example.
 
+# Input generator (question generator) — produces the user turn (the
+# "questioning" side; SFT/OPD have no counterpart for it).
 [input_generator]
 api_base = ""
 model_name = ""
@@ -19,11 +21,14 @@ inter_token_timeout = 15.0
 max_retries = 3
 retry_on_timeout = false
 
+# Target answering model (= teacher side).  Its answer IS the supervision
+# target (targets[0].output) — "whose output is the target answer is the
+# teacher".  The student model is not part of ARD (graspo/SFT own it).
 [target_model]
 api_base = ""
 model_name = ""
 api_key = ""
-temperature = 0.0
+temperature = 0.1
 # Maximum tokens in the response. Comment out (or delete) to let the API
 # provider decide (recommended for most use cases).
 # Uncomment and set a value to enforce a limit.
@@ -42,7 +47,10 @@ enable_thinking = false
 
 [generation]
 target_count = 100
-seed = 42
+# Sampling seed. Omit (the default) = draw a fresh seed from the system random
+# source on every run; set an integer to pin one run's sampling order and make
+# it reproducible. The seed actually used is recorded in <output_dir>/config.json.
+# seed = 42
 # Number of concurrent API requests (higher = faster, but may hit rate limits)
 concurrency = 4
 # Empty list = use all available values from ontology

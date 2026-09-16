@@ -509,16 +509,18 @@ def _force_release_reader(sock: socket.socket | None) -> None:
         return
     try:
         sock.shutdown(socket.SHUT_RDWR)
-    except OSError:
-        pass
+    except OSError as exc:
+        # Expected when the peer is already gone or httpx has closed the
+        # descriptor; recorded rather than swallowed (§13.1 异常不吞).
+        logger.debug("Forced release: shutdown failed (already closed): %s", exc)
     try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
-    except OSError:
-        pass
+    except OSError as exc:
+        logger.debug("Forced release: set SO_LINGER failed (already closed): %s", exc)
     try:
         sock.close()
-    except OSError:
-        pass
+    except OSError as exc:
+        logger.debug("Forced release: close failed (already closed): %s", exc)
 
 
 def _iter_lines_with_timeout(
@@ -805,8 +807,8 @@ def _is_timeout_error(exc: Exception) -> bool:
 
     Checks for :class:`ARDTimeoutError` (our own timeout),
     :class:`httpx.TimeoutException` (httpx-level timeout), or a
-    ``"timed out"`` substring in the message (string fallback for
-    backward compatibility).
+    ``"timed out"`` substring in the message (a text fallback for
+    error messages that do not map to a known exception type).
     """
     if isinstance(exc, ARDTimeoutError):
         return True
@@ -923,9 +925,11 @@ class ChatAPIClient:
                         "Streaming request timed out (retry_on_timeout=false, failing fast). "
                         "Set retry_on_timeout=true to enable automatic retries."
                     )
+                    # Fail-fast: exactly one attempt is made, so the message must
+                    # not claim max_retries+1 attempts (§2.2 显式即防呆).
                     raise ARDTimeoutError(
-                        f"Streaming request timed out after "
-                        f"{self._config.max_retries + 1} attempt(s)"
+                        "Streaming request timed out "
+                        "(retry_on_timeout=false, single attempt, no retry)"
                     ) from exc
                 last_error = exc
                 if attempt < self._config.max_retries:
