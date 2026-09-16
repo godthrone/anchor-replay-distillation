@@ -24,7 +24,8 @@ from ard.backends.api_client import (
 from ard.core.system_prompt import SYSTEM_PROMPT_NONE
 from ard.core.types import AnchorSpec, DataSource, TurnSpec
 from ard.domain.anchor_shape import message_shape_error
-from ard.domain.bank import AppendOutcome, append_anchor, read_anchor_bank
+from ard.domain.append_outcome import AppendOutcome
+from ard.domain.bank import append_anchor, read_anchor_bank
 from ard.domain.text_anchor import AnchorGenerationStats, generate_text_anchors
 
 SYSTEM_TEXT = "You are a meticulous Python debugger for legacy SQL pipelines."

@@ -23,7 +23,11 @@ from ard.core.sampler import generate_anchor_id
 from ard.core.types import AnchorSpec, GeneratedAnchor, TurnSpec
 from ard.domain.anchor_shape import message_shape_error
 from ard.domain.bank import append_anchor, read_anchor_bank
-from ard.domain.text_anchor import AnchorGenerationStats, generate_text_anchors
+from ard.domain.text_anchor import (
+    IMAGE_PART_TYPES,
+    AnchorGenerationStats,
+    generate_text_anchors,
+)
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -318,10 +322,10 @@ class TestGenerateTextAnchors:
         # Content should be a list (multimodal format) when an image is present
         assert isinstance(content, list)
         has_image = any(
-            isinstance(part, dict) and part.get("type") == "image_url"
+            isinstance(part, dict) and part.get("type") in IMAGE_PART_TYPES
             for part in content
         )
-        assert has_image, "content list should contain an image_url part"
+        assert has_image, "content list should contain an image part"
         has_text = any(
             isinstance(part, dict) and part.get("type") == "text"
             for part in content

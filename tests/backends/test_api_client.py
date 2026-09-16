@@ -418,6 +418,61 @@ def test_first_token_timeout_still_fires_and_releases_reader(slow_sse_server):
     assert server.client_gone.wait(timeout=10.0), "client did not drop the connection"
 
 
+def test_failfast_timeout_reports_single_attempt(monkeypatch, caplog):
+    """Fail-fast (retry_on_timeout=false) makes exactly one attempt.
+
+    Regression for the misleading ``"...after 4 attempt(s)"`` that claimed
+    ``max_retries+1`` tries even though the request fails on the first one.
+    """
+    calls: list[object] = []
+
+    def fake_send(*args, **kwargs):
+        calls.append(args)
+        raise httpx.TimeoutException("stalled on purpose")
+
+    monkeypatch.setattr(api_module, "_send_streaming_request", fake_send)
+    config = ChatAPIConfig(
+        api_base="https://api.example.com", model_name="m", api_key="k",
+        max_retries=3,  # a non-trivial cap: must NOT leak into the message
+    )
+
+    with caplog.at_level(logging.WARNING, logger="ard.backends.api_client"):
+        with pytest.raises(ARDTimeoutError) as excinfo:
+            ChatAPIClient(config).chat([{"role": "user", "content": "hi"}])
+
+    assert len(calls) == 1, "fail-fast must make exactly one attempt"
+    msg = str(excinfo.value)
+    assert "single attempt" in msg
+    assert "after 4 attempt(s)" not in msg
+    assert "retry_on_timeout=false" in msg
+
+
+def test_retry_on_timeout_true_retries_and_reports_real_attempts(monkeypatch, caplog):
+    """With retry_on_timeout=true the client retries -- 1/4, 2/4, 3/4 -- then
+    gives up and reports the real total attempt count."""
+    calls: list[object] = []
+
+    def fake_send(*args, **kwargs):
+        calls.append(args)
+        raise httpx.TimeoutException("still stalled")
+
+    monkeypatch.setattr(api_module, "_send_streaming_request", fake_send)
+    monkeypatch.setattr(api_module.time, "sleep", lambda _: None)  # skip backoff
+    config = ChatAPIConfig(
+        api_base="https://api.example.com", model_name="m", api_key="k",
+        max_retries=3, retry_on_timeout=True,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="ard.backends.api_client"):
+        with pytest.raises(RuntimeError) as excinfo:
+            ChatAPIClient(config).chat([{"role": "user", "content": "hi"}])
+
+    assert len(calls) == 4, "retry_on_timeout=true should attempt max_retries+1=4 times"
+    assert "after 4 attempt(s)" in str(excinfo.value)
+    assert "Attempt 1/4 failed (timeout)." in caplog.text
+    assert "Attempt 3/4 failed (timeout)." in caplog.text
+
+
 @pytest.mark.slow
 def test_first_token_wait_not_capped_at_30s(slow_sse_server):
     """Behavioral proof: a >30 s first-token wait is no longer cut off at 30 s.

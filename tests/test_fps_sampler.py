@@ -207,6 +207,38 @@ def test_sample_anchors_items_have_required_keys():
             assert key in meta, f"Missing key '{key}' in {meta}"
 
 
+def test_seed_resolved_by_config_reaches_fps_as_concrete_int(monkeypatch):
+    """config 解析出的 seed 必须以具体 int 抵达 FPS 层。
+
+    守卫 ``embeddings.farthest_point_sampling`` 里的
+    ``seed if seed is not None else 42`` 回落：若把 ``None`` 一路传到 FPS，
+    未配置 seed 的运行会静默退回旧的硬编码 42，随机化只覆盖一半链条。
+    """
+    import ard.core._fps as fps_mod
+    from ard.config import load_config
+
+    resolved = load_config("configs/config.toml").generation.seed
+    assert isinstance(resolved, int)
+
+    seen: list[object] = []
+    real = fps_mod.farthest_point_sampling
+
+    def _spy(*args, **kwargs):
+        seen.append(kwargs.get("seed"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(fps_mod, "farthest_point_sampling", _spy)
+    ontology = json.load(open("ontology/anchor_ontology.json"))
+    config = AnchorGenerationConfig(
+        target_count=8, seed=resolved,
+        embeddings_path="ontology/anchor_ontology_embeddings.json",
+    )
+    sample_anchors(ontology, config, random.Random(resolved))
+
+    assert seen, "FPS layer was never reached"
+    assert set(seen) == {resolved}, f"FPS saw {set(seen)} instead of the resolved seed"
+
+
 # ============================================================================
 # Farthest-point sampling (FPS) tests — real ontology + embeddings
 # ============================================================================

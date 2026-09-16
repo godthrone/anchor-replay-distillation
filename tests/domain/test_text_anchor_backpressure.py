@@ -28,8 +28,8 @@ from ard.backends.api_client import (
     ChatResponse,
 )
 from ard.core.types import AnchorSpec, GeneratedAnchor, TurnSpec
+from ard.domain.append_outcome import AppendOutcome
 from ard.domain.bank import (
-    AppendOutcome,
     append_anchor,
     build_manifest_from_records,
     with_generation_report,

@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from ard.domain.append_outcome import AppendOutcome
 from ard.domain.bank import (
-    AppendOutcome,
     anchor_to_dict,
     append_anchor,
     build_manifest,
