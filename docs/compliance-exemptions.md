@@ -238,7 +238,8 @@ git log --format='%an <%ae>|%cn <%ce>' main refs/tags/v1.0.0 refs/tags/v2.0.0 re
 ```
 
 **曾用于取证、且不在推送范围的历史 ref（`refs/remotes/remote-check/*`）**：其提交身份中
-出现过**个人邮箱**（作者名 `godthrone` / `zzy`，地址形如 `63****@qq.com`——**本文件不复
+出现过**个人邮箱**（作者名 `godthrone` / `zzy`，地址形如掩码 `63****`（即时通讯域邮箱、
+号码已掩码）——**本文件不复
 录该地址的明文**，§15.1 同样约束记录隐私事件的文档本身）。这些 ref **不属于推送范围**，
 并已按"保留证据、再清理"的方式处置：先 `git bundle` 备份到
 `.local/backups/remote-before-forcepush-20260916.bundle`（`.local/` 已被 `.gitignore`
