@@ -1,7 +1,7 @@
 {
   "model": "embedding",
   "embedding_dimension": 1024,
-  "ontology_sha256": "3753f47def774c52a15cb6ccb4a624312d7eb8b8ef76aa265ee3b28ec24cfdf5",
+  "ontology_sha256": "1ddd3e502ad90a7f6e4531201bc52cc0c8a52952974b2d7d48292a7e03275167",
   "generated_at": "2026-09-07T04:33:05.973856+00:00",
   "items": {
     "knowledge_domains": {

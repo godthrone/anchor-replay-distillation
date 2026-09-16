@@ -28,22 +28,5 @@
     "ard_text": 3,
     "ard_multi": 3
   },
-  "output_dir": "outputs/ard_dataset_<timestamp>",
-  "generation": {
-    "counters": {
-      "requested": 118,
-      "succeeded": 106,
-      "abandoned_total": 12,
-      "abandoned_by_reason": {
-        "empty_content": 12
-      },
-      "written": 100
-    },
-    "failures": {
-      "responses": 119,
-      "reasoning_responses": 47,
-      "reasoning_chars": 429017,
-      "empty_content": 12
-    }
-  }
+  "output_dir": "outputs/ard_dataset_<timestamp>"
 }

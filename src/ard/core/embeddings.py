@@ -32,18 +32,50 @@ def _get_np():
 def load_embeddings(path: str) -> dict[str, Any]:
     """Load pre-computed anchor-ontology embeddings from a JSON file.
 
-    The file is expected to follow the ``anchor_ontology_embeddings.json``
-    schema:
+    The file follows the ``anchor_ontology_embeddings.json`` schema written by
+    ``scripts/generate_ontology_embeddings.py``.  Its top-level keys are:
 
-    * ``ontology_sha256`` — hex digest of the source ontology
-    * ``embedding_model`` — HuggingFace model id
-    * ``embedding_dimension`` — int, e.g. 1024
-    * ``distance`` — metric name, always ``"cosine"``
-    * ``items`` — list of dicts, each with ``section``, ``path``,
-      ``leaf``, ``text``, and ``embedding`` (list of floats)
+    * ``model`` — name of the embedding model the vectors came from, as passed
+      to the embedding API (the shipped file records ``"embedding"``).
+    * ``embedding_dimension`` — int, the length of every vector (1024 in the
+      shipped file).
+    * ``ontology_sha256`` — hex digest of the ``anchor_ontology.json`` the
+      vectors were built from.  Provenance only: the runtime never compares it
+      against the ontology actually in use (an ontology edit that leaves the
+      embedded texts untouched does not invalidate the vectors).
+    * ``generated_at`` — ISO-8601 UTC timestamp of the generation run.
+    * ``items`` — a **dict of dicts**, not a list.  It maps a section name to
+      that section's ``{item name: vector}`` table::
+
+          "items": {
+              "knowledge_domains":  {domain_name:     [float, ...]},
+              "capabilities":       {capability_name: [float, ...]},
+              "languages":          {language_name:   [float, ...]},
+              "conversation_types": {conv_type_name:  [float, ...]},
+              "system_prompt":      {presence_or_style_name: [float, ...]},
+          }
+
+      Every vector is a flat list of ``embedding_dimension`` floats.  The
+      ``system_prompt`` section is *derived* from the capability vectors rather
+      than embedded through the API; see
+      ``scripts/generate_ontology_embeddings.py`` for the derivation.
+
+    There is no ``distance`` key — the metric is not data.  It is fixed in the
+    code that consumes the vectors: :func:`farthest_point_sampling` below
+    normalises each vector to unit length and measures **cosine** distance
+    (``1 - cosine similarity``).
+
+    An ``items`` **list** — the previous format, whose per-item dicts carried
+    ``section`` / ``path`` / ``leaf`` / ``text`` / ``embedding`` next to
+    top-level ``embedding_model`` and ``distance`` keys — is not this schema;
+    :func:`ard.core._fps.validate_embeddings_for_ontology` rejects it (check
+    V8).
 
     Returns the full parsed dict.  No validation beyond JSON parsing is
-    performed — callers are expected to validate the structure if needed.
+    performed here — callers are expected to validate the structure if needed,
+    and the sampling path does so via
+    :func:`ard.core._fps.validate_embeddings_for_ontology` (section presence,
+    agreement with the ontology's keys, consistent vector length).
     """
     raw = pathlib.Path(path).read_text(encoding="utf-8")
     data: dict[str, Any] = json.loads(raw)

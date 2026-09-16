@@ -138,6 +138,25 @@ def _is_secret_key(key: object) -> bool:
     return "".join(words) in REDACTED_KEY_FLAT_SET
 
 
+def _redact_mapping(mapping: dict[str, Any], found: set[str]) -> dict[str, Any]:
+    """Return *mapping* rebuilt with credential values masked.
+
+    The dict case is its own function so a redacted mapping's type is stated
+    where it is produced (§2.2 显式即防呆).  ``_redact_value`` cannot express
+    "dict in, dict out" — it must accept and return ``object`` to recurse into
+    arbitrary JSON — so a caller that hands in a mapping would otherwise have to
+    re-assert the result's type.
+    """
+    redacted: dict[str, Any] = {}
+    for key, item in mapping.items():
+        if _is_secret_key(key) and item is not None and item != "":
+            redacted[key] = REDACTED_PLACEHOLDER
+            found.add(str(key))
+        else:
+            redacted[key] = _redact_value(item, found)
+    return redacted
+
+
 def _redact_value(value: object, found: set[str]) -> object:
     """Recursively copy *value*, masking credential values, collecting keys hit.
 
@@ -145,14 +164,7 @@ def _redact_value(value: object, found: set[str]) -> object:
     dict is left untouched.
     """
     if isinstance(value, dict):
-        redacted: dict[object, object] = {}
-        for key, item in value.items():
-            if _is_secret_key(key) and item is not None and item != "":
-                redacted[key] = REDACTED_PLACEHOLDER
-                found.add(str(key))
-            else:
-                redacted[key] = _redact_value(item, found)
-        return redacted
+        return _redact_mapping(value, found)
     if isinstance(value, list):
         return [_redact_value(item, found) for item in value]
     return value
@@ -172,7 +184,7 @@ def _redact_secrets(config_info: dict[str, Any]) -> dict[str, Any]:
     The hit keys are logged at WARNING (§3.2 — redaction is not silent).
     """
     found: set[str] = set()
-    redacted_info = _redact_value(config_info, found)
+    redacted_info = _redact_mapping(config_info, found)
     if found:
         logger.warning(
             "Redacted %d credential field(s) from the config snapshot: %s. "

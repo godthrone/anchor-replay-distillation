@@ -48,12 +48,32 @@ def allocate_images(
 
     Strategy:
 
-    1. Cycle through image pool (images can be reused)
-    2. Prefer single-turn specs (simpler scenarios get images first)
-    3. Each spec gets at most *max_turns_with_image* image turns
-    4. Images go on the earliest user turns
-    5. If images are fewer than specs, remainder get text-only
-       (warning logged)
+    1. Cycle through *image_pool* with :func:`itertools.cycle` (images are
+       reused, so the pool is infinite in effect)
+    2. Prefer single-turn specs (``len(turns) <= 2``); they are visited first
+       and then the rest, so simpler scenarios get their images first
+    3. Walk each spec's turns in order and fill its **earliest** ``user`` turns
+       — a turn that already carries an ``image_path`` is skipped and costs no
+       budget — up to *max_turns_with_image* assigned images per spec
+    4. Stamp every visited spec's ``anchor_meta`` with ``has_image`` and
+       ``image_count``
+
+    Allocation is therefore all-or-nothing per run, never "the first specs get
+    images and the remainder go text-only": the pool is cycled, so it cannot run
+    out and the number of specs never competes with the number of images.  There
+    are exactly two text-only outcomes, and both are global:
+
+    * *image_pool* is empty → the function returns immediately and the specs are
+      left completely untouched (no ``has_image`` / ``image_count`` stamp);
+    * *max_turns_with_image* is 0 → every spec is visited and stamped
+      ``has_image=False`` / ``image_count=0``.
+
+    Under 3, a spec can also stay text-only on its own: if none of its ``user``
+    turns is eligible (it has no ``user`` turn, or all of them already carry an
+    ``image_path``), it receives nothing.  The WARNING is logged in exactly that
+    situation and in the ``max_turns_with_image = 0`` case — that is, whenever at
+    least one visited spec ended up with no image — so a run that produced
+    text-only anchors cannot do so silently (§3.2 透明退路).
 
     Args:
         anchor_specs: Anchor specifications to assign images to.
@@ -68,7 +88,8 @@ def allocate_images(
     Returns:
         The same *anchor_specs* list, modified in place. Each spec's
         ``anchor_meta`` is updated with ``"has_image"`` (bool) and
-        ``"image_count"`` (int) fields.
+        ``"image_count"`` (int) fields — unless *image_pool* is empty, in which
+        case the list is returned unmodified.
     """
     if not image_pool:
         return anchor_specs
