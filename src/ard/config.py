@@ -4,9 +4,10 @@
 
 from __future__ import annotations
 
+import random
 import sys
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -53,18 +54,22 @@ class InputGeneratorConfig(_LLMConfig):
 
 
 class TargetModelConfig(_LLMConfig):
-    """Configuration for the target model (answer provider) LLM API.
+    """Configuration for the target answering model (= teacher side) LLM API.
 
-    Temperature defaults to 0.0 for deterministic answers.
+    The target model emits the anchor's target answer
+    (``targets[0].output``) — the supervision signal downstream SFT/OPD call
+    the "teacher".  Temperature defaults to 0.1 (user ruling, R12: was 0.0 —
+    deterministic — which under-sampled answer diversity; 0.1 keeps answers
+    near-greedy while letting the teacher vary phrasing between anchors).
     """
 
-    temperature: float = 0.0
+    temperature: float = 0.1
     enable_thinking: bool = False
     """Enable thinking/reasoning mode (Qwen3, DeepSeek-R1, etc.).
 
     When True, the model outputs reasoning before the final answer.
     Set to True only when distilling to a reasoning-capable student model.
-    Default False for deterministic output.
+    Default False.
     """
 
 
@@ -82,16 +87,61 @@ class GenerationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     target_count: int = 100
-    seed: int = 42
+    # Unset (``None``, the default) = draw a fresh seed for this run from the
+    # system random source; an explicit int pins that run's sampling order.
+    seed: int | None = None
     concurrency: int = 4
     languages: list[str] = Field(default_factory=list)
     task_types: list[str] = Field(default_factory=list)
     max_turns: int = Field(default=1, ge=1, le=10)
-    system_persona: Literal["none", "one_sentence", "appropriate", "detailed"] = "none"
     max_turns_with_image: int = Field(default=1, ge=0, le=5)
     embeddings_path: str = "ontology/anchor_ontology_embeddings.json"
     backpressure_threshold: int = 3       # 连续超时触发冷却的阈值
     backpressure_cooldown: float = 60.0   # 冷却暂停秒数
+
+    @model_validator(mode="after")
+    def _resolve_seed(self) -> GenerationConfig:
+        """Draw a run seed when the user did not pin one.
+
+        ``seed`` is optional: leaving it unset means "let this run sample
+        freely", so the effective seed is drawn once per config load from the
+        OS entropy source and every run differs.  Setting an integer keeps the
+        sampling order pinned, i.e. reproducible.
+
+        Resolving here — instead of forwarding ``None`` downstream — keeps
+        exactly one authoritative seed per run: it is the value the pipeline
+        snapshots into ``<output_dir>/config.json``, so even a randomised run
+        stays replicable after the fact, and the core layer keeps its plain
+        ``int`` contract.
+        """
+        if self.seed is None:
+            self.seed = random.SystemRandom().randrange(2**32)
+        return self
+
+    @property
+    def resolved_seed(self) -> int:
+        """The effective sampling seed of this run — always a concrete ``int``.
+
+        This is the strongly typed view of :attr:`seed` for downstream code
+        that cannot handle "unset": :meth:`_resolve_seed` has already drawn a
+        value whenever the user left ``seed`` unset, and it is this value that
+        the pipeline snapshots into ``<output_dir>/config.json``.
+
+        The ``None`` branch below is therefore unreachable for any normally
+        validated config, and it raises instead of quietly passing ``None`` on:
+        a ``None`` here means validation was bypassed (``model_construct``, a
+        future refactor), and handing it to ``random.Random(None)`` would turn
+        a supposedly reproducible run random without telling anyone (§2.2
+        explicit over implicit, §3.4 no silent degradation).
+        """
+        seed = self.seed
+        if seed is None:
+            raise RuntimeError(
+                "GenerationConfig.seed is None — _resolve_seed did not run. "
+                "Configs must be built through validation (parse/validate), not "
+                "model_construct()."
+            )
+        return seed
 
     @model_validator(mode="after")
     def _validate_image_turns(self) -> "GenerationConfig":

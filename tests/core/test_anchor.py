@@ -55,12 +55,11 @@ def test_anchor_type_defaults():
     assert a.id == "test_001"
     assert a.target_answer == "world"
     assert a.anchor_meta == {}
-    assert a.logprobs is None
+    assert a.reasoning is None
 
 
-def test_anchor_type_with_logprobs():
-    """Anchor stores logprobs when provided."""
-    logprobs = {"token_ids": [1, 2, 3], "log_probs": [-0.1, -0.2, -0.3]}
+def test_anchor_type_with_reasoning():
+    """Anchor stores the teacher's reasoning trace when provided."""
     a = GeneratedAnchor(
         id="a",
         messages=[],
@@ -68,9 +67,11 @@ def test_anchor_type_with_logprobs():
         target_model="m",
         input_generator_model="m",
         anchor_meta={},
-        logprobs=logprobs,
+        reasoning="six times seven is forty-two",
     )
-    assert a.logprobs == logprobs
+    assert a.reasoning == "six times seven is forty-two"
+    # Reasoning is not the answer: the two fields stay independent.
+    assert a.target_answer == "x"
 
 
 def test_anchor_generation_config_defaults():
@@ -245,8 +246,54 @@ def test_config_load_minimal(tmp_path):
     assert config.target_model.model_name == "target-model"
     # Defaults
     assert config.generation.target_count == 100
-    assert config.generation.seed == 42
+    # `seed` is unset here → the config layer resolves it to a concrete int
+    # drawn from the system random source (2026-09-15: unset = random,
+    # explicit int = pinned). It is never left as None downstream.
+    assert isinstance(config.generation.seed, int)
     assert config.generation.concurrency == 4
+
+
+def test_config_unset_seed_draws_a_fresh_seed_per_config():
+    """未配置 seed → 每个 config 各取一个新的随机 int（未配置 = 随机）。"""
+    from ard.config import GenerationConfig
+
+    seeds = {GenerationConfig().seed for _ in range(8)}
+    assert all(isinstance(s, int) for s in seeds)
+    # 8 次抽取在 2**32 空间上全部碰撞的概率约 7 * 2**-32 —— 不是 flaky 断言。
+    assert len(seeds) > 1
+
+
+def test_config_explicit_seed_is_pinned(tmp_path):
+    """显式 seed（代码或 TOML）→ 原样保留，保证同 seed 可复现。"""
+    from ard.config import GenerationConfig, load_config
+
+    assert GenerationConfig(seed=42).seed == 42
+    assert GenerationConfig(seed=0).seed == 0
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[generation]\nseed = 42\n")
+    assert load_config(str(config_path)).generation.seed == 42
+
+
+def test_config_resolved_seed_is_the_effective_int():
+    """`resolved_seed` 是 config 层的强类型生效值（即落盘 config.json 的值）。
+
+    核心层取的是 `resolved_seed` 而不是 `seed`（后者的静态类型是
+    `int | None`），因此它必须返回 int；而绕过校验的 config 不得静默把
+    None 传下去。
+    """
+    from ard.config import GenerationConfig
+
+    assert GenerationConfig(seed=42).resolved_seed == 42
+
+    g = GenerationConfig()
+    assert isinstance(g.resolved_seed, int)
+    assert g.resolved_seed == g.seed
+
+    # 绕过校验的实例（model_construct）必须显式报错，而不是把 None 交给下游
+    # 的 random.Random(None) 静默变成不可复现。
+    with pytest.raises(RuntimeError, match="did not run"):
+        _ = GenerationConfig.model_construct(seed=None).resolved_seed
 
 
 def test_config_load_with_override(tmp_path):
@@ -347,11 +394,12 @@ def test_config_section_types():
     assert ig.temperature == 0.8
 
     t = TargetModelConfig(api_base="https://api.example.com", model_name="m", api_key="k")
-    assert t.temperature == 0.0
+    assert t.temperature == 0.1
 
     g = GenerationConfig()
     assert g.target_count == 100
-    assert g.seed == 42
+    # Unset seed is resolved to a concrete int at construction time.
+    assert isinstance(g.seed, int)
     assert g.concurrency == 4
 
     o = OntologyConfig()

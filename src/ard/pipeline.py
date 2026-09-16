@@ -9,14 +9,15 @@ from __future__ import annotations
 import json
 import logging
 import random
+import re
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from ard.backends.api_client import (
     ChatAPIClient,
     ChatAPIConfig,
-    logprobs_failure_count,
     reasoning_stats as api_client_reasoning_stats,
 )
 from ard.config import ARDConfig
@@ -43,6 +44,146 @@ from ard.domain.text_anchor import AnchorGenerationStats, generate_text_anchors
 
 logger = logging.getLogger(__name__)
 
+# ── Secret redaction for the config snapshot (§2.3 boundary check) ────────
+#
+# The merged config carries credentials (``input_generator.api_key``,
+# ``target_model.api_key``).  Those values must never reach the output
+# directory: users share/pack output dirs, so a snapshot written verbatim
+# leaks the keys.  Redaction is applied once, to the single ``config_info``
+# dict that feeds **both** ``config.json`` and the manifest's ``config``
+# section — one definition, both sinks (§1.4).
+
+REDACTED_PLACEHOLDER = "***REDACTED***"
+"""Stand-in written in place of any secret value in an output snapshot."""
+
+REDACTED_KEY_WORDS: tuple[str, ...] = (
+    "api_key",
+    "apikey",
+    "key",
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "bearer",
+    "credential",
+    "auth",
+)
+"""Credential words that mark a config key as secret-bearing.
+
+A key matches when **any of its words** is one of these, or when its flattened
+form equals one of them.  Splitting on ``_``/``-``/spaces and camelCase
+boundaries, ``api_key``, ``API-KEY``, ``apiKey``, ``some_api_key``,
+``aws_access_key_id``, ``client_secret``, ``access_token``, ``hf_token``,
+``DB_PASSWORD`` and ``Authorization-Bearer`` all match.
+
+This is deliberately **word** matching, not substring matching: ``max_tokens``
+splits into ``max`` + ``tokens``, and ``tokens`` is not ``token``, so it does
+not match.  Same for ``max_tokens_with_image`` and ``first_token_timeout``.
+Those fields are sizes/durations — masking them would destroy the snapshot's
+ability to reproduce the run (§2.3: redact secrets, do not corrupt the record).
+
+``api_base`` is deliberately absent — an endpoint is a location, not a
+credential (see the R7 report for the accepted residual risk).
+"""
+
+
+def _split_key(key: str) -> list[str]:
+    """Split a key name into lower-cased words on separators and camelCase.
+
+    ``"api_key"`` → ``["api", "key"]``, ``"clientSecret"`` →
+    ``["client", "secret"]``, ``"max_tokens"`` → ``["max", "tokens"]``.
+    """
+    with_boundaries = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", key)
+    return [word for word in re.split(r"[^a-zA-Z0-9]+", with_boundaries.lower()) if word]
+
+
+def _flatten_key(key: str) -> str:
+    """Key words joined without separators: ``"api_key"`` → ``"apikey"``."""
+    return "".join(_split_key(key))
+
+
+REDACTED_KEY_WORD_SET: frozenset[str] = frozenset(REDACTED_KEY_WORDS)
+"""Word-level comparison set — the single definition of "is a secret key"."""
+
+REDACTED_KEY_FLAT_SET: frozenset[str] = frozenset(
+    _flatten_key(word) for word in REDACTED_KEY_WORDS
+)
+"""Flattened names, so single-token spellings like ``apikey`` also match."""
+
+NOT_SECRET_KEY_WORDS: frozenset[str] = frozenset({"timeout", "timeouts"})
+"""Words that look like credentials but name a duration, never a value.
+
+``first_token_timeout`` / ``inter_token_timeout`` contain the word ``token``
+yet hold seconds.  Providing/omitting a timeout cannot leak a key, so these are
+exempt — the snapshot must keep them to reproduce the run.  This list is the
+explicit, auditable place where "looks like a secret but is not one" is
+recorded (§2.2 显式即防呆); it is not a heuristic escape hatch.
+"""
+
+
+def _is_secret_key(key: object) -> bool:
+    """Whether *key* names a credential field that must be masked.
+
+    Matches when any word of the key is a credential word, or when the key's
+    flattened spelling is one — see :data:`REDACTED_KEY_WORDS` for why this is
+    word matching rather than substring matching (``max_tokens`` must survive).
+    """
+    if not isinstance(key, str):
+        return False
+    words = _split_key(key)
+    if any(word in NOT_SECRET_KEY_WORDS for word in words):
+        return False
+    if any(word in REDACTED_KEY_WORD_SET for word in words):
+        return True
+    return "".join(words) in REDACTED_KEY_FLAT_SET
+
+
+def _redact_value(value: object, found: set[str]) -> object:
+    """Recursively copy *value*, masking credential values, collecting keys hit.
+
+    Containers are rebuilt (never mutated in place) so the caller's config
+    dict is left untouched.
+    """
+    if isinstance(value, dict):
+        redacted: dict[object, object] = {}
+        for key, item in value.items():
+            if _is_secret_key(key) and item is not None and item != "":
+                redacted[key] = REDACTED_PLACEHOLDER
+                found.add(str(key))
+            else:
+                redacted[key] = _redact_value(item, found)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_value(item, found) for item in value]
+    return value
+
+
+def _redact_secrets(config_info: dict[str, Any]) -> dict[str, Any]:
+    """Return *config_info* with every credential value replaced by a mask.
+
+    Recurses through nested dicts and lists, so structured config sections
+    (``[input_generator]``, ``[target_model]``) are covered as well as any
+    future nesting.  A value that is ``None`` or ``""`` is left as-is: those
+    mean "no key configured" (§2.2 — ``None`` is the only empty value), and
+    masking them would make an absent credential indistinguishable from a
+    redacted one.  Every other value under a matching key is masked, so the
+    key name never vouches for a secret's absence.
+
+    The hit keys are logged at WARNING (§3.2 — redaction is not silent).
+    """
+    found: set[str] = set()
+    redacted_info = _redact_value(config_info, found)
+    if found:
+        logger.warning(
+            "Redacted %d credential field(s) from the config snapshot: %s. "
+            "Values are replaced with %r so output directories can be shared "
+            "safely; real values stay in the config file / override TOML.",
+            len(found),
+            ", ".join(sorted(found)),
+            REDACTED_PLACEHOLDER,
+        )
+    return redacted_info
+
 
 def _counter_delta(after: dict[str, int], before: dict[str, int]) -> dict[str, int]:
     """Return the per-key difference between two counter snapshots.
@@ -53,31 +194,6 @@ def _counter_delta(after: dict[str, int], before: dict[str, int]) -> dict[str, i
     """
     keys = set(after) | set(before)
     return {key: after.get(key, 0) - before.get(key, 0) for key in keys}
-
-
-def _merge_failure_counters(
-    reasoning_delta: dict[str, int],
-    logprobs_delta: dict[str, int],
-) -> dict[str, int]:
-    """Merge the two process-level failure counter families without data loss.
-
-    Both families are flat ``tag -> count`` maps, so a tag present in both would
-    silently overwrite one of them under ``{**a, **b}``.  The tags do not
-    collide today (reasoning tags: ``responses``/``empty_content``/…;
-    log-probs tags: ``key_missing``/``partial``/…), and this guard keeps that
-    true if one is ever renamed into the other's namespace: the log-probs side
-    gets a ``logprobs_`` prefix instead of vanishing (§2.2 显式即防呆 —
-    a silent overwrite is exactly the kind of loss this project keeps paying for).
-    """
-    collisions = set(reasoning_delta) & set(logprobs_delta)
-    merged = dict(reasoning_delta)
-    merged.update(
-        {
-            (f"logprobs_{key}" if key in collisions else key): value
-            for key, value in logprobs_delta.items()
-        }
-    )
-    return merged
 
 
 def _log_target_model_reasoning_stats(
@@ -174,8 +290,11 @@ def run(
         output_path.unlink()
         logger.info("Overwrite mode: cleared existing anchor bank at %s", output_path)
 
-    # Backup merged config to output directory for reproducibility
-    config_info = config.model_dump(mode="json")
+    # Backup merged config to output directory for reproducibility.
+    # Credentials are masked first (§2.3 — the output directory is a boundary
+    # users share); the same redacted dict feeds the manifest's `config`
+    # section below, so both sinks are covered by this single definition.
+    config_info = _redact_secrets(config.model_dump(mode="json"))
     config_json_path = output_dir / "config.json"
     config_json_path.write_text(
         json.dumps(config_info, indent=2, ensure_ascii=False),
@@ -208,13 +327,12 @@ def run(
     # ── Generation config (adjusted for remaining) ────────────────────────
     gen_config = AnchorGenerationConfig(
         target_count=remaining,
-        seed=config.generation.seed,
+        seed=config.generation.resolved_seed,
         concurrency=config.generation.concurrency,
         languages=config.generation.languages,
         task_types=config.generation.task_types,
         max_turns=config.generation.max_turns,
         max_turns_with_image=config.generation.max_turns_with_image,
-        system_persona=config.generation.system_persona,
         embeddings_path=config.generation.embeddings_path,
     )
 
@@ -339,16 +457,12 @@ def run(
     #
     # Reasoning observability (WP-F3): snapshot the API client's reasoning
     # counters before and after generation.  Reasoning tokens arrive as
-    # ``delta.reasoning`` and never enter the answer, so a run whose budget was
-    # eaten by thinking produces *empty* target answers — a failure that used to
-    # be visible only as scattered per-request logs.  This delta makes the rate
+    # ``delta.reasoning``, are persisted as ``targets[0].output.reasoning``, and
+    # also consume ``max_tokens`` first — so a run whose budget was eaten by
+    # thinking produces *empty* target answers, a failure that used to be
+    # visible only as scattered per-request logs.  This delta makes the rate
     # visible once per run (§3.2 透明退路: an affected result must be announced).
-    #
-    # Log-probs failures (WP-F2) are snapshotted the same way: the counter
-    # exists so that "64/64 anchors written with empty log-probs" can never
-    # again look like a successful run.
     reasoning_before = api_client_reasoning_stats()
-    logprobs_failures_before = logprobs_failure_count()
     generation_stats = AnchorGenerationStats(requested=len(specs))
     new_anchors = generate_text_anchors(
         specs=specs,
@@ -365,17 +479,16 @@ def run(
     reasoning_delta = _log_target_model_reasoning_stats(
         api_client_reasoning_stats(), reasoning_before, len(new_anchors)
     )
-    logprobs_delta = _counter_delta(logprobs_failure_count(), logprobs_failures_before)
 
     # ── Build manifest from ALL anchors (existing + new) ──────────────────
     all_records = read_anchor_bank(output_path)
     manifest = build_manifest_from_records(all_records, output_dir, config_info)
     # Publish the run's failures next to the anchors that survived, so a short
-    # or supervision-free bank can never be mistaken for a healthy one (§3.2).
+    # bank can never be mistaken for a healthy one (§3.2).
     with_generation_report(
         manifest,
         stats=generation_stats.to_manifest_dict(),
-        failures=_merge_failure_counters(reasoning_delta, logprobs_delta),
+        failures=reasoning_delta,
     )
     write_manifest(manifest, output_dir / "manifest.json")
 

@@ -2,11 +2,14 @@
 
 The anchor format has one structural contract, stated in
 :mod:`ard.core.types`: a conversation starts with ``user``, ends with
-``user`` and alternates roles strictly.  ``AnchorSpec`` enforces it on the
-way *in*, but the entry gate alone never protected the output — that is how
-``UAUAU``-shaped anchors reached a published anchor bank.  This module holds
-the single implementation of that contract so entry and exit checks can never
-drift apart (§1.4 单一真相源).
+``user`` and alternates roles strictly — and, since v3.0.0, may be preceded
+by an *optional single* ``system`` message at position 0 (D1: the ``messages``
+array is the single source of truth for the system prompt).  ``AnchorSpec``
+enforces the turn half of it on the way *in*, but the entry gate alone never
+protected the output — that is how ``UAUAU``-shaped anchors reached a
+published anchor bank.  This module holds the **single implementation** of
+that contract so every entry/exit check (including the build-time gate in
+:mod:`ard.domain.text_anchor`) can never drift apart (§1.4 单一真相源).
 
 It is a boundary check, not a fallback (§2.3): a violation means the anchor
 must be discarded, loudly.
@@ -22,13 +25,17 @@ __all__ = ["expected_message_roles", "message_shape_error"]
 
 
 def expected_message_roles(spec: AnchorSpec) -> list[str]:
-    """Return the role sequence ``messages`` must have for *spec*.
+    """Return the expected *conversation* role sequence for *spec*.
 
     One message per ``TurnSpec``: user turns are produced by the input
-    generator / with logprobs, assistant turns by the target model.  Because
-    every turn yields exactly one message, the expected sequence is simply
-    the declared turn roles.  ``AnchorSpec`` already guarantees this
-    sequence starts with ``user``, ends with ``user`` and alternates.
+    generator, assistant turns by the target model.  Because every turn yields
+    exactly one message, the expected sequence is simply the declared turn
+    roles.  ``AnchorSpec`` already guarantees this sequence starts with
+    ``user``, ends with ``user`` and alternates.
+
+    The sequence deliberately contains **no** ``system``: an optional leading
+    system message is an orthogonal, message-level concern handled by
+    :func:`message_shape_error` (D1), not part of the turn list.
 
     Args:
         spec: Anchor specification.
@@ -42,11 +49,19 @@ def expected_message_roles(spec: AnchorSpec) -> list[str]:
 def message_shape_error(messages: list[Any]) -> str | None:
     """Validate the structural shape of a message list.
 
-    The anchor format invariants (``src/ard/core/types.py``) are:
-    first message ``user``, last message ``user``, roles strictly
-    alternating.  ``AnchorSpec`` enforces this at the *entry* boundary;
-    this function exists so the same contract can be checked at the
-    *exit* boundary, before an anchor is handed to persistence.
+    This is the **single implementation** of the anchor shape contract
+    (``src/ard/core/types.py`` + v3.0.0 D1):
+
+    * an *optional single* ``system`` message may open the conversation at
+      position 0 — the OpenAI ``messages`` format, where the array is the
+      only source of truth for the system prompt;
+    * once that optional leading system is stripped, the conversation must
+      start with ``user``, end with ``user`` and alternate roles strictly.
+
+    ``AnchorSpec`` enforces the turn half of this at the *entry* boundary;
+    this function exists so the same contract can be checked at every *exit* /
+    build-time gate (bank persistence, post-conversion, in-progress build)
+    before an anchor is released (§1.4 单一真相源, §2.3 边界校验即防呆).
 
     Args:
         messages: Message dicts (or any objects with a ``role``/``get``).
@@ -66,17 +81,36 @@ def message_shape_error(messages: list[Any]) -> str | None:
         return getattr(msg, "role", None)
 
     roles = [_role(m) for m in messages]
-    if any(r not in ("user", "assistant") for r in roles):
-        index = next(i for i, r in enumerate(roles) if r not in ("user", "assistant"))
+
+    # Vocabulary is ``user`` / ``assistant`` plus the optional ``system``.
+    if any(r not in ("user", "assistant", "system") for r in roles):
+        index = next(
+            i for i, r in enumerate(roles) if r not in ("user", "assistant", "system")
+        )
         return f"message {index} has unknown role {roles[index]!r}"
-    if roles[0] != "user":
-        return f"first message role must be 'user', got {roles[0]!r}"
-    if roles[-1] != "user":
-        return f"last message role must be 'user', got {roles[-1]!r}"
-    for i in range(len(roles) - 1):
-        if roles[i] == roles[i + 1]:
+
+    # system: at most one, and only at position 0 (D1).  Checked *before* the
+    # conversation shape so a misplaced system is reported as such, not as a
+    # garbled conversation shape.
+    if roles.count("system") > 1:
+        return "at most one 'system' message is allowed"
+    if "system" in roles and roles[0] != "system":
+        return "a 'system' message must be the first message"
+
+    # Conversation shape: strip the (validated) single leading system, then
+    # require first ``user``, last ``user`` and strict alternation on the rest.
+    base = 1 if roles and roles[0] == "system" else 0
+    conversation = roles[base:]
+    if not conversation:
+        return "a 'system' message must be followed by conversation messages"
+    if conversation[0] != "user":
+        return f"first message role must be 'user', got {conversation[0]!r}"
+    if conversation[-1] != "user":
+        return f"last message role must be 'user', got {conversation[-1]!r}"
+    for i in range(len(conversation) - 1):
+        if conversation[i] == conversation[i + 1]:
             return (
-                f"messages {i} and {i + 1} share role {roles[i]!r} "
-                f"(roles must alternate)"
+                f"messages {base + i} and {base + i + 1} share role "
+                f"{conversation[i]!r} (roles must alternate)"
             )
     return None

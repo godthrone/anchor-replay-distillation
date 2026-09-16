@@ -1,7 +1,7 @@
 """Anchor bank storage — unified format aligned with graspo.
 
 This module owns the *exit boundary* of anchor production.  Everything that
-reaches the anchor bank has passed two gates here:
+reaches the anchor bank has passed three gates here:
 
 1. **Message shape** (:func:`ard.domain.anchor_shape.message_shape_error`) —
    a conversation must start with ``user``, end with ``user`` and alternate
@@ -9,13 +9,32 @@ reaches the anchor bank has passed two gates here:
    a malformed anchor can never be published even if a turn generator
    regresses (that is exactly how ``UAUAU``-shaped anchors once reached a
    bank: entry gate without exit gate).
-2. **Id uniqueness** — one record per anchor id.  ``anchor id`` is derived
-   from 4-dimensional metadata (see :func:`ard.core.sampler.generate_anchor_id`),
+2. **Data source vocabulary** (:func:`data_source_error`) — ``data_source`` is
+   the OPD routing key, and a value outside
+   :class:`~ard.core.types.DataSource` is a record no consumer routes.  It used
+   to be an unconstrained string, so a typo was persisted silently.
+3. **Id uniqueness** — one record per anchor id.  ``anchor id`` is derived
+   from 5-dimensional metadata (see :func:`ard.core.sampler.generate_anchor_id`),
    so two specs can legitimately carry the same id; writing both inflates the
-   bank while the resume logic in :mod:`ard.pipeline` counts lines, not ids.
+   bank while the resume logic in :mod:`ard.pipeline` counts records, not ids.
 
-Both gates reject loudly: the caller receives an :class:`AppendOutcome` and
+All three read paths — :func:`count_existing_anchors` (the resume counter),
+:func:`read_anchor_bank` and the id scan behind :func:`append_anchor` — agree on
+what a record *is*: a **parseable** non-blank JSON line.  They used to disagree
+(the counter counted every non-blank line), so one truncated trailing line was
+enough to make the resume path see ``N+1`` anchors and then crash while reading
+them — i.e. an interrupted run was exactly the run that could not be resumed.
+
+All gates reject loudly: the caller receives an :class:`AppendOutcome` and
 logs it (§2.3 边界校验即防呆, §3.2 透明退路).
+
+The outcome vocabulary is **not** defined here: :class:`AppendOutcome` lives in
+:mod:`ard.domain.append_outcome`, the module whose name mirrors the class name
+(§12.2 类名与路径互映).  An ``Enum`` is not a §12.2 data-container exemption
+case — that exemption lists frozen dataclasses and pydantic models only — so
+filing it under its own name is required, instead of attaching it to the
+``append_anchor`` function family.  This module imports it strictly for its own
+return values; it does **not** re-export it (§18.1 不留负债).
 """
 
 from __future__ import annotations
@@ -23,27 +42,19 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from ard.core.types import GeneratedAnchor
+from ard.core.types import DataSource, GeneratedAnchor
 from ard.domain.anchor_shape import message_shape_error
+from ard.domain.append_outcome import AppendOutcome
 
 logger = logging.getLogger(__name__)
 
-
-class AppendOutcome(Enum):
-    """What happened when an anchor was offered to the bank."""
-
-    APPENDED = "appended"
-    """The anchor was written to the bank."""
-
-    DUPLICATE_SKIPPED = "duplicate_skipped"
-    """An anchor with this id is already in the bank — nothing was written."""
-
-    INVALID_SHAPE_SKIPPED = "invalid_shape_skipped"
-    """The anchor's messages violated the conversation-shape contract."""
+# Output-schema version of every record persisted through this module (v3.0.0).
+# Single source of truth (§1.4): the anchor format's version is written here,
+# once, as a top-level ``schema_version`` field on each record.
+SCHEMA_VERSION = "3.0.0"
 
 
 # Ids already present per bank file.  The value is ``(fingerprint, ids)`` where
@@ -63,11 +74,26 @@ def _bank_fingerprint(path: Path) -> tuple[int, int] | None:
     return (stat.st_mtime_ns, stat.st_size)
 
 
-def _read_ids(path: Path) -> set[str]:
-    """Collect the anchor ids already stored in *path* (tolerating bad lines)."""
-    ids: set[str] = set()
+def _parsed_records(path: Path) -> list[dict[str, Any]]:
+    """Return every parseable record in *path*, in file order.
+
+    One unreadable line must not condemn the whole bank: this file is written
+    incrementally (``append_anchor`` flushes after every record), so a run that
+    was killed mid-write — or a disk that filled up — can leave a trailing
+    fragment.  The old behaviour was to raise :class:`json.JSONDecodeError` from
+    wherever the bank was being read, which is the worst possible outcome for
+    that file: the anchors behind the fragment are perfectly good and the caller
+    is the *resume* path, i.e. the one code path whose job is to carry on after
+    an interrupted run.
+
+    Damaged lines are therefore skipped loudly rather than fatally (§3.2 透明退路:
+    a lossy result is announced), and the surviving records are returned.  The
+    same definition of "a record" drives :func:`count_existing_anchors`, so the
+    resume counter can never count a line that the reader would refuse.
+    """
+    records: list[dict[str, Any]] = []
     if not path.exists():
-        return ids
+        return records
     with open(path, encoding="utf-8") as f:
         for line_no, line in enumerate(f, start=1):
             line = line.strip()
@@ -77,13 +103,63 @@ def _read_ids(path: Path) -> set[str]:
                 record = json.loads(line)
             except json.JSONDecodeError:
                 logger.warning(
-                    "Ignoring unreadable line %d while scanning ids in %s",
-                    line_no, path,
+                    "Ignoring unreadable line %d in %s (%d byte(s)) — it is "
+                    "excluded from the bank's record count; the remaining "
+                    "records are kept",
+                    line_no, path, len(line),
                 )
                 continue
-            record_id = record.get("id")
-            if isinstance(record_id, str):
-                ids.add(record_id)
+            records.append(record)
+    return records
+
+
+def _ensure_line_boundary(fh: Any, path: Path) -> bool:
+    """Make sure an append starts on a fresh line; return whether it had to be repaired.
+
+    Caller holds ``fh`` open for append **and** read (``"a+"``).  ``append_anchor``
+    flushes after every record, but a run killed *during* a write — or a disk that
+    filled up — can leave a fragment without its trailing newline.  Every later
+    append would then concatenate onto that fragment and turn two records into one
+    unparseable line, so the damage would spread to records that were never
+    damaged at all.  Separating them with a newline keeps the bank line-oriented
+    (the format's one invariant) and leaves the fragment visible to the reader as
+    exactly what it is: one unreadable line, skipped and warned about.
+
+    Newline (not truncation) is deliberate: rewriting the tail of a data file to
+    erase evidence is a destructive act (§2.4 操作防呆), and the fragment is the
+    only trace of the anchors the interrupted run lost.
+
+    The check is two syscalls (``tell`` + one byte read) on a file this process is
+    already flushing once per anchor, and it is re-evaluated on every append: a
+    cached "already checked" answer would go stale the moment another process
+    wrote to the same bank.
+    """
+    fh.flush()  # make the on-disk tail visible before inspecting it
+    fh.seek(0, 2)
+    size = fh.tell()
+    if size == 0:
+        return False
+    fh.seek(size - 1)
+    if fh.read(1) == "\n":
+        return False
+    fh.seek(0, 2)
+    fh.write("\n")
+    logger.warning(
+        "Bank %s did not end with a newline (an interrupted write). Separated "
+        "the trailing fragment from the next record; the fragment itself stays "
+        "on disk and is skipped as an unreadable line.",
+        path,
+    )
+    return True
+
+
+def _read_ids(path: Path) -> set[str]:
+    """Collect the anchor ids already stored in *path* (tolerating bad lines)."""
+    ids: set[str] = set()
+    for record in _parsed_records(path):
+        record_id = record.get("id")
+        if isinstance(record_id, str):
+            ids.add(record_id)
     return ids
 
 
@@ -105,16 +181,47 @@ def _known_ids(path: Path) -> set[str]:
     return ids
 
 
+def data_source_error(anchor: GeneratedAnchor) -> str | None:
+    """Validate an anchor's ``data_source`` against the controlled vocabulary.
+
+    ``data_source`` is the OPD routing key: the training side routes records by
+    it, so a value outside the vocabulary is not "an unusual label", it is a
+    record no consumer will ever pick up.  The contract is enforced by the
+    :class:`~ard.core.types.DataSource` enum at construction; this gate exists
+    so the **exit boundary** owns it too (§2.3 边界校验即防呆) — a record that
+    is written to the bank must satisfy both gates, whoever built it.
+
+    Args:
+        anchor: The anchor about to be persisted.
+
+    Returns:
+        ``None`` when the value is in the vocabulary, otherwise a
+        human-readable description of the violation.
+    """
+    if not isinstance(anchor.data_source, DataSource):
+        return (
+            f"data_source {anchor.data_source!r} is not a DataSource "
+            f"(allowed: {[member.value for member in DataSource]})"
+        )
+    return None
+
+
 def append_anchor(anchor: GeneratedAnchor, path: Path) -> AppendOutcome:
     """Validate and append a single anchor to a JSONL file (thread-safe).
 
-    The shape check and the id-uniqueness check happen under one lock together
-    with the write, so two threads racing on the same id cannot both win.
+    The shape check, the ``data_source`` check and the id-uniqueness check
+    happen under one lock together with the write, so two threads racing on the
+    same id cannot both win.
 
     Uses ``O_APPEND`` (via ``open(..., "a")``) which POSIX guarantees
     is atomic for writes up to ``PIPE_BUF`` bytes.  ``flush()`` ensures
     the line is immediately written to disk so that an interrupted run
     can resume from the last committed anchor.
+
+    An interrupted earlier write can leave a fragment without its trailing
+    newline; :func:`_ensure_line_boundary` separates it from this record first, so
+    one truncated line can never concatenate with — and thereby corrupt — the
+    records that follow it.
 
     Args:
         anchor: The anchor to persist.
@@ -133,6 +240,16 @@ def append_anchor(anchor: GeneratedAnchor, path: Path) -> AppendOutcome:
         )
         return AppendOutcome.INVALID_SHAPE_SKIPPED
 
+    routing_error = data_source_error(anchor)
+    if routing_error is not None:
+        # Same reasoning as the shape gate: an unrouteable record must not be
+        # published, and it must be refused *before* the file is opened.
+        logger.warning(
+            "Anchor %s rejected by the data_source gate (%s) — not written to %s",
+            anchor.id, routing_error, path,
+        )
+        return AppendOutcome.INVALID_DATA_SOURCE_SKIPPED
+
     line = json.dumps(anchor_to_dict(anchor), ensure_ascii=False) + "\n"
     with _seen_ids_lock:
         known = _known_ids(path)
@@ -142,7 +259,8 @@ def append_anchor(anchor: GeneratedAnchor, path: Path) -> AppendOutcome:
                 anchor.id, path,
             )
             return AppendOutcome.DUPLICATE_SKIPPED
-        with open(path, "a", encoding="utf-8") as f:
+        with open(path, "a+", encoding="utf-8") as f:
+            _ensure_line_boundary(f, path)
             f.write(line)
             f.flush()
         known.add(anchor.id)
@@ -150,26 +268,26 @@ def append_anchor(anchor: GeneratedAnchor, path: Path) -> AppendOutcome:
 
 
 def count_existing_anchors(path: Path) -> int:
-    """Count existing anchors in a JSONL file.
+    """Count the anchors already stored in a JSONL file.
+
+    This is the resume counter: :func:`ard.pipeline.run` subtracts it from
+    ``generation.target_count`` to decide how many anchors are still missing.
+    It therefore counts exactly what :func:`read_anchor_bank` will hand back —
+    parseable, non-blank lines — and not blank or damaged ones.  Counting raw
+    lines made the two disagree, and the disagreement surfaced as a crash on the
+    very run the checkpoint exists to rescue (see :func:`_parsed_records`).
 
     Returns 0 if the file does not exist.
     """
-    if not path.exists():
-        return 0
-    count = 0
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            if line.strip():
-                count += 1
-    return count
+    return len(_parsed_records(path))
 
 
 def count_unique_anchor_ids(path: Path | str) -> int:
     """Count *distinct* anchor ids in a JSONL file.
 
-    The line count (:func:`count_existing_anchors`) is what the resume logic
+    The record count (:func:`count_existing_anchors`) is what the resume logic
     in :mod:`ard.pipeline` compares against ``target_count``; this function
-    makes the difference between lines and real anchors visible.
+    makes the difference between records and real anchors visible.
     """
     return len(_read_ids(Path(path)))
 
@@ -177,57 +295,74 @@ def count_unique_anchor_ids(path: Path | str) -> int:
 def anchor_to_dict(anchor: GeneratedAnchor) -> dict[str, Any]:
     """Convert a :class:`GeneratedAnchor` to a dict in the unified JSONL format.
 
-    Output format (aligned with graspo):
+    Output format (aligned with graspo + OPD v3.0.0 additions):
     ```json
     {
       "id": "anchor_<sha256_hex16>",
       "source": "ard",
+      "data_source": "ard_text",
+      "schema_version": "3.0.0",
       "messages": [...],
       "targets": [{
         "id": "primary",
         "output": {
           "content": "<target_answer>",
-          "logprobs": {"token_ids": [...], "log_probs": [...]}
+          "reasoning": "<teacher reasoning text or null>"
         }
       }],
       "anchor_meta": {...},
+      "input_generator_model": "...",
       "teacher_id": "..."
     }
     ```
+
+    ``content`` and ``reasoning`` are separate keys on purpose (§1.2 契约 2):
+    thinking is not the answer, and downstream decides on its own whether it
+    wants the reasoning.  ``reasoning`` is ``null`` when the teacher did not
+    think (``enable_thinking = false``) — never ``""``.
+
+    ``data_source`` (per-record OPD routing key, set at anchor construction),
+    ``schema_version`` (the single format version, §1.4) and
+    ``input_generator_model`` are top-level fields so downstream can route and
+    version records without re-deriving them.
     """
     return {
         "id": anchor.id,
         "source": "ard",
+        "data_source": anchor.data_source,
+        "schema_version": SCHEMA_VERSION,
         "messages": anchor.messages,
         "targets": [
             {
                 "id": "primary",
                 "output": {
                     "content": anchor.target_answer,
-                    "logprobs": anchor.logprobs or {"token_ids": [], "log_probs": []},
+                    "reasoning": anchor.reasoning,
                 },
             }
         ],
         "anchor_meta": anchor.anchor_meta,
+        "input_generator_model": anchor.input_generator_model,
         "teacher_id": anchor.target_model,
     }
 
 
 def write_anchor_bank(anchors: list[GeneratedAnchor], output_path: str | Path) -> None:
-    """Rewrite a whole JSONL bank, applying the same two output gates as
+    """Rewrite a whole JSONL bank, applying the same output gates as
     :func:`append_anchor`.
 
-    A malformed conversation is never written — because this function writes
-    the *entire* file at once, silently dropping rows would hide the problem,
-    so it raises instead.  Duplicate ids are dropped (first occurrence wins)
-    and reported.
+    A malformed conversation or an off-vocabulary ``data_source`` is never
+    written — because this function writes the *entire* file at once, silently
+    dropping rows would hide the problem, so it raises instead.  Duplicate ids
+    are dropped (first occurrence wins) and reported.
 
     Args:
         anchors: Anchors to persist.
         output_path: Target JSONL file (parent directories are created).
 
     Raises:
-        ValueError: If any anchor violates the message-shape contract.
+        ValueError: If any anchor violates the message-shape contract or
+            carries a ``data_source`` outside the controlled vocabulary.
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -241,6 +376,17 @@ def write_anchor_bank(anchors: list[GeneratedAnchor], output_path: str | Path) -
         raise ValueError(
             "refusing to write a bank containing malformed conversations: "
             + "; ".join(f"{anchor_id}: {reason}" for anchor_id, reason in rejected)
+        )
+
+    rejected_sources = [
+        (a.id, data_source_error(a))
+        for a in anchors
+        if data_source_error(a) is not None
+    ]
+    if rejected_sources:
+        raise ValueError(
+            "refusing to write a bank containing unrouteable data_source values: "
+            + "; ".join(f"{anchor_id}: {reason}" for anchor_id, reason in rejected_sources)
         )
 
     unique: dict[str, GeneratedAnchor] = {}
@@ -262,18 +408,56 @@ def write_anchor_bank(anchors: list[GeneratedAnchor], output_path: str | Path) -
 
 
 def read_anchor_bank(path: str | Path) -> list[dict[str, Any]]:
-    """Read anchors from a JSONL file.
+    """Read the records of a JSONL anchor bank, in file order.
+
+    Unreadable lines are skipped with a warning instead of raising, so an
+    interrupted run's trailing fragment cannot take the rest of the bank down
+    with it (see :func:`_parsed_records`); the count reported by
+    :func:`count_existing_anchors` excludes exactly those lines.
 
     Returns:
         List of parsed record dicts.
     """
-    records: list[dict[str, Any]] = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                records.append(json.loads(line))
-    return records
+    return _parsed_records(Path(path))
+
+
+def _manifest_breakdown(
+    meta: dict[str, Any],
+    data_source: str,
+) -> tuple[str, str, str, str, str]:
+    """Extract the (domain, language, capability, mode, data_source) of a record.
+
+    The sampling dimensions that are most useful to see *after* a run, plus the
+    routing key.  The system-prompt mode is included because it became a
+    sampling dimension in v3.0.0 (B3), and ``data_source`` because it decides
+    which sub-corpus the training side routes the record to: a distribution
+    quietly stuck on one value looks exactly like a healthy one (§3.2).
+    """
+    return (
+        meta.get("knowledge_domain", meta.get("visual_domain", "unknown")),
+        meta.get("language", "unknown"),
+        meta.get("capability", meta.get("question_type", "unknown")),
+        meta.get("system_prompt_mode", "unknown"),
+        data_source,
+    )
+
+
+def _tally(
+    breakdowns: list[tuple[str, str, str, str, str]],
+) -> tuple[dict[str, int], dict[str, int], dict[str, int], dict[str, int], dict[str, int]]:
+    """Count every position of the breakdown over all records."""
+    domains: dict[str, int] = {}
+    languages: dict[str, int] = {}
+    capabilities: dict[str, int] = {}
+    system_prompt_modes: dict[str, int] = {}
+    data_sources: dict[str, int] = {}
+    for domain, language, capability, mode, data_source in breakdowns:
+        domains[domain] = domains.get(domain, 0) + 1
+        languages[language] = languages.get(language, 0) + 1
+        capabilities[capability] = capabilities.get(capability, 0) + 1
+        system_prompt_modes[mode] = system_prompt_modes.get(mode, 0) + 1
+        data_sources[data_source] = data_sources.get(data_source, 0) + 1
+    return domains, languages, capabilities, system_prompt_modes, data_sources
 
 
 def build_manifest(
@@ -282,22 +466,16 @@ def build_manifest(
     config_info: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a manifest dict summarizing the anchor bank."""
-    domains: dict[str, int] = {}
-    languages: dict[str, int] = {}
-    capabilities: dict[str, int] = {}
-    for a in anchors:
-        m = a.anchor_meta
-        d = m.get("knowledge_domain", m.get("visual_domain", "unknown"))
-        domains[d] = domains.get(d, 0) + 1
-        lang = m.get("language", "unknown")
-        languages[lang] = languages.get(lang, 0) + 1
-        c = m.get("capability", m.get("question_type", "unknown"))
-        capabilities[c] = capabilities.get(c, 0) + 1
+    domains, languages, capabilities, system_prompt_modes, data_sources = _tally(
+        [_manifest_breakdown(a.anchor_meta, a.data_source.value) for a in anchors]
+    )
     manifest: dict[str, Any] = {
         "total_anchors": len(anchors),
         "domains": domains,
         "languages": languages,
         "capabilities": capabilities,
+        "system_prompt_modes": system_prompt_modes,
+        "data_sources": data_sources,
         "output_dir": str(output_dir),
     }
     if config_info:
@@ -317,26 +495,23 @@ def build_manifest_from_records(
     from :class:`GeneratedAnchor` objects, so the full anchor bank can be
     summarised without re-materialising every ``GeneratedAnchor``.
 
-    Bank composition only: run health (abandoned anchors, log-probs failures,
+    Bank composition only: run health (abandoned anchors, reasoning failures,
     cooldowns) is not derivable from the surviving records and is attached
     separately by :func:`with_generation_report`.
     """
-    domains: dict[str, int] = {}
-    languages: dict[str, int] = {}
-    capabilities: dict[str, int] = {}
-    for r in records:
-        m = r.get("anchor_meta", {})
-        d = m.get("knowledge_domain", m.get("visual_domain", "unknown"))
-        domains[d] = domains.get(d, 0) + 1
-        lang = m.get("language", "unknown")
-        languages[lang] = languages.get(lang, 0) + 1
-        c = m.get("capability", m.get("question_type", "unknown"))
-        capabilities[c] = capabilities.get(c, 0) + 1
+    domains, languages, capabilities, system_prompt_modes, data_sources = _tally(
+        [
+            _manifest_breakdown(r.get("anchor_meta", {}), r.get("data_source", "unknown"))
+            for r in records
+        ]
+    )
     manifest: dict[str, Any] = {
         "total_anchors": len(records),
         "domains": domains,
         "languages": languages,
         "capabilities": capabilities,
+        "system_prompt_modes": system_prompt_modes,
+        "data_sources": data_sources,
         "output_dir": str(output_dir),
     }
     if config_info:
@@ -361,10 +536,9 @@ def with_generation_report(
 
     The manifest used to describe only the anchors that *survived*
     (``total_anchors`` / ``domains`` / …), so a run that dropped a third of its
-    anchors — or one whose log-probs were all empty — produced a manifest that
-    looked perfectly healthy.  That is the failure mode this project kept
-    paying for, so the dropped-anchor accounting now travels with the output
-    (§3.2 透明退路).
+    anchors produced a manifest that looked perfectly healthy.  That is the
+    failure mode this project kept paying for, so the dropped-anchor accounting
+    now travels with the output (§3.2 透明退路).
 
     The result is one nested ``"generation"`` object with two sub-objects:
 
@@ -373,8 +547,7 @@ def with_generation_report(
       ``abandoned_by_reason`` / ``written`` / ``rejected_invalid_shape`` /
       ``duplicate_ids`` / ``backpressure_events``.
     * ``failures`` — process-level failure counters, keyed by their own
-      machine-readable tags: log-probs extraction failures grouped by reason,
-      and reasoning/empty-content counters
+      machine-readable tags: reasoning/empty-content counters
       (``responses``, ``empty_content``, ``reasoning_only_responses``,
       ``truncated_empty``, …).
 
@@ -388,7 +561,7 @@ def with_generation_report(
         stats: :meth:`ard.domain.text_anchor.AnchorGenerationStats.to_manifest_dict`
             output, or ``None`` when the run did not generate anchors
             (checkpoint-resume path).
-        failures: Process-level counters (log-probs failures, reasoning stats).
+        failures: Process-level counters (reasoning / empty-content stats).
 
     Returns:
         The same *manifest* object, enriched.

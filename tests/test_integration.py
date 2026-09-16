@@ -17,15 +17,66 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ard.backends.api_client import ARDTimeoutError, ChatAPIClient
+from ard.backends.api_client import ARDTimeoutError, ChatAPIClient, ChatResponse
 from ard.core.quota import allocate_images
 from ard.core.sampler import generate_anchor_id
 from ard.core.types import AnchorSpec, GeneratedAnchor, TurnSpec
 from ard.domain.anchor_shape import message_shape_error
 from ard.domain.bank import append_anchor, read_anchor_bank
-from ard.domain.text_anchor import AnchorGenerationStats, generate_text_anchors
+from ard.domain.text_anchor import (
+    IMAGE_PART_TYPES,
+    AnchorGenerationStats,
+    generate_text_anchors,
+)
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+#: What a *non-final* target turn answers.  The final turn is the one that also
+#: carries the teacher's reasoning, so it is scripted separately below.
+_MID_TURN_REPLY = "an intermediate assistant reply"
+
+#: The final target turn of every scripted target client: a real answer, plus the
+#: reasoning trace that now lands in ``targets[0].output.reasoning``.
+_FINAL_ANSWER = "the final target answer"
+_FINAL_REASONING = "Step one: read the question. Step two: answer it."
+
+
+def _final_target_response(
+    content: str = _FINAL_ANSWER,
+    reasoning: str | None = _FINAL_REASONING,
+) -> ChatResponse:
+    """A final-turn response: answer and reasoning as two separate fields."""
+    return ChatResponse(content=content, reasoning=reasoning)
+
+
+def _scripted_chat_client(
+    content: str = _MID_TURN_REPLY,
+    final: ChatResponse | None = None,
+    *,
+    total_calls: int = 2,
+) -> MagicMock:
+    """A ``ChatAPIClient`` double whose last call is the one that answers.
+
+    ``chat()`` serves every assistant turn *and* the final answer, so the number
+    of calls depends on the spec.  This double distinguishes the two roles by
+    position: calls ``1..total_calls-1`` return *content* (intermediate assistant
+    replies) and call *total_calls* returns *final* — the response that carries
+    the teacher's reasoning.  Every spec exercised here has at most one
+    intermediate assistant turn, so ``total_calls`` is 1 or 2.
+    """
+    client = MagicMock(spec=ChatAPIClient)
+    chat_response = final if final is not None else _final_target_response()
+    state = {"seen": 0}
+
+    def _chat(messages: list[dict], temperature: float | None = None) -> ChatResponse:
+        state["seen"] += 1
+        if state["seen"] == total_calls:
+            return chat_response
+        return ChatResponse(content=content)
+
+    client.chat.side_effect = _chat
+    return client
 
 
 def _create_minimal_png(directory: Path, name: str = "test.png") -> Path:
@@ -138,16 +189,12 @@ class TestGenerateTextAnchors:
         spec = _make_single_turn_spec()
 
         mock_input = MagicMock(spec=ChatAPIClient)
-        mock_input.chat.return_value = "What is the capital of France?"
+        mock_input.chat.return_value = ChatResponse(content="What is the capital of France?")
 
-        mock_target = MagicMock(spec=ChatAPIClient)
-        mock_target.chat_with_logprobs.return_value = {
-            "content": "Paris is the capital of France.",
-            "logprobs": {
-                "token_ids": [1, 2, 3],
-                "log_probs": [-0.1, -0.2, -0.3],
-            },
-        }
+        mock_target = _scripted_chat_client(
+            total_calls=1,
+            final=_final_target_response("Paris is the capital of France."),
+        )
 
         results = generate_text_anchors(
             specs=[spec],
@@ -169,9 +216,10 @@ class TestGenerateTextAnchors:
         assert len(anchor.messages[0]["content"]) > 0
         assert anchor.target_answer == "Paris is the capital of France."
         assert len(anchor.target_answer) > 0
-        assert anchor.logprobs is not None
-        assert len(anchor.logprobs["token_ids"]) > 0
-        assert len(anchor.logprobs["log_probs"]) > 0
+        # The teacher's reasoning is persisted as its own field, never merged
+        # into the answer (§1.2 契约 2).
+        assert anchor.reasoning == _FINAL_REASONING
+        assert anchor.reasoning not in anchor.target_answer
 
     def test_multiturn(self) -> None:
         """A 3-turn spec produces ``UAU`` — one message per turn, ending with user.
@@ -181,29 +229,24 @@ class TestGenerateTextAnchors:
         old loop never read ``turn.role``, so it generated a user message for
         the assistant turn too and the final user turn became the second
         assistant reply.  The correct shape has one message per turn and the
-        final turn (which carries the logprobs) is a ``user`` turn.
+        final turn (which the target model answers) is a ``user`` turn.
         """
         spec = _make_multiturn_spec()
 
         mock_input = MagicMock(spec=ChatAPIClient)
         # Only the two *user* turns may ask the input generator for a message.
         mock_input.chat.side_effect = [
-            "What is machine learning?",
-            "How do transformers work?",
+            ChatResponse(content="What is machine learning?"),
+            ChatResponse(content="How do transformers work?"),
         ]
 
-        mock_target = MagicMock(spec=ChatAPIClient)
-        # The single *assistant* turn is answered by the target model.
-        mock_target.chat.side_effect = [
-            "Machine learning is a subset of AI.",
-        ]
-        mock_target.chat_with_logprobs.return_value = {
-            "content": "Transformers use self-attention mechanisms.",
-            "logprobs": {
-                "token_ids": [10, 20, 30],
-                "log_probs": [-0.1, -0.2, -0.3],
-            },
-        }
+        mock_target = _scripted_chat_client(
+            # The single *assistant* turn is answered by the target model.
+            content="Machine learning is a subset of AI.",
+            final=_final_target_response(
+                "Transformers use self-attention mechanisms."
+            ),
+        )
 
         results = generate_text_anchors(
             specs=[spec],
@@ -222,13 +265,13 @@ class TestGenerateTextAnchors:
         assert roles == ["user", "assistant", "user"]
         # Assistant turns must not be routed through the input generator.
         assert mock_input.chat.call_count == 2
-        assert mock_target.chat.call_count == 1
-        assert mock_target.chat_with_logprobs.call_count == 1
+        # The target model serves the assistant turn *and* the final answer.
+        assert mock_target.chat.call_count == 2
         # The assistant message really is the target model's reply
         assert anchor.messages[1]["content"] == "Machine learning is a subset of AI."
-        # Final turn has logprobs
-        assert anchor.logprobs is not None
+        # Final turn carries the answer and the reasoning, as two fields
         assert anchor.target_answer == "Transformers use self-attention mechanisms."
+        assert anchor.reasoning == _FINAL_REASONING
 
     def test_with_image_spec(self, tmp_path: Path) -> None:
         """``generate_text_anchors`` produces list-format content for turns with images."""
@@ -256,13 +299,11 @@ class TestGenerateTextAnchors:
         )
 
         mock_input = MagicMock(spec=ChatAPIClient)
-        mock_input.chat.return_value = "What do you see in this image?"
+        mock_input.chat.return_value = ChatResponse(content="What do you see in this image?")
 
-        mock_target = MagicMock(spec=ChatAPIClient)
-        mock_target.chat_with_logprobs.return_value = {
-            "content": "I see a red pixel.",
-            "logprobs": {"token_ids": [1], "log_probs": [-0.1]},
-        }
+        mock_target = _scripted_chat_client(
+            total_calls=1, final=_final_target_response("I see a red pixel.")
+        )
 
         results = generate_text_anchors(
             specs=[spec],
@@ -281,10 +322,10 @@ class TestGenerateTextAnchors:
         # Content should be a list (multimodal format) when an image is present
         assert isinstance(content, list)
         has_image = any(
-            isinstance(part, dict) and part.get("type") == "image_url"
+            isinstance(part, dict) and part.get("type") in IMAGE_PART_TYPES
             for part in content
         )
-        assert has_image, "content list should contain an image_url part"
+        assert has_image, "content list should contain an image part"
         has_text = any(
             isinstance(part, dict) and part.get("type") == "text"
             for part in content
@@ -317,13 +358,11 @@ class TestRoleDrivenGeneration:
         spec = _make_spec_with_n_turns(f"shape_{num_turns}", num_turns)
 
         mock_input = MagicMock(spec=ChatAPIClient)
-        mock_input.chat.return_value = "a user question"
-        mock_target = MagicMock(spec=ChatAPIClient)
-        mock_target.chat.return_value = "an assistant reply"
-        mock_target.chat_with_logprobs.return_value = {
-            "content": "the final target answer",
-            "logprobs": {"token_ids": [1, 2], "log_probs": [-0.1, -0.2]},
-        }
+        mock_input.chat.return_value = ChatResponse(content="a user question")
+        mock_target = _scripted_chat_client(
+            content="an assistant reply",
+            total_calls=2 if num_turns >= 3 else 1,
+        )
 
         results = generate_text_anchors(
             specs=[spec],
@@ -346,22 +385,21 @@ class TestRoleDrivenGeneration:
         assert message_shape_error(anchor.messages) is None
 
     def test_request_counts_for_three_turns(self) -> None:
-        """A 3-turn anchor costs 2 input calls + 1 assistant + 1 logprobs call.
+        """A 3-turn anchor costs 2 input calls + 1 assistant + 1 final-answer call.
 
-        The old loop spent 3 input calls and 2 non-logprobs target calls for the
-        same spec: one wasted request per anchor plus a structurally broken
-        conversation.
+        The old loop spent 3 input calls and 2 target calls for the same spec in
+        the wrong places: one wasted request per anchor plus a structurally
+        broken conversation.
         """
         spec = _make_spec_with_n_turns("counts_3", 3)
 
         mock_input = MagicMock(spec=ChatAPIClient)
-        mock_input.chat.side_effect = ["question one", "question two"]
-        mock_target = MagicMock(spec=ChatAPIClient)
-        mock_target.chat.return_value = "assistant reply"
-        mock_target.chat_with_logprobs.return_value = {
-            "content": "final target answer",
-            "logprobs": {"token_ids": [1], "log_probs": [-0.1]},
-        }
+        mock_input.chat.side_effect = [
+            ChatResponse(content="question one"), ChatResponse(content="question two")
+        ]
+        mock_target = _scripted_chat_client(
+            content="assistant reply", final=_final_target_response("final target answer")
+        )
 
         results = generate_text_anchors(
             specs=[spec],
@@ -374,8 +412,8 @@ class TestRoleDrivenGeneration:
 
         assert len(results) == 1
         assert mock_input.chat.call_count == 2, "one input call per user turn"
-        assert mock_target.chat.call_count == 1, "one target call per assistant turn"
-        assert mock_target.chat_with_logprobs.call_count == 1
+        # One target call per assistant turn + one for the final answer.
+        assert mock_target.chat.call_count == 2
         assert [m["role"] for m in results[0].messages] == ["user", "assistant", "user"]
 
     def test_assistant_turn_never_calls_input_client(self) -> None:
@@ -383,13 +421,10 @@ class TestRoleDrivenGeneration:
         spec = _make_spec_with_n_turns("no_input_for_assistant", 5)
 
         mock_input = MagicMock(spec=ChatAPIClient)
-        mock_input.chat.return_value = "a user question"
-        mock_target = MagicMock(spec=ChatAPIClient)
-        mock_target.chat.return_value = "an assistant reply"
-        mock_target.chat_with_logprobs.return_value = {
-            "content": "final target answer",
-            "logprobs": {"token_ids": [1], "log_probs": [-0.1]},
-        }
+        mock_input.chat.return_value = ChatResponse(content="a user question")
+        mock_target = _scripted_chat_client(
+            content="an assistant reply", final=_final_target_response("final target answer")
+        )
 
         generate_text_anchors(
             specs=[spec],
@@ -404,20 +439,19 @@ class TestRoleDrivenGeneration:
         user_turns = sum(1 for t in spec.turns if t.role == "user")
         assistant_turns = sum(1 for t in spec.turns if t.role == "assistant")
         assert mock_input.chat.call_count == user_turns == 3
-        assert mock_target.chat.call_count == assistant_turns == 2
+        # 2 assistant turns + the final answer.
+        assert mock_target.chat.call_count == assistant_turns + 1 == 3
 
     def test_timeout_on_assistant_turn_discards_anchor(self) -> None:
         """A timed-out turn abandons the anchor instead of leaving ``UAUU``."""
         spec = _make_spec_with_n_turns("timeout_assistant", 3)
 
         mock_input = MagicMock(spec=ChatAPIClient)
-        mock_input.chat.side_effect = ["question one", "question two"]
+        mock_input.chat.side_effect = [
+            ChatResponse(content="question one"), ChatResponse(content="question two")
+        ]
         mock_target = MagicMock(spec=ChatAPIClient)
         mock_target.chat.side_effect = ARDTimeoutError("timed out")
-        mock_target.chat_with_logprobs.return_value = {
-            "content": "final target answer",
-            "logprobs": {"token_ids": [1], "log_probs": [-0.1]},
-        }
 
         results = generate_text_anchors(
             specs=[spec],
@@ -432,17 +466,16 @@ class TestRoleDrivenGeneration:
         assert results == []
 
     def test_timeout_on_final_user_turn_discards_anchor(self) -> None:
-        """A timeout on the final (logprobs) turn discards the anchor."""
+        """A timeout on the final turn discards the anchor."""
         spec = _make_spec_with_n_turns("timeout_final", 3)
 
         mock_input = MagicMock(spec=ChatAPIClient)
-        mock_input.chat.side_effect = ["question one", ARDTimeoutError("timed out")]
-        mock_target = MagicMock(spec=ChatAPIClient)
-        mock_target.chat.return_value = "assistant reply"
-        mock_target.chat_with_logprobs.return_value = {
-            "content": "final target answer",
-            "logprobs": {"token_ids": [1], "log_probs": [-0.1]},
-        }
+        mock_input.chat.side_effect = [
+            ChatResponse(content="question one"), ARDTimeoutError("timed out")
+        ]
+        mock_target = _scripted_chat_client(
+            content="assistant reply", final=_final_target_response("final target answer")
+        )
 
         results = generate_text_anchors(
             specs=[spec],
@@ -460,13 +493,10 @@ class TestRoleDrivenGeneration:
         spec = _make_spec_with_n_turns("empty_user", 3)
 
         mock_input = MagicMock(spec=ChatAPIClient)
-        mock_input.chat.return_value = "   "
-        mock_target = MagicMock(spec=ChatAPIClient)
-        mock_target.chat.return_value = "assistant reply"
-        mock_target.chat_with_logprobs.return_value = {
-            "content": "final target answer",
-            "logprobs": {"token_ids": [1], "log_probs": [-0.1]},
-        }
+        mock_input.chat.return_value = ChatResponse(content="   ")
+        mock_target = _scripted_chat_client(
+            content="assistant reply", final=_final_target_response("final target answer")
+        )
 
         results = generate_text_anchors(
             specs=[spec],
@@ -525,13 +555,13 @@ class TestRoleDrivenGeneration:
         )
 
         mock_input = MagicMock(spec=ChatAPIClient)
-        mock_input.chat.side_effect = ["What is in this image?", "What about this one?"]
-        mock_target = MagicMock(spec=ChatAPIClient)
-        mock_target.chat.return_value = "A red pixel."
-        mock_target.chat_with_logprobs.return_value = {
-            "content": "Also a red pixel.",
-            "logprobs": {"token_ids": [1], "log_probs": [-0.1]},
-        }
+        mock_input.chat.side_effect = [
+            ChatResponse(content="What is in this image?"),
+            ChatResponse(content="What about this one?"),
+        ]
+        mock_target = _scripted_chat_client(
+            content="A red pixel.", final=_final_target_response("Also a red pixel.")
+        )
 
         results = generate_text_anchors(
             specs=[spec],
@@ -571,13 +601,10 @@ class TestRoleDrivenGeneration:
         output_path = tmp_path / "anchor_bank.jsonl"
 
         mock_input = MagicMock(spec=ChatAPIClient)
-        mock_input.chat.return_value = "a user question"
-        mock_target = MagicMock(spec=ChatAPIClient)
-        mock_target.chat.return_value = "an assistant reply"
-        mock_target.chat_with_logprobs.return_value = {
-            "content": "final target answer",
-            "logprobs": {"token_ids": [1], "log_probs": [-0.1]},
-        }
+        mock_input.chat.return_value = ChatResponse(content="a user question")
+        mock_target = _scripted_chat_client(
+            content="an assistant reply", final=_final_target_response("final target answer")
+        )
 
         generate_text_anchors(
             specs=[spec],
@@ -628,12 +655,8 @@ class TestRoleDrivenGeneration:
         ]
 
         mock_input = MagicMock(spec=ChatAPIClient)
-        mock_input.chat.return_value = "a user question"
-        mock_target = MagicMock(spec=ChatAPIClient)
-        mock_target.chat_with_logprobs.return_value = {
-            "content": "final target answer",
-            "logprobs": {"token_ids": [1], "log_probs": [-0.1]},
-        }
+        mock_input.chat.return_value = ChatResponse(content="a user question")
+        mock_target = _scripted_chat_client(total_calls=1)
 
         results = generate_text_anchors(
             specs=specs,
@@ -817,7 +840,7 @@ def _scripted_generate_text_anchors(**kwargs: object) -> list[GeneratedAnchor]:
         target_model="target-model",
         input_generator_model="input-model",
         anchor_meta={"language": "English", "knowledge_domain": "geography"},
-        logprobs={"token_ids": ["an"], "log_probs": [-0.1]},
+        reasoning="the plumbing test's reasoning trace",
     )
     # Offered twice on purpose: the second offer must hit the id gate.
     append_anchor(anchor, output_path)
@@ -836,9 +859,8 @@ class TestManifestGenerationReport:
     """``pipeline.run()`` must fold the generation counters into ``manifest.json``.
 
     The counters existed after WP-F2/F3 but nobody read them, so a run whose
-    anchors were all dropped (or whose log-probs were all empty) still produced a
-    healthy-looking manifest.  These tests freeze the wiring, not the counter
-    implementation.
+    anchors were all dropped still produced a healthy-looking manifest.  These
+    tests freeze the wiring, not the counter implementation.
     """
 
     def test_manifest_reports_written_and_abandoned(
@@ -905,7 +927,7 @@ class TestManifestGenerationReport:
             "id": "already_here",
             "source": "ard",
             "messages": [{"role": "user", "content": "q"}],
-            "targets": [{"id": "primary", "output": {"content": "a", "logprobs": {}}}],
+            "targets": [{"id": "primary", "output": {"content": "a", "reasoning": None}}],
             "anchor_meta": {"language": "English", "knowledge_domain": "math"},
             "teacher_id": "target-model",
         }
@@ -933,17 +955,23 @@ class TestManifestGenerationReport:
             "a missing generation report means 'not measured', never 'all zero'"
         )
 
-    def test_failure_counter_namespaces_never_overwrite(self) -> None:
-        """A tag shared by both counter families is renamed, not silently dropped."""
-        from ard.pipeline import _merge_failure_counters
+    def test_reasoning_failure_counters_reach_the_manifest(self) -> None:
+        """The reasoning/empty-content counters are published under ``failures``.
 
-        merged = _merge_failure_counters(
-            {"responses": 5, "empty_content": 2},
-            {"empty_content": 7, "key_missing": 1},
+        The counters that used to be merged from two families are now one, so
+        what matters is that the surviving family still reaches the manifest
+        unchanged — a run that lost answers to thinking must not look healthy.
+        """
+        from ard.domain.bank import with_generation_report
+
+        manifest: dict = {}
+        with_generation_report(
+            manifest,
+            stats={},
+            failures={"responses": 5, "empty_content": 2, "truncated_empty": 2},
         )
-        assert merged == {
+        assert manifest["generation"]["failures"] == {
             "responses": 5,
             "empty_content": 2,
-            "logprobs_empty_content": 7,
-            "key_missing": 1,
+            "truncated_empty": 2,
         }

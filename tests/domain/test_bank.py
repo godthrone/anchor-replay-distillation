@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from ard.domain.append_outcome import AppendOutcome
 from ard.domain.bank import (
-    AppendOutcome,
     anchor_to_dict,
     append_anchor,
     build_manifest,
@@ -20,7 +20,7 @@ from ard.domain.bank import (
 from ard.domain.anchor_shape import message_shape_error
 from ard.domain.text_anchor import build_input_prompt, build_target_prompt
 from ard.core.sampler import generate_anchor_id
-from ard.core.types import GeneratedAnchor, AnchorGenerationConfig
+from ard.core.types import DataSource, GeneratedAnchor, AnchorGenerationConfig
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -44,23 +44,80 @@ def _make_anchor(id="a", **kwargs):
 
 def test_anchor_to_dict_format():
     """anchor_to_dict produces the unified JSONL format."""
-    a = _make_anchor("test_001", logprobs={"token_ids": [1, 2], "log_probs": [-0.1, -0.2]})
+    a = _make_anchor("test_001", reasoning="six times seven is forty-two")
     d = anchor_to_dict(a)
     assert d["id"] == "test_001"
     assert d["source"] == "ard"
     assert d["messages"] == [{"role": "user", "content": "q"}]
     assert d["targets"][0]["id"] == "primary"
     assert d["targets"][0]["output"]["content"] == "answer"
-    assert d["targets"][0]["output"]["logprobs"] == {"token_ids": [1, 2], "log_probs": [-0.1, -0.2]}
+    assert d["targets"][0]["output"]["reasoning"] == "six times seven is forty-two"
     assert d["anchor_meta"] == {"knowledge_domain": "math", "language": "English", "capability": "qa"}
     assert d["teacher_id"] == "target"
 
 
-def test_anchor_to_dict_logprobs_none():
-    """anchor_to_dict fills empty logprobs when None."""
-    a = _make_anchor("a", logprobs=None)
+def test_anchor_to_dict_reasoning_is_null_when_absent():
+    """Without thinking the output carries ``reasoning: null`` — never ``""``."""
+    a = _make_anchor("a")
     d = anchor_to_dict(a)
-    assert d["targets"][0]["output"]["logprobs"] == {"token_ids": [], "log_probs": []}
+    assert d["targets"][0]["output"]["reasoning"] is None
+    # The two keys are distinct: content survives, reasoning is explicitly null.
+    assert d["targets"][0]["output"]["content"] == "answer"
+    assert "logprobs" not in d["targets"][0]["output"]
+
+
+def test_anchor_to_dict_reasoning_never_merged_into_content():
+    """``content`` and ``reasoning`` stay two separate keys (§1.2 契约 2).
+
+    Each key carries *exactly* its own source text: no concatenation in either
+    direction, and no key missing from the record.
+    """
+    reasoning = "step one; step two; the answer is 42"
+    a = _make_anchor("b", target_answer="42", reasoning=reasoning)
+    output = anchor_to_dict(a)["targets"][0]["output"]
+    assert output["content"] == "42", "the answer must not absorb the reasoning"
+    assert output["reasoning"] == reasoning, "the reasoning must not absorb the answer"
+
+
+def test_anchor_to_dict_persists_new_v3_fields():
+    """``data_source`` / ``schema_version`` / ``input_generator_model`` land
+    as top-level fields on the serialized record."""
+    a = _make_anchor(
+        "c",
+        input_generator_model="input-model",
+        # B3 tightened this field into the controlled vocabulary: the routing key
+        # is a DataSource member now, not an arbitrary string (W-1).
+        data_source=DataSource.ARD_MULTI,
+    )
+    d = anchor_to_dict(a)
+    assert d["data_source"] == "ard_multi"
+    assert d["schema_version"] == "3.0.0"
+    assert d["input_generator_model"] == "input-model"
+    assert d["teacher_id"] == "target"  # untouched sibling key
+
+
+def test_generated_anchor_rejects_off_vocabulary_data_source():
+    """A raw string outside the vocabulary cannot build an anchor (W-1)."""
+    with pytest.raises(ValueError, match="must be a DataSource"):
+        _make_anchor("c2", data_source="ard_multi")
+
+
+def test_anchor_to_dict_defaults_data_source_to_ard_text():
+    """A text-only anchor defaults to the ``ard_text`` routing key."""
+    d = anchor_to_dict(_make_anchor("d"))
+    assert d["data_source"] == "ard_text"
+    assert d["schema_version"] == "3.0.0"
+
+
+def test_persisted_record_carries_new_v3_fields(tmp_path):
+    """Every record written through the real persistence path carries the new
+    top-level fields, readable back from disk."""
+    path = tmp_path / "bank.jsonl"
+    append_anchor(_make_anchor("e", input_generator_model="pin-model"), path)
+    records = read_anchor_bank(path)
+    assert records[0]["data_source"] == "ard_text"
+    assert records[0]["schema_version"] == "3.0.0"
+    assert records[0]["input_generator_model"] == "pin-model"
 
 
 # ── Bank ────────────────────────────────────────────────────────────────────
@@ -163,6 +220,106 @@ def test_message_shape_error_rejects_uauau_and_uauu():
 
     assert message_shape_error([]) is not None
     assert message_shape_error([{"role": "assistant", "content": "a"}]) is not None
+
+
+# ── v3.0.0 D1: optional single leading ``system`` ───────────────────────────
+
+
+def _with_system(messages, content="You are a helpful assistant."):
+    """Prepend a single leading ``system`` message (D1, position 0)."""
+    return [{"role": "system", "content": content}, *messages]
+
+
+def test_message_shape_error_accepts_optional_leading_system():
+    """A single leading ``system`` is allowed for U, UAU and UAUAU (D1)."""
+    assert message_shape_error(_with_system([{"role": "user", "content": "q"}])) is None
+    assert message_shape_error(_with_system(_uau_messages())) is None
+    assert message_shape_error(
+        _with_system(
+            [
+                {"role": "user", "content": "q1"},
+                {"role": "assistant", "content": "a1"},
+                {"role": "user", "content": "q2"},
+                {"role": "assistant", "content": "a2"},
+                {"role": "user", "content": "q3"},
+            ]
+        )
+    ) is None
+
+
+def test_message_shape_error_rejects_system_not_in_first_position():
+    """A ``system`` message anywhere but position 0 is explicitly refused."""
+    misplaced = [
+        {"role": "user", "content": "q"},
+        {"role": "system", "content": "late system"},
+    ]
+    err = message_shape_error(misplaced)
+    assert err is not None
+    assert "system" in err and "first" in err
+
+    # Behind an assistant/earlier slot: also refused.
+    mid = [
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "content": "a1"},
+        {"role": "system", "content": "mid system"},
+        {"role": "user", "content": "q2"},
+    ]
+    assert message_shape_error(mid) is not None
+
+
+def test_message_shape_error_rejects_multiple_system_messages():
+    """More than one ``system`` message is refused (D1: at most one)."""
+    dup = [
+        {"role": "system", "content": "s1"},
+        {"role": "system", "content": "s2"},
+        {"role": "user", "content": "q"},
+    ]
+    err = message_shape_error(dup)
+    assert err is not None
+    assert "at most one" in err
+
+
+def test_message_shape_error_rejects_system_only_and_system_after_strip_invalid():
+    """A bare ``system`` (nothing to strip to) is refused; so is a system
+    followed by a non-alternating conversation."""
+    assert message_shape_error([{"role": "system", "content": "only"}]) is not None
+    # system + [user, user] must still fail the alternation contract.
+    non_alt = _with_system(
+        [
+            {"role": "user", "content": "q1"},
+            {"role": "user", "content": "q2"},
+        ]
+    )
+    err = message_shape_error(non_alt)
+    assert err is not None
+    assert "alternate" in err
+
+
+def test_append_anchor_accepts_leading_system(tmp_path):
+    """The persistence gate writes a conversation opened by a ``system``."""
+    path = tmp_path / "bank.jsonl"
+    outcome = append_anchor(
+        _make_anchor("sys-ok", messages=_with_system(_uau_messages())),
+        path,
+    )
+    assert outcome is AppendOutcome.APPENDED
+    records = read_anchor_bank(path)
+    assert len(records) == 1
+    roles = [m["role"] for m in records[0]["messages"]]
+    assert roles == ["system", "user", "assistant", "user"]
+
+
+def test_append_anchor_rejects_misplaced_system(tmp_path):
+    """A non-leading ``system`` is refused by the real persistence gate."""
+    path = tmp_path / "bank.jsonl"
+    misplaced = [
+        {"role": "user", "content": "q1"},
+        {"role": "system", "content": "late"},
+        {"role": "user", "content": "q2"},
+    ]
+    outcome = append_anchor(_make_anchor("sys-bad", messages=misplaced), path)
+    assert outcome is AppendOutcome.INVALID_SHAPE_SKIPPED
+    assert count_existing_anchors(path) == 0
 
 
 def test_append_anchor_accepts_valid_shape(tmp_path):

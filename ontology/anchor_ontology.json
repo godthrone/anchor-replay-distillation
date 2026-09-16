@@ -356,6 +356,50 @@
       "structured_response"
     ]
   },
+  "system_prompt_presence": [
+    "none",
+    "present"
+  ],
+  "system_prompt_style": {
+    "minimal_persona": {
+      "description": "一句话人格：只给对话定一个角色身份，不附加格式或领域约束",
+      "instruction": "Write ONE short sentence (a single clause) that only gives the assistant a role identity, and nothing else. Do not mention output format, length or domain expertise.",
+      "anchor_concepts": [
+        "qa",
+        "explanation"
+      ]
+    },
+    "detailed_persona": {
+      "description": "详细人格：角色身份 + 背景/经验与行为倾向，若干句",
+      "instruction": "Write a detailed persona: the assistant's role, its background or experience, and how it behaves. Use two to four sentences. Do not impose output-format or length constraints.",
+      "anchor_concepts": [
+        "explanation",
+        "critique",
+        "reasoning",
+        "creative_writing"
+      ]
+    },
+    "task_constraint": {
+      "description": "任务约束型：格式、语言、长度、必须/禁止项等硬约束",
+      "instruction": "Write a task-constraint system prompt: state output-format, language, length and must-do / must-not-do rules. Use two to four sentences and keep the wording imperative.",
+      "anchor_concepts": [
+        "structured_response",
+        "extraction",
+        "summarization"
+      ]
+    },
+    "domain_style": {
+      "description": "领域风格型：与本次对话的 knowledge_domain / capability 呼应的专业风格设定",
+      "instruction": "Write a domain-style system prompt that fits the assistant's professional field and working style for this specific task. Use two to four sentences. Do not repeat domain names mechanically.",
+      "anchor_concepts": [
+        "coding",
+        "debugging",
+        "data_analysis",
+        "math_solving",
+        "planning"
+      ]
+    }
+  },
   "conversation_types": {
     "single_turn": [
       "single_turn"
