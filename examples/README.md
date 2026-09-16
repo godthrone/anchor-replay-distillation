@@ -1,8 +1,11 @@
 # Examples
 
 Everything in this directory is **real pipeline output** — nothing here is
-hand-written or trimmed. It is checked in so you can understand what ARD
-produces without spending GPU time or needing an API endpoint.
+hand-written or re-worded. `anchor_bank.sample.jsonl` is a representative subset
+of the records written by a real v3.0.0 run (every line is copied from the run's
+bank byte for byte), and `manifest.sample.json` is the manifest format that run
+writes next to it. They are checked in so you can understand what ARD produces
+without spending GPU time or needing an API endpoint.
 
 ## Contents
 
@@ -10,22 +13,25 @@ produces without spending GPU time or needing an API endpoint.
 |------|------------|
 | `anchor_bank.sample.jsonl` | 6 real anchors, one JSON object per line |
 | `manifest.sample.json` | The manifest a real run writes next to the anchor bank |
-| `images/` | 10 small JPEGs (400×267) — the exact images used to produce the sample records |
+| `images/` | 10 small JPEGs (400 px wide); the sample records reference `sample_04` / `sample_05` / `sample_10` |
 
-The sample covers both conversation shapes and four languages:
+The six records are **verbatim lines** taken from a real 100-anchor v3.0.0 run
+(60 text anchors + 40 multimodal anchors), picked to cover both `data_source`
+buckets, all four languages and both legal `reasoning` forms:
 
-| # | Shape | Language | Images | Knowledge domain |
-|---|-------|----------|:---:|------------------|
-| 1 | `U` | 日本語 | 1 | art_aesthetics |
-| 2 | `U` | 日本語 | 1 | medicine_health |
-| 3 | `U` | Español | 1 | software_engineering |
-| 4 | `UAU` | 日本語 | 2 | religion_myth_folklore |
-| 5 | `UAU` | Español | 2 | finance_economics |
-| 6 | `UAU` | 简体中文 | 2 | esoterica_belief_systems |
+| # | Record id | `data_source` | Language | Shape | Image | `reasoning` | Knowledge domain | Capability | System prompt |
+|---|-----------|---------------|----------|-------|:---:|-------------|------------------|------------|---------------|
+| 1 | `anchor_a99c98644ad956bd` | `ard_text` | 日本語 | `U` | – | `str` | art_aesthetics | translation | `none` |
+| 2 | `anchor_d72eae87804663f4` | `ard_text` | 简体中文 | `SU` | – | `str` | esoterica_belief_systems | uncertainty_handling | `task_constraint` |
+| 3 | `anchor_776f2287038b7d0b` | `ard_text` | English | `SU` | – | `null` | medicine_health | decision_analysis | `domain_style` |
+| 4 | `anchor_110374c8f9fd3138` | `ard_multi` | 日本語 | `U` | 1 | `str` | future_speculation | translation | `none` |
+| 5 | `anchor_da3b5e8e8c0a8e9e` | `ard_multi` | Español | `SU` | 1 | `str` | software_engineering | translation | `task_constraint` |
+| 6 | `anchor_bffd29da463224ed` | `ard_multi` | English | `SU` | 1 | `str` | agent_tool_use | decision_analysis | `domain_style` |
 
-`U` = single-turn anchor (one user question, one teacher answer).
-`UAU` = three-turn anchor (user → assistant → user, with the teacher answering
-the final user turn).
+`U` = one user turn; `SU` = a `system` persona turn followed by the user turn.
+This language / domain mix is simply **what that run happened to draw** — the
+ontology holds far more combinations than six records can show (see
+[How the sample was drawn](#how-the-sample-was-drawn)).
 
 ## The record schema
 
@@ -33,18 +39,17 @@ Each line of `anchor_bank.sample.jsonl` is one anchor:
 
 ```jsonc
 {
-  "id": "anchor_63df9a95c23c7e30",   // deterministic: sha256 of the 4 sampled dimensions
-  "source": "ard",                   // dataset tag, matches the graspo anchor-bank format
+  "id": "anchor_a99c98644ad956bd",   // sha256 over the 5 sampled dimensions (see below)
+  "source": "ard",                   // dataset tag, matches the ARD anchor-bank format
+  "data_source": "ard_text",         // controlled vocabulary: ard_text | ard_multi
+  "schema_version": "3.0.0",         // the record format version — same for every record
   "messages": [ /* the conversation, see below */ ],
   "targets": [
     {
       "id": "primary",
       "output": {
         "content": "…the teacher's answer…",
-        "logprobs": {
-          "token_ids": ["ユーザー", "は", "画像", "に", "写", …],
-          "log_probs": [-0.00811, -0.00927, -0.00010, …]
-        }
+        "reasoning": "…the teacher's reasoning (or null)…"
       }
     }
   ],
@@ -52,27 +57,46 @@ Each line of `anchor_bank.sample.jsonl` is one anchor:
     "language": "日本語",
     "knowledge_domain": "art_aesthetics",
     "capability": "translation",
-    "conversation_type": "…",
-    "has_image": true,
-    "image_count": 1
+    "conversation_type": "constraint_update_4_turn",  // a style label, not a turn count
+    "system_prompt_presence": "none",                 // none | present
+    "system_prompt_style": "none",                    // none + 4 persona styles
+    "system_prompt_mode": "none",                     // the 5th sampled dimension
+    "has_image": true,                                // multimodal records only
+    "image_count": 1                                  // multimodal records only
   },
-  "teacher_id": "latest"             // the teacher model name you configured
+  "input_generator_model": "…",       // the generator that produced the user messages
+  "teacher_id": "…"                   // the teacher (target) model that answered
 }
 ```
 
+`data_source` is **per record**, not per run: an `ard_multi` record is one whose
+conversation carries at least one image, and a bank can hold both kinds side by
+side (the sample does — three of each). Downstream routes on this key, so it is
+a closed vocabulary rather than a free-form string.
+
 ### `messages` — the shape invariant
 
-`messages` obeys a hard invariant: it **starts with a `user` turn**, **ends
-with a `user` turn**, and roles **strictly alternate**. Because only odd turn
-counts can satisfy that, the legal shapes are:
+Once an optional leading `system` message is stripped, `messages` must **start
+with a `user` turn**, **end with a `user` turn**, and **alternate roles
+strictly**. Because only odd turn counts can satisfy that, the legal conversation
+shapes are:
 
 ```
 U   UAU   UAUAU   UAUAUAU   …
 ```
 
+plus the `system`-prefixed form (at most one `system`, and only at position 0 —
+the array is the single source of truth for the persona prompt, which is what
+the `SU` entries in the table above are):
+
+```
+SU   SUAU   SUAUAU   …
+```
+
 Anything else (`UAUAU` is *not* three turns — it is five, ending on a `user` turn
 with no answer) is rejected before it is written: the writer validates the shape
-and refuses to persist a malformed record, logging it instead.
+and refuses to persist a malformed record, logging it instead. All six records
+here pass that gate.
 
 A multimodal user turn looks like this:
 
@@ -80,7 +104,7 @@ A multimodal user turn looks like this:
 {
   "role": "user",
   "content": [
-    { "type": "image", "image": "images/sample_02.jpg" },   // relative path
+    { "type": "image", "image": "images/sample_04.jpg" },   // relative path
     { "type": "text",  "text": "…the generated user question…" }
   ]
 }
@@ -92,48 +116,57 @@ files are copied there during the run. The `images/` in this directory are the
 same files, so the paths above resolve if you point your own run at
 `--image-dir examples/images`.
 
-### `targets[0].output.logprobs`
+### `targets[0].output` — `content` and `reasoning`
 
-This is the point of the dataset: the teacher's **token-level** log-probabilities
-for its own answer, which downstream on-policy distillation uses as the
-supervision signal.
+This is the point of the dataset: the teacher's **reasoning text**, kept beside
+its own answer. The two live in separate keys on purpose:
 
-- `token_ids` and `log_probs` are **parallel arrays of equal length**.
-- `token_ids` holds **string tokens** (e.g. `"ユーザー"`), not integer IDs — that
-  is what the OpenAI-compatible API returns. Integer IDs are not available from
-  every server, and string tokens are portable across tokenizers.
-- `log_probs` are negative floats, one per token of `content`.
+- `content` — the teacher's answer to the final user turn.
+- `reasoning` — the teacher's thinking chain, a plain `str | null`. It is `null`
+  (never `""`) when the teacher did not think, i.e. when the target model ran
+  with `enable_thinking = false`; record #3 above is such a case, records #1, #2
+  and #4–#6 carry a non-empty string. Thinking is not the answer, so it is never
+  merged into `content`.
 
-If a run cannot obtain log-probs for an anchor, it **does not silently write an
-empty array** — it raises and the anchor is discarded and counted (see
-`generation.failures` in the manifest).
+If a run cannot obtain `reasoning` for an anchor whose configuration asked for
+it, **it does not silently write an empty value** — the anchor is discarded and
+counted (see `generation.failures` in the manifest).
 
 ## `manifest.sample.json`
 
 A real run also writes a manifest next to the anchor bank. Read it to answer
 "did this run actually produce healthy data?":
 
-- `total_anchors`, `domains`, `languages`, `capabilities` — the produced mix.
+- `total_anchors`, `domains`, `languages`, `capabilities`,
+  `system_prompt_modes`, `data_sources` — the produced mix, tallied with the
+  same breakdown function the run itself uses.
 - `generation.counters` — what happened to every requested anchor:
   `requested` / `succeeded` / `abandoned_total` / `abandoned_by_reason` /
-  `written` (plus `rejected_invalid_shape` and `duplicate_ids` when non-zero).
-- `generation.failures` — process-level failure counters, e.g. log-prob
-  failures by reason, and `empty_content` / `truncated_empty` (the teacher spent
-  its whole token budget on reasoning and produced no answer).
+  `written` (plus `rejected_invalid_shape`, `rejected_invalid_data_source`,
+  `duplicate_ids` and `backpressure_events` when non-zero).
+- `generation.failures` — process-level failure counters, e.g. reasoning /
+  empty-content failures by reason (`responses`, `empty_content`,
+  `reasoning_only_responses`, `truncated_empty`) — the teacher spent its whole
+  token budget on reasoning and produced no answer.
 
 > **Zero-valued counters are dropped**, so a perfectly healthy run may omit
 > `generation` entirely. **An empty `generation: {}` is the anomaly, not the
-> absence of the key.** The sample file was scaled down to the 6 records here;
-> the numbers come from a real 100-anchor run.
+> absence of the key.**
 
 The file's field set is identical to a real manifest's, with **one deliberate
 omission**: a real manifest also embeds the fully merged runtime config under
 `config`, which contains your endpoint and model names. That section is left out
-here so the sample carries no deployment details. Everything else — including
-the `generation` health counters — is verbatim.
+here so the sample carries no deployment details.
+
+Two numbers are scaled to this 6-record file, everything else is verbatim: the
+composition breakdown at the top (`total_anchors` and the five tallies) is
+recomputed over the six records here, and `output_dir` is the placeholder a real
+run replaces with its own output directory. The `generation` block is the health
+accounting of the underlying **100-anchor** run verbatim — its `written` total
+(100) is therefore larger than `total_anchors` (6).
 
 
-## Reproducing these samples
+## How the sample was drawn
 
 ```bash
 # from the repository root
@@ -142,29 +175,44 @@ bash run.sh --config configs/config.toml \
     --image-dir examples/images
 ```
 
-**Sampling is deterministic, but the selection depends on how many anchors you
-ask for.** The farthest-point sampler spreads the requested budget across the
-whole ontology, so a run with `target_count = 100` picks a different set of
-combinations than a run with `target_count = 6` — and both are reproducible.
+### The combination space
 
-Concretely: the six records here came from a 100-anchor run
-(`seed = 42`, `max_turns = 3`, `max_turns_with_image = 3`, `concurrency = 4`).
-To get the *same* six back you must reproduce that run and then look at the
-ids `anchor_63df9a95c23c7e30`, `anchor_7529dd0bdb69bed4`,
-`anchor_707a3ca861b71d36`, `anchor_30093dde3d79e005`,
-`anchor_05dcfa350411fd72`, `anchor_93600c7ec174bfb8`
-(they are at positions 1, 43, 19, 83, 69, 98 of that run).
+An anchor is sampled on **5 dimensions** from `ontology/anchor_ontology.json`:
+`language` × `knowledge_domain` × `capability` × `conversation_type` ×
+`system_prompt_mode` (the system prompt became a sampling dimension in v3.0.0).
+For the ontology shipped in this release that is:
 
-If you only want a fast look at the format, run a small `target_count` with the
-same `seed` — you will get valid anchors of the same shape, just a different
-subset of the ontology.
+**18 × 20 × 4 × 7 × 5 = 50,400 combinations** — and **100,800** when the
+multimodal form is counted separately for every combination (`ard_multi` /
+`ard_text`, i.e. whether the anchor carries an image).
 
-The one thing that is stable for a fixed `(seed, target_count, max_turns)` tuple
-is the anchor **ids**, because an id is a hash of the sampled dimensions:
+The sampler spreads `target_count` as far as it can across that space, so a run
+asking for 100 anchors and a run asking for 6 anchors draw **different**
+subsets: the budget decides where the sample lands, not just how much of it you
+see.
+
+### `seed` — what it does and does not pin
+
+`seed` is optional in `[generation]`:
+
+- **Omitted (the default) → every run draws a fresh seed** from the system
+  random source, so two runs of the same config sample independently.
+- **Set to an integer → that run's sampling order is pinned.** The value that
+  was actually used is recorded in `<output_dir>/config.json`, so a run can
+  always be traced back to the draw it used.
+
+An anchor **id**, by contrast, is a deterministic function of the sampled
+dimensions — it carries no seed and no run identity:
 
 ```
-id = "anchor_" + sha256("<language>|<knowledge_domain>|<capability>|<conversation_type>")[:16]
+id = "anchor_" + sha256("<language>|<knowledge_domain>|<capability>|<conversation_type>|<system_prompt_mode>")[:16]
 ```
+
+So the same combination always hashes to the same id, whenever it is drawn, and
+two runs can legitimately contain records with the same id but different
+conversations (the teacher's answers differ from run to run). The ids in the
+table above were re-derived from their own `anchor_meta` while writing this
+README, so they are a working example of that formula.
 
 ### ⚠️ `conversation_type` is an ontology label, not the actual turn count
 
