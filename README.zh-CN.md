@@ -178,10 +178,10 @@ ARD 采用**分层 TOML 配置**模型。有两个配置文件：
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `target_count` | int | `100` | 目标锚点数量。能力维度是覆盖短板：单次运行约覆盖 30% 的能力，且随 `target_count` 上升缓慢（见[常见问题](#推荐的目标数量是多少)） |
+| `target_count` | int | `100` | 目标锚点数量。能力维度是覆盖短板：单次运行约覆盖 30% 的能力（**单 seed 实测，该比例随 seed 波动**），且随 `target_count` 上升缓慢（见[常见问题](#推荐的目标数量是多少)） |
 | `seed` | int | *省略 → 随机* | 采样种子。省略则每轮取一个新的随机种子；显式设为整数固定该轮的采样顺序 |
 | `concurrency` | int | `4` | 并发请求数，过高可能触发限流 |
-| `languages` | list | `[]` | 语言过滤（空=全部）。可选：`zh-CN`, `en`, `ja`, `ko` |
+| `languages` | list | `[]` | 语言过滤（空=全部）。取值必须与本体**精确匹配**：`English`、`简体中文`、`Español`、`日本語` |
 | `task_types` | list | `[]` | 任务类型过滤（空=全部） |
 | `max_turns` | int | `1` | 最大对话轮数（1=单轮，2-10=多轮） |
 | — | — | — | 系统提示词不再是配置开关：由本体采样决定（`system_prompt_presence` / `system_prompt_style`），带 system 的锚点其文本在运行时生成并写入 `messages[0]` |
@@ -271,7 +271,10 @@ outputs/<dataset_name>/
 ```
 
 * `counters` —— 每条被请求的 anchor 的归宿：产出、落盘、被放弃（含机器可读原因）、
-  被消息形状门拦下、被 id 去重拦下，以及触发背压冷却的次数。
+  被消息形状门拦下、被 `data_source` 词表门拦下、被 id 去重拦下，以及触发背压冷却的次数。
+  完整键集为 `requested` / `succeeded` / `abandoned_total` / `abandoned_by_reason` /
+  `written` / `rejected_invalid_shape` / `rejected_invalid_data_source` /
+  `duplicate_ids` / `backpressure_events`（零值条目被丢弃）。
   `abandoned_by_reason` 的键就是代码实际记录的标签，例如服务端不稳定类的
   `timeout` / `transport_error`，模型输出类的 `empty_content`、
   `answer_too_short` / `answer_too_long`、`invalid_shape`、`role_mismatch`、
@@ -284,6 +287,16 @@ outputs/<dataset_name>/
 
 两个子对象**只在非空时写出**，且**零值条目被丢弃**——健康的一轮不会因为新增字段多出噪音，
 而不健康的一轮**不可能**看起来健康。
+
+**如何读日志行：这些计数器不是"只算教师端"。** 生成结束时 ARD 会打印
+`Target model reasoning stats: N response(s), M with reasoning …`，但它背后的计数器
+（`responses` / `reasoning_responses` / `reasoning_chars` / …）是**模块级、由所有走流式的
+客户端共享**的：它记录的是锚点生成期间的增量，因此**同时包含输入生成器（出题）与目标模型
+（作答）的完成数**。所以一个目标模型每次作答都带思考的运行，仍可能读到
+`378 response(s)` 中只有 `149 with reasoning`——其余是输入生成器的响应，它们只返回正文。
+manifest 里的 `generation.failures` 报告的是同一批计数器，口径相同。若要单独判断**教师端**，
+请依据记录自身的 reasoning 字段（`targets[0].output.reasoning`），或让输入生成器也开启思考；
+仅凭这行日志无法把计数归给某一个模型。
 
 `generation` 的子对象的键就是代码实际记录的计数器；上面的示例取自该集合
 （`generation.counters` 的字段见 `AnchorGenerationStats.to_manifest_dict`，
@@ -303,10 +316,19 @@ v3 写出的 manifest 顶层还会带 `system_prompt_modes` 与 `data_sources`�
 `U` 或 `UAU`（落盘前强制校验——违反者被拒绝并计入 `rejected_invalid_shape`）。
 完整真实记录见 `examples/anchor_bank.sample.jsonl`。
 
-**单次运行 = 单个 `data_source`。** 同一轮产出的每条记录携带同一个
+**单次运行 = 单个 `data_source`。** 一轮写出的每条记录携带同一个
 `data_source`：不带 `--image-dir` 时为 `ard_text`，带 `--image-dir` 时为
-`ard_multi`（目录中没有可用图片时整轮退化为文本）。文本锚点与多模态锚点
-**不会混在同一个 bank 里**——两种模式分两次运行，各得一个 `anchor_bank.jsonl`。
+`ard_multi`。这是代码级结构保证，不是约定。注意它是**按运行而非按文件**：
+两次运行若共用同一个输出目录，两种形态会落进同一个 bank（见下方续跑边界），
+因此要跑两种形态请使用**独立的输出目录**，各得一个 `anchor_bank.jsonl`。
+另有两种情况即使传了 `--image-dir` 也全为 `ard_text`：图片目录中没有可用图片，
+或 `max_turns_with_image = 0` 完全关掉了图片轮。
+
+**边界——续跑（resume）可能让同一个 bank 混装两种形态。** 续跑会把后一次运行
+产出的记录追加到前一次写出的 bank 里。若 run 1 写了 `ard_text`，run 2 带
+`--image-dir` 续跑同一目录，该 `anchor_bank.jsonl` 就会同时含两种 `data_source`。
+**因此消费端必须以记录级 `data_source` 为路由键，不得按 bank 级假设单一取值。**
+
 anchor id 由五维元数据哈希得到，因此只在**单次运行内唯一**，跨 run 不承诺唯一：
 合并多个 bank 时，不要期望一个 id 能全局标识一条记录。
 
@@ -496,11 +518,30 @@ bash run.sh --config configs/config.toml --override .local/config.override.toml 
 ARD 自动从上次已完成的锚点恢复。只需重新运行相同的命令——流水线会检测
 `anchor_bank.jsonl` 中已有的锚点，只生成剩余数量以达到 `target_count`。
 
+### 已知行为边界
+
+以下两个行为是**如实记录**而非已修复的缺陷。它们都是当前设计的后果，也都**不改变**
+`data_source` / `id` 字段的含义。
+
+**1. 续跑不保证补满 `target_count`。** 续跑按行数差额重采样
+（`remaining = target_count - existing_count`），而 anchor **id** 只由五个采样维度哈希而来
+——既不含 seed 也不含运行身份。因此**同一个 seed** 下，续跑会沿同一采样顺序再次抽到 bank
+里已有的组合，这些记录被 id 门拦下并计入 `duplicate_ids`（bank 侧的 `duplicate_skipped`），
+bank 可能停在 `target_count` **之下**。实测：bank 已有 60 条、请求再补 40 条，实际只写入
+5 条，终值 65。默认 `seed`（省略 → 每轮取新随机种子）每次抽的是新组合，通常可正常补满；
+显式固定 seed 时该现象更明显。重复运行**不会破坏** bank，只是可能不会让它变大。若必须补满，
+请以未设置的 seed 续跑，或删除 bank 并用 `output.overwrite = true` 重新生成。
+
+**2. v3 修复前的历史产物可能把图片记录标错。** 早期版本存在一个 bug：会把对话中确实含图片的
+记录写成 `data_source = "ard_text"`（或 `anchor_meta` 中缺 `has_image` 键）。这些目录
+**不在 git 内**——它们是 `.gitignore` 下的本地 `outputs/` 产物。消费旧产物前请逐条核实：
+把 `data_source` 与 `messages` 中是否真含图片部分对照检查；否则请用当前版本重新生成该 bank。
+
 ### 多模态锚点的多样性从哪里来？
 
 多模态锚点的多样性来自三个独立来源：
 
-1. **Ontology 多样性**（FPS 保证）：FPS 采样器从 50,400 个本体组合中选出
+1. **Ontology 多样性**（FPS 促成）：FPS 采样器从 50,400 个本体组合中选出
    最优锚点规格，元数据（语言/知识域/能力/会话类型/system prompt 模式）参与锚点
    采样，其中语言/能力/会话类型会写进 VLM prompt，从而促成 prompt 多样性——
    即使图片池单一，语言、能力、会话类型不同时 VLM 拿到的指令也不同。注意这
@@ -531,9 +572,14 @@ ARD 自动从上次已完成的锚点恢复。只需重新运行相同的命令�
 ### 多模态锚点和文本锚点的比例怎么控制？
 
 当前是**二选一开关**：提供 `--image-dir` 则生成多模态锚点，不提供则生成纯文本锚点。
-如需混合比例（如 30% 图片 + 70% 纯文本），需要运行两次并手动合并输出：
-一次不带 `--image-dir` 生成纯文本锚点，一次带 `--image-dir` 生成多模态锚点，
-然后合并两个 `anchor_bank.jsonl` 文件。
+如需混合比例（如 30% 图片 + 70% 纯文本），请**运行两次**——一次不带 `--image-dir`
+生成纯文本锚点，一次带 `--image-dir` 生成多模态锚点——并让两次运行**各用独立的
+`output_dir`**。**不要**把第二次运行指向第一次的输出目录：续跑会追加到已有 bank，
+从而把两种 `data_source` 混在同一个文件里（见**数据格式**）。
+
+能保持两个 bank 各自独立就最好：这样每个文件都仍然满足"单次运行 = 单个 `data_source`"。
+若确实需要合并成单一文件，技术上可行，但**不建议作为默认做法**——因为消费端此后必须按
+**记录级** `data_source` 字段路由，不得假设整个 bank 只含一种取值。
 
 ### 推荐的目标数量是多少？
 

@@ -194,10 +194,10 @@ roles downstream frameworks talk about:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `target_count` | int | `100` | Target number of anchors. The capability dimension is the coverage weak point: a single run covers roughly 30% of the capabilities, and it grows slowly with `target_count` (see the [FAQ](#what-is-the-recommended-target-count)) |
+| `target_count` | int | `100` | Target number of anchors. The capability dimension is the coverage weak point: a single run covers roughly 30% of the capabilities (**single-seed measurement — the figure fluctuates with the seed**), and it grows slowly with `target_count` (see the [FAQ](#what-is-the-recommended-target-count)) |
 | `seed` | int | *unset → random* | Sampling seed. Unset = a fresh seed each run; set an integer to pin that run's sampling order |
 | `concurrency` | int | `4` | Concurrent requests; too high may trigger rate limits |
-| `languages` | list | `[]` | Language filter (empty = all). Options: `zh-CN`, `en`, `ja`, `ko` |
+| `languages` | list | `[]` | Language filter (empty = all). Values must match the ontology **exactly**: `English`, `简体中文`, `Español`, `日本語` |
 | `task_types` | list | `[]` | Task type filter (empty = all) |
 | `max_turns` | int | `1` | Max conversation turns (1 = single-turn, 2-10 = multi-turn) |
 | — | — | — | The system prompt is no longer a config switch: the ontology samples it (`system_prompt_presence` / `system_prompt_style`), and each anchor that has one gets its text generated at run time and stored in `messages[0]` |
@@ -288,7 +288,11 @@ Besides the anchor-bank summary (`total_anchors` / `domains` / `languages` /
 
 * `counters` — where every requested anchor ended up: produced, written, dropped
   (with its machine-readable reason), rejected by the message-shape gate,
-  de-duplicated by id, and how many backpressure cooldowns were triggered.
+  rejected by the `data_source` vocabulary gate, de-duplicated by id, and how
+  many backpressure cooldowns were triggered. The full key set is `requested` /
+  `succeeded` / `abandoned_total` / `abandoned_by_reason` / `written` /
+  `rejected_invalid_shape` / `rejected_invalid_data_source` / `duplicate_ids` /
+  `backpressure_events` (zero-valued entries are dropped).
   `abandoned_by_reason` is keyed by the tag the code actually records — e.g.
   `timeout` / `transport_error` for server instability, `empty_content`,
   `answer_too_short` / `answer_too_long`, `invalid_shape`, `role_mismatch`,
@@ -303,6 +307,21 @@ Besides the anchor-bank summary (`total_anchors` / `domains` / `languages` /
 
 Both sub-objects are written **only when non-empty**, and zero-valued entries are
 dropped, so a healthy run gains no noise and an unhealthy one cannot look healthy.
+
+**Reading the log line: these counters are not target-only.** ARD logs
+`Target model reasoning stats: N response(s), M with reasoning …` at the end of
+anchor generation, but the counters behind it (`responses` /
+`reasoning_responses` / `reasoning_chars` / …) are **module-level and shared by
+every client that streams**: they are a delta across anchor generation, so they
+count the **Input Generator's user-question completions and the Target Model's
+answers together**. A run whose target model has thinking on for every answer
+can therefore still read `149 … with reasoning` out of `378 response(s)` — the
+remaining responses are the Input Generator's, which answer with plain content.
+The `generation.failures` object in the manifest reports the same counters, so
+it carries the same scope. To judge the *target* side alone, rely on the
+reasoning fields of the records themselves (`targets[0].output.reasoning`) or
+ask for an Input Generator that thinks; the log line alone cannot attribute
+counts to one model.
 
 The `generation` sub-objects are keyed by the counters the code actually
 records; the examples above are drawn from that set (`generation.counters`
@@ -326,14 +345,26 @@ compatible with graspo. Multi-turn anchors always start **and** end with a
 and counted under `rejected_invalid_shape`). See
 `examples/anchor_bank.sample.jsonl` for a complete real record.
 
-**One run, one `data_source`.** Every record in a bank carries the same
-`data_source`: `ard_text` when `--image-dir` is omitted, `ard_multi` when it is
-supplied (a directory with no usable images degrades the whole run to text).
-Text and multimodal anchors are never mixed in one bank — run the two modes
-separately and you get one `anchor_bank.jsonl` each. Anchor ids are hashed from
-the five-dimensional metadata, so they are unique **within a run** but not
-across runs: when merging banks, do not expect an id to identify a record
-globally.
+**One run, one `data_source`.** Every record a single run writes carries the
+same `data_source`: `ard_text` when `--image-dir` is omitted, `ard_multi` when
+it is supplied. This is a code-level structural guarantee, not a convention.
+Note it is **per run, not per file**: two runs sharing one output directory can
+put both kinds into the same bank (see the resume note below), so to produce
+both shapes keep them in **separate output directories** and you get one
+`anchor_bank.jsonl` per mode. Two cases still yield an all-`ard_text` run even
+when `--image-dir` is passed: the image directory holds no usable images, or
+`max_turns_with_image = 0` disables image turns entirely.
+
+**Boundary — resumed runs can mix the two in one bank.** Resume appends the
+records a later run produces to the bank the earlier run wrote. If run 1 wrote
+`ard_text` and run 2 resumes that same directory with `--image-dir`, the one
+`anchor_bank.jsonl` ends up holding both `data_source` values. **Consumers must
+therefore route on the record-level `data_source` field and must not assume the
+bank as a whole carries a single value.**
+
+Anchor ids are hashed from the five-dimensional metadata, so they are unique
+**within a run** but not across runs: when merging banks, do not expect an id to
+identify a record globally.
 
 `seed` is optional and unset by default — each run then draws a fresh seed from
 the system random source. Set it to an integer to pin the sampling order for that
@@ -533,11 +564,39 @@ ARD automatically resumes from the last committed anchor. Just re-run the
 same command — the pipeline detects existing anchors in `anchor_bank.jsonl`
 and only generates the remaining ones up to `target_count`.
 
+### Known behavior boundaries
+
+Two behaviors are documented rather than fixed. Neither is a bug being hidden;
+both are consequences of the current design, and neither changes what the
+`data_source` / `id` fields mean.
+
+**1. A resumed run does not always reach `target_count`.** Resume re-samples
+for the line-count shortfall (`remaining = target_count - existing_count`), but
+an anchor **id** is a hash of the five sampled dimensions only — it carries no
+seed and no run identity. With the **same seed**, the resumed run walks the same
+sampling order and re-draws combinations that are already in the bank; those
+records are refused by the id gate and counted as `duplicate_ids` (the bank's
+`duplicate_skipped` outcome), so the bank can stop **below** `target_count`.
+Observed: a bank of 60 asked for 40 more, wrote 5, and ended at 65. The default
+`seed` (omitted → a fresh random seed per run) samples new combinations each
+time and normally fills the target; pinning a seed makes the effect visible.
+Re-running does not corrupt the bank — it just may not grow it. If you need the
+target guaranteed, resume with a fresh (unset) seed, or delete the bank and
+regenerate with `output.overwrite = true`.
+
+**2. Pre-v3-fix outputs may mislabel image records.** Earlier builds had a bug
+that wrote records whose conversations carry images with `data_source = "ard_text"`
+(or with no `has_image` key in `anchor_meta`). Such directories are **not in
+git** — they are local `outputs/` artifacts under `.gitignore`. Before consuming
+an old artifact, verify per record: cross-check `data_source` against whether the
+`messages` entries actually contain image parts, or discard and regenerate the
+bank with the current version.
+
 ### Where does multimodal anchor diversity come from?
 
 Multimodal anchor diversity comes from three independent sources:
 
-1. **Ontology diversity** (FPS guarantee): The FPS sampler selects optimal
+1. **Ontology diversity** (FPS promotion): The FPS sampler selects optimal
    anchor specs from 50,400 ontology combinations. The metadata — language,
    knowledge domain, capability, conversation type and system prompt mode —
    shapes which anchors are sampled, and language, capability and conversation
@@ -576,10 +635,18 @@ it is produced at OPD training time by the original LLM teacher.
 ### How to control the ratio of multimodal to text anchors?
 
 This is currently a **binary switch**: providing `--image-dir` generates
-multimodal anchors; omitting it generates pure text anchors. For mixed
-ratios (e.g. 30% images + 70% text), run twice and merge manually: once
-without `--image-dir` for text anchors, once with `--image-dir` for
-multimodal anchors, then combine both `anchor_bank.jsonl` files.
+multimodal anchors; omitting it generates pure text anchors. For mixed ratios
+(e.g. 30% images + 70% text), run **twice** — once without `--image-dir` for text
+anchors, once with it for multimodal anchors — and give each run its **own
+`output_dir`**. Do **not** point the second run at the first run's directory:
+resume appends to the existing bank, which would leave the two `data_source`
+values mixed in one file (see **Data Format**).
+
+Keep the two banks as separate files if you can: each then keeps its single-run
+invariant. If a single file really is required, merging is possible but is **not
+the recommended default**, because downstream must then route on the
+**record-level** `data_source` field and must not assume the bank as a whole
+carries one value.
 
 ### What is the recommended target count?
 

@@ -68,7 +68,7 @@ FPS 是逐域配额（`per_domain = max(1, target_count // n_domains)`，整数�
 
 ## 2. 模块边界
 
-### 2.1 四层架构图
+### 2.1 五层架构图
 
 ```mermaid
 graph TD
@@ -87,11 +87,13 @@ graph TD
         EM["Embeddings (core/embeddings.py)"]
         SM["Sampler (core/sampler.py)"]
         QT["Quota (core/quota.py)"]
+        SP["System Prompt (core/system_prompt.py)"]
     end
 
     subgraph "Domain Layer"
         TA["Text Anchor (domain/text_anchor.py)"]
         BK["Bank (domain/bank.py)"]
+        AO["Append Outcome (domain/append_outcome.py)"]
         IS["Image Store (domain/image_store.py)"]
     end
 
@@ -109,9 +111,13 @@ graph TD
     PL --> QT
     TA --> API
     TA --> BK
+    TA --> SP
+    TA --> AO
     SM --> ON
     SM --> QT
+    SM --> SP
     SM --> EM
+    BK --> AO
     IS --> EM
 ```
 
@@ -127,8 +133,10 @@ graph TD
 | **Embeddings** | `core/embeddings.py` | 加载预计算嵌入向量，执行 FPS 算法 |
 | **Sampler** | `core/sampler.py` | 从本体组合空间中采样锚点规格 |
 | **Quota** | `core/quota.py` | 分配多轮对话轮次配额和图片到锚点的配额 |
+| **System Prompt** | `core/system_prompt.py` | 拥有 system prompt 采样维度的契约：`system_prompt_presence` / `system_prompt_style` 及其合并值 `system_prompt_mode`（下游路由与计数的唯一取值来源），并提供提示文本生成指令 |
 | **Text Anchor** | `domain/text_anchor.py` | 并发生成锚点：调用 Input Generator 生成用户消息，调用 Target Model 生成回答。**多模态场景下：input_generator 和 target_model 必须均为多模态模型** |
-| **Bank** | `domain/bank.py` | 锚点存储：序列化、追加、读取、构建 manifest |
+| **Bank** | `domain/bank.py` | 锚点存储：序列化、追加、读取、构建 manifest；写盘前三道门——消息形状、`data_source` 词表、id 唯一性 |
+| **Append Outcome** | `domain/append_outcome.py` | 定义 `append_anchor` 的返回枚举 `AppendOutcome`（`APPENDED` / `DUPLICATE_SKIPPED` / `INVALID_SHAPE_SKIPPED` / `INVALID_DATA_SOURCE_SKIPPED`）；类名与文件名精确互映（§12.2），`bank.py` 不再 re-export（§18.1） |
 | **Image Store** | `domain/image_store.py` | 图片扫描、格式转换（RAW/ BMP/ TIFF/ GIF/ WebP → JPG）、随机采样、复制到输出目录 |
 | **Logging** | `logging.py` | 提供 `get_logger` 辅助函数，统一所有模块的日志格式和输出目标 |
 | **API Client** | `backends/api_client.py` | 基于 httpx 的 OpenAI 兼容客户端，支持 SSE 流式生成、分层超时控制、背压传播；识别并统计 `delta.reasoning`（推理 token 只计数、绝不进入 `target_answer`），推理吃光预算导致的空正文以 `ARDEmptyContentError` 显式失败 |
@@ -314,9 +322,12 @@ function hierarchical_fps(ontology, embeddings, target_count):
 
 最后两个槽位是 system prompt 维度，见 §4.5。
 
-**覆盖保证**：分层 FPS 确保：
-- 第一层 FPS 保证知识域覆盖的多样性（知识域是最重要的维度，变化最大）
-- 第二层 FPS 通过拼接组合嵌入（6 × 1024 = 6144 维）保证每个域内组合的多样性
+**覆盖保证**：分层 FPS 确保（第 1 条是**结构性**的——由构造保证，不是采样质量的功劳）：
+- 第一层 FPS 保证知识域覆盖的多样性（知识域是最重要的维度，变化最大；逐域配额使
+  18/18 由构造保证，见 §4.4）
+- 第二层 FPS 通过拼接组合嵌入（6 × 1024 = 6144 维）**促成**每个域内组合的多样性
+  ——同一轮内 FPS 逐位置记账、不会重复选中同一组合；但跨 run 同一组合会复用同一 id，
+  见 §8.1 的唯一性边界
 - 当 `target_count` 增大到组合总数时，FPS 退化为全选，覆盖率 = 100%
 
 ### 4.5 system prompt 采样维度（v3.0.0）
@@ -367,6 +378,8 @@ ARD 使用最远点采样（Farthest Point Sampling, FPS）作为唯一采样策
 而非 117,040（此数字源于旧版本体的 209 个知识域，现已精简为 18 个顶级域）。
 
 在 `target_count = 100` 时，各维度的覆盖率**实测**如下（单 seed，`seed = 42`）：
+**条件**：`target_count = 100`、`max_turns = 1`、不使用 `--image-dir`（纯文本一轮），
+固定 `seed = 42`；换 seed 或换 `target_count` 数值即变，下表不应被读作期望值。
 
 | 维度 | 总数 | 覆盖率 | 说明 |
 |------|------|--------|------|
@@ -462,9 +475,15 @@ sequenceDiagram
 - 顶层 `data_source ∈ {ard_text, ard_multi}`（受控枚举）、`schema_version="3.0.0"`、
   `input_generator_model`、`teacher_id` 构成 OPD 消费侧的路由与溯源字段。
 - **单次运行 = 单个 `data_source`**：一轮要么全是 `ard_text`（不带 `--image-dir`），
-  要么全是 `ard_multi`（带 `--image-dir`；图片目录为空或没有可转换的图片时整轮退化为
-  `ard_text`，见 `quota.allocate_images` 与 `text_anchor.anchor_data_source`）。文本与
-  多模态**分两次运行**、各自产出一个 `anchor_bank.jsonl`，不混在同一个 bank 里。
+  要么全是 `ard_multi`（带 `--image-dir`）。即使传了 `--image-dir`，下面两种情况仍
+  整轮为 `ard_text`：图片目录为空或没有可转换的图片（见 `quota.allocate_images` 与
+  `text_anchor.anchor_data_source`），或 `max_turns_with_image = 0` 关闭了图片轮。
+  该保证是**按运行而非按文件**的：文本与多模态要**分两次运行、各用独立输出目录**，
+  才各得一个纯 `anchor_bank.jsonl`。
+- **续跑边界（重要）**：`output.overwrite = false` 时续跑会把新记录追加到已有 bank。
+  run 1 写 `ard_text`、run 2 带 `--image-dir` 续跑同一输出目录，同一个
+  `anchor_bank.jsonl` 就会同时含两种 `data_source`。因此 `data_source` 是
+  **记录级**路由键，消费端**不得**按 bank 级假设单一取值。
   `id` 是 5 维元数据的 sha256 前缀（§8.1），只在单次运行内唯一——**跨 run 不承诺唯一**：
   同一元数据在不同 run 会得到相同的 `id`，合并多个 bank 时不得以 `id` 去重。
 - **没有** `logprobs` / `token_ids` / `log_probs` / `logprobs.content` 等键——这些键
@@ -489,7 +508,7 @@ ARD 使用 `httpx` 替换 `urllib`，通过 SSE（Server-Sent Events）流式获
 | 超时层 | 配置字段 | 默认值 | 控制范围 |
 |--------|----------|--------|----------|
 | **连接超时** | `connect_timeout` | 10s | TCP 连接 + TLS 握手（httpx 层控制） |
-| **首 Token 超时** | `first_token_timeout` | 60s | 等待第一个 `data:` 行到达（应用层控制） |
+| **首 Token 超时** | `first_token_timeout` | 300s | 等待第一个 `data:` 行到达（应用层控制；含 prefill 与排队等待） |
 | **Token 间超时** | `inter_token_timeout` | 15s | 生成过程中 token 之间的最大间隔（应用层控制） |
 
 **设计要点**：
@@ -528,8 +547,8 @@ sequenceDiagram
     HTTPX->>API: TCP + TLS handshake
     API-->>HTTPX: HTTP 200 + SSE stream
 
-    Note over ARD,API: Phase 2: first_token_timeout=60s
-    Note over ARD: _iter_lines_with_timeout()<br/>queue.get(timeout=60s)
+    Note over ARD,API: Phase 2: first_token_timeout=300s
+    Note over ARD: _iter_lines_with_timeout()<br/>queue.get(timeout=300s)
 
     API-->>ARD: data: {"choices":[{"delta":{"content":"The"}},...]}
     Note over ARD: first_token = False<br/>switch to inter_token_timeout
@@ -674,8 +693,13 @@ Pipeline 默认开启图片格式自动转换（可通过 `--no-convert` 关闭�
 | `.bmp`, `.tiff`, `.gif`, `.webp` | Pillow 打开 → 编码 | JPG (quality=95) |
 
 **依赖**：
-- `Pillow>=10.0` — 必需依赖，处理 BMP/TIFF/GIF/WebP 转换
-- `rawpy>=0.24` — 可选依赖（manylinux wheel 自带 `libraw.so`，零系统依赖），仅 RAW 格式需要
+- `Pillow>=10.0` — 核心依赖，处理 BMP/TIFF/GIF/WebP 转换
+- `rawpy>=0.24` — **核心依赖**（列在 `pyproject.toml` 的 `[project].dependencies`，随包安装；
+  manylinux wheel 自带 `libraw.so`，零系统依赖）。代码侧的 import 是**懒加载**
+  （`image_store.py` 在需要转换 RAW 时才 `import rawpy`），因此源码层面的
+  "可选"只指**触发时机**，不指**依赖声明**：安装本项目即会装上 rawpy，只有实际转换
+  RAW 格式时才会加载它。若某环境确实装不上 rawpy，请以 `--no-convert` 运行并只喂
+  PNG/JPEG/GIF/WEBP（此时 RAW 会被跳过，见下）。
 
 **`--no-convert` 关闭转换**：当关闭转换时，`scan_images` 仅接受 `SUPPORTED_EXTENSIONS`
 （PNG/JPEG/GIF/WEBP），遇 BMP/TIFF/RAW 格式的图片会被静默跳过。
@@ -702,10 +726,12 @@ Pipeline 默认开启图片格式自动转换（可通过 `--no-convert` 关闭�
 多模态锚点的多样性来自三个独立的来源，三者叠加确保即使图片池单一，
 生成的锚点仍具有足够的多样性：
 
-1. **Ontology 多样性**（FPS 保证）：FPS 采样器从 50,400 个组合中选出
-   最优的锚点规格，每个规格携带语言、知识域、能力、会话类型等元数据。
+1. **Ontology 多样性**（FPS 促成）：FPS 采样器从 50,400 个组合中选出
+   最分散的锚点规格，每个规格携带语言、知识域、能力、会话类型等元数据。
    这些元数据通过 VLM prompt 传递（如"用中文回答一个关于计算机科学的问题"），
-   确保 prompt 的多样性。即使图片池单一，Ontology 元数据仍然保证 prompt 层面的多样性。
+   **促成** prompt 的多样性：语言/能力/会话类型不同时，VLM 拿到的指令文本不同。
+   这是促成而非绝对保证——同一轮内 FPS 逐位置记账、不会重复选中同一个组合，
+   但语言/能力/会话类型相同的两条锚点会拿到逐字相同的指令文本（因此依赖第 3 条）。
 
 2. **图片池多样性**：`image_store.py` 从用户指定的图片目录中随机采样图片。
    图片内容本身（场景、物体、文字、构图）构成视觉输入的多样性。
@@ -715,9 +741,11 @@ Pipeline 默认开启图片格式自动转换（可通过 `--no-convert` 关闭�
    即使相同的 Ontology 元数据和相同的图片，VLM 也会生成不同措辞和角度的问题。
    这进一步增加了锚点的多样性。
 
-**关键设计要点**：多样性的第一道防线是 Ontology（通过 FPS 保证），
+**关键设计要点**：多样性的第一道防线是 Ontology（由 FPS **促成**，非绝对保证），
 第二道是图片池，第三道是 VLM 随机性。三道防线层层叠加，
-使得即使图片池只有少量图片，FPS 仍能保证 prompt 维度上不重复。
+使得**即使图片池只有少量图片，prompt 层面仍由 FPS 拉开差异**——注意这是
+"提升多样性"，不是"保证不重复"：id 只由 5 个采样维度哈希而来，同一组合在
+**不同 run** 会得到同一个 id（续跑因此可能撞 id，见 §8.1 与 README 的"已知行为边界"）。
 
 ### 6.3 图片 Anchor 生成流程
 
@@ -838,13 +866,27 @@ overwrite = false       # 是否覆盖已有输出目录（预授权退路，遵
     "knowledge_domain": "computer_science",
     "capability": "qa",
     "conversation_type": "single_turn",
-    "has_image": false,
-    "image_count": 0
+    "system_prompt_presence": "none",
+    "system_prompt_style": "none",
+    "system_prompt_mode": "none",
+    "has_image": true,
+    "image_count": 1
   },
   "teacher_id": "deepseek-v4-flash",
   "input_generator_model": "<input_generator_model>"
 }
 ```
+
+> **`anchor_meta` 字段口径**：`system_prompt_presence` / `system_prompt_style` /
+> `system_prompt_mode` 三维**每条记录都有**（见 §4.5）；
+> `has_image` / `image_count` 是**多模态记录独有**的键——纯文本记录的
+> `anchor_meta` 完全不含这两个键（不是 `false` / `0`），消费端用
+> `anchor_meta.get("has_image")` 判断。上面示例按多模态记录列出。
+>
+> **`id` 的唯一性边界**：`id` 只由 5 个采样维度哈希而来，不含 seed 也不含运行身份，
+> 因此只在**单次运行内唯一**、**跨 run 不承诺唯一**；续跑时同 seed 会重复抽中已写过的
+> 组合并被 bank 的 id 门拦下（计入 `duplicate_ids`），bank 可能停在 `target_count`
+> 之下。详见 README 的"已知行为边界"一节。
 
 > **`teacher_id` 字段说明**：该字段名为 OPD 消费侧的**前瞻对接预留**（未来 graspo OPD
 > 训练器将据其识别教师），当前实际存储 Target Model 的名称。
@@ -929,8 +971,8 @@ overwrite = false       # 是否覆盖已有输出目录（预授权退路，遵
 
 **优势**：
 - 嵌入数量少（55 个嵌入，见 §4.2），一次预计算即可
-- 知识域是变化最大的维度，第一层 FPS 保证域级多样性
-- 第二层 FPS 保证域内组合多样性
+- 知识域是变化最大的维度，第一层 FPS 保证域级多样性（结构性：逐域配额）
+- 第二层 FPS **促成**域内组合多样性（非绝对保证，见 §6.2.5 与 §8.1）
 - 两层 FPS 结合起来，等价于在组合空间中的近似 FPS，但计算量大幅降低
 
 **选择原因**：分层 FPS 在**计算效率**和**覆盖质量**之间取得了最优平衡。
@@ -980,24 +1022,27 @@ overwrite = false       # 是否覆盖已有输出目录（预授权退路，遵
 ### 核心模块
 
 > 行数为**本表更新时的实测值**（`wc -l`），会随代码演进过期；以仓库文件为准。
+> 重现口径：`wc -l src/ard/**/*.py src/ard/*.py`（2026-09-16 更新）。
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
 | `src/ard/cli.py` | 94 | CLI 入口 |
-| `src/ard/config.py` | 227 | 配置模型与加载 |
+| `src/ard/config.py` | 277 | 配置模型与加载 |
 | `src/ard/logging.py` | 135 | 统一日志配置（`get_logger` 辅助函数） |
-| `src/ard/pipeline.py` | 388 | 流程编排 |
-| `src/ard/core/types.py` | 93 | 核心数据类型 |
+| `src/ard/pipeline.py` | 501 | 流程编排（含续跑差额重采样、推理计数 delta 发布） |
+| `src/ard/core/types.py` | 136 | 核心数据类型 |
 | `src/ard/core/ontology.py` | 29 | 本体加载 |
 | `src/ard/core/embeddings.py` | 134 | 嵌入加载与 FPS 算法 |
-| `src/ard/core/_fps.py` | 350 | 分层 FPS 算法实现 |
-| `src/ard/core/sampler.py` | 151 | 锚点采样 |
+| `src/ard/core/_fps.py` | 532 | 分层 FPS 算法实现 |
+| `src/ard/core/sampler.py` | 176 | 锚点采样与 anchor id 哈希（`generate_anchor_id`） |
 | `src/ard/core/quota.py` | 103 | 配额分配 |
-| `src/ard/domain/text_anchor.py` | 791 | 锚点生成（含背压计数器与失败分类） |
-| `src/ard/domain/bank.py` | 408 | 锚点存储（含写盘前形状/id 双门与 manifest 健康计数） |
-| `src/ard/domain/anchor_shape.py` | 82 | 消息形状契约（入口与出口的唯一实现） |
+| `src/ard/core/system_prompt.py` | 238 | system prompt 采样维度契约（presence/style → mode）与提示文本生成 |
+| `src/ard/domain/text_anchor.py` | 1046 | 锚点生成（含背压计数器与失败分类） |
+| `src/ard/domain/bank.py` | 581 | 锚点存储（含写盘前形状/id/data_source 三门与 manifest 健康计数） |
+| `src/ard/domain/append_outcome.py` | 31 | bank 追加结果枚举（`AppendOutcome` ↔ 文件名精确互映，§12.2） |
+| `src/ard/domain/anchor_shape.py` | 116 | 消息形状契约（入口与出口的唯一实现） |
 | `src/ard/domain/image_store.py` | 263 | 图片管理（扫描、格式转换、采样、复制） |
-| `src/ard/backends/api_client.py` | 1338 | API 客户端 |
+| `src/ard/backends/api_client.py` | 991 | API 客户端（含模块级推理观测计数器） |
 
 ### 数据文件
 

@@ -2,10 +2,10 @@
 
 Everything in this directory is **real pipeline output** — nothing here is
 hand-written or re-worded. `anchor_bank.sample.jsonl` is a representative subset
-of the records written by a real v3.0.0 run (every line is copied from the run's
-bank byte for byte), and `manifest.sample.json` is the manifest format that run
-writes next to it. They are checked in so you can understand what ARD produces
-without spending GPU time or needing an API endpoint.
+of the records written by two real v3.0.0 runs (every line is copied from those
+banks byte for byte), and `manifest.sample.json` is the manifest format each run
+writes next to its own bank. They are checked in so you can understand what ARD
+produces without spending GPU time or needing an API endpoint.
 
 ## Contents
 
@@ -15,9 +15,12 @@ without spending GPU time or needing an API endpoint.
 | `manifest.sample.json` | The manifest a real run writes next to the anchor bank |
 | `images/` | 10 small JPEGs (400 px wide); the sample records reference `sample_04` / `sample_05` / `sample_10` |
 
-The six records are **verbatim lines** taken from a real 100-anchor v3.0.0 run
-(60 text anchors + 40 multimodal anchors), picked to cover both `data_source`
-buckets, all four languages and both legal `reasoning` forms:
+The six records are **verbatim lines** taken from **two real v3.0.0 runs**: the
+first run produced 60 text anchors, the second produced 40 multimodal anchors;
+this sample keeps three records from each bank (a selection made for this
+directory, not something a single run performs), picked to cover both
+`data_source` buckets, all four ontology languages and both legal `reasoning`
+forms:
 
 | # | Record id | `data_source` | Language | Shape | Image | `reasoning` | Knowledge domain | Capability | System prompt |
 |---|-----------|---------------|----------|-------|:---:|-------------|------------------|------------|---------------|
@@ -29,9 +32,13 @@ buckets, all four languages and both legal `reasoning` forms:
 | 6 | `anchor_bffd29da463224ed` | `ard_multi` | English | `SU` | 1 | `str` | agent_tool_use | decision_analysis | `domain_style` |
 
 `U` = one user turn; `SU` = a `system` persona turn followed by the user turn.
-This language / domain mix is simply **what that run happened to draw** — the
-ontology holds far more combinations than six records can show (see
-[How the sample was drawn](#how-the-sample-was-drawn)).
+This language / domain mix is simply **what those two runs happened to draw** —
+it was not steered, and the two banks were generated separately (one without
+`--image-dir`, one with it). The ontology holds far more combinations than six
+records can show (see [How the sample was drawn](#how-the-sample-was-drawn)).
+The three `ard_text` records carry **no** `has_image` key in `anchor_meta` at
+all, while the three `ard_multi` records carry `has_image` and `image_count` —
+a second, independent signal that these are two runs, not one bank.
 
 ## The record schema
 
@@ -70,9 +77,10 @@ Each line of `anchor_bank.sample.jsonl` is one anchor:
 ```
 
 `data_source` is **per record**, not per run: an `ard_multi` record is one whose
-conversation carries at least one image, and a bank can hold both kinds side by
-side (the sample does — three of each). Downstream routes on this key, so it is
-a closed vocabulary rather than a free-form string.
+conversation carries at least one image. (A single run writes only one value,
+but this sample draws from two runs, and a resumed run appends to an existing
+bank — so a file, and this sample, can hold both kinds side by side.) Downstream
+routes on this key, so it is a closed vocabulary rather than a free-form string.
 
 ### `messages` — the shape invariant
 
@@ -130,7 +138,8 @@ its own answer. The two live in separate keys on purpose:
 
 If a run cannot obtain `reasoning` for an anchor whose configuration asked for
 it, **it does not silently write an empty value** — the anchor is discarded and
-counted (see `generation.failures` in the manifest).
+counted (a real run's `<output_dir>/manifest.json` reports it under
+`generation.failures`; the sample manifest here omits that block, see below).
 
 ## `manifest.sample.json`
 
@@ -149,21 +158,32 @@ A real run also writes a manifest next to the anchor bank. Read it to answer
   `reasoning_only_responses`, `truncated_empty`) — the teacher spent its whole
   token budget on reasoning and produced no answer.
 
+The last two are documented here because they are what a reader of a **real**
+manifest should look for — they are **not present** in this sample (see below).
+
 > **Zero-valued counters are dropped**, so a perfectly healthy run may omit
 > `generation` entirely. **An empty `generation: {}` is the anomaly, not the
 > absence of the key.**
 
-The file's field set is identical to a real manifest's, with **one deliberate
-omission**: a real manifest also embeds the fully merged runtime config under
-`config`, which contains your endpoint and model names. That section is left out
-here so the sample carries no deployment details.
+The sample's field set is a real manifest's, with **two deliberate omissions**:
+this file lists only the reproducible composition of the six records above and
+drops every deployment-specific or run-specific part.
+
+1. The merged runtime `config` (endpoints and model names) is left out so the
+   sample carries no deployment details.
+2. The `generation` block is **absent** — it is a *per-run execution account*,
+   and the six records here come from two different runs, so no single run's
+   counters describe this file. The sample is a hand-picked subset of two banks,
+   not the verbatim manifest of one run: do not read the absence as "the run was
+   unhealthy". A real manifest for a single run does carry `generation` whenever
+   any counter is non-zero.
 
 Two numbers are scaled to this 6-record file, everything else is verbatim: the
 composition breakdown at the top (`total_anchors` and the five tallies) is
 recomputed over the six records here, and `output_dir` is the placeholder a real
-run replaces with its own output directory. The `generation` block is the health
-accounting of the underlying **100-anchor** run verbatim — its `written` total
-(100) is therefore larger than `total_anchors` (6).
+run replaces with its own output directory. The `generation` counters of the two
+underlying runs are intentionally **not** carried over — they account for runs
+that produced 100 records in total, not for this 6-record subset.
 
 
 ## How the sample was drawn
@@ -182,7 +202,7 @@ An anchor is sampled on **5 dimensions** from `ontology/anchor_ontology.json`:
 `system_prompt_mode` (the system prompt became a sampling dimension in v3.0.0).
 For the ontology shipped in this release that is:
 
-**18 × 20 × 4 × 7 × 5 = 50,400 combinations** — and **100,800** when the
+**4 × 18 × 20 × 7 × 5 = 50,400 combinations** — and **100,800** when the
 multimodal form is counted separately for every combination (`ard_multi` /
 `ard_text`, i.e. whether the anchor carries an image).
 
