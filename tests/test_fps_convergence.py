@@ -8,7 +8,18 @@ at large *n*, and minimum coverage guarantees at small *n*.
 from __future__ import annotations
 
 import numpy as np
-from ard.core.embeddings import farthest_point_sampling
+from ard.core.cloud import CloudVectors, fps
+
+
+def _fps_positions(embeddings: np.ndarray, n: int, seed: int = 42) -> list[int]:
+    """Run space-safe FPS and return the row positions (test-local helper)."""
+    cloud = CloudVectors(
+        space_id="synthetic-ontology:test",
+        cloud_id="synthetic_ontology_embeddings",
+        vectors=embeddings,
+    )
+    index, _selection = fps(cloud, n=n, seed=seed)
+    return list(index.positions)
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +97,7 @@ def test_fps_convergence_domain_monotonic():
     embeddings, metadata = _build_synthetic_ontology_embeddings()
     prev = 0.0
     for n in [50, 100, 200, 300, 400, 450]:
-        indices = farthest_point_sampling(embeddings, n=n, seed=42)
+        indices = _fps_positions(embeddings, n=n, seed=42)
         cov = _coverage(indices, metadata, "domain")
         assert cov >= prev, f"n={n}: {cov:.2%} < prev {prev:.2%}"
         prev = cov
@@ -97,7 +108,7 @@ def test_fps_convergence_full_coverage():
     embeddings, metadata = _build_synthetic_ontology_embeddings(
         n_domains=20, n_capabilities=8, n_languages=4, n_conv_types=5
     )  # 总组合: 3200
-    indices = farthest_point_sampling(embeddings, n=500, seed=42)
+    indices = _fps_positions(embeddings, n=500, seed=42)
     for dim in ["domain", "capability", "language", "conv_type"]:
         cov = _coverage(indices, metadata, dim)
         assert cov >= 0.95, f"n=500, {dim}={cov:.2%}"
@@ -106,7 +117,7 @@ def test_fps_convergence_full_coverage():
 def test_fps_n50_min_coverage():
     """n=50 时知识域覆盖率 ≥ 50%，能力覆盖率 ≥ 60%。"""
     embeddings, metadata = _build_synthetic_ontology_embeddings()
-    indices = farthest_point_sampling(embeddings, n=50, seed=42)
+    indices = _fps_positions(embeddings, n=50, seed=42)
     assert _coverage(indices, metadata, "domain") >= 0.5
     assert _coverage(indices, metadata, "capability") >= 0.6
 
@@ -116,7 +127,7 @@ def test_fps_convergence_capability_monotonic():
     embeddings, metadata = _build_synthetic_ontology_embeddings()
     prev = 0.0
     for n in [50, 100, 200, 300, 400, 450]:
-        indices = farthest_point_sampling(embeddings, n=n, seed=42)
+        indices = _fps_positions(embeddings, n=n, seed=42)
         cov = _coverage(indices, metadata, "capability")
         assert cov >= prev, f"n={n}: capability {cov:.2%} < prev {prev:.2%}"
         prev = cov
@@ -127,7 +138,7 @@ def test_fps_convergence_language_monotonic():
     embeddings, metadata = _build_synthetic_ontology_embeddings()
     prev = 0.0
     for n in [50, 100, 200, 300, 400, 450]:
-        indices = farthest_point_sampling(embeddings, n=n, seed=42)
+        indices = _fps_positions(embeddings, n=n, seed=42)
         cov = _coverage(indices, metadata, "language")
         assert cov >= prev, f"n={n}: language {cov:.2%} < prev {prev:.2%}"
         prev = cov
@@ -139,7 +150,7 @@ def test_fps_n_equals_total_full_coverage():
         n_domains=5, n_capabilities=3, n_languages=2, n_conv_types=2
     )  # 总组合: 60
     total = len(metadata)
-    indices = farthest_point_sampling(embeddings, n=total, seed=42)
+    indices = _fps_positions(embeddings, n=total, seed=42)
     for dim in ["domain", "capability", "language", "conv_type"]:
         cov = _coverage(indices, metadata, dim)
         assert cov == 1.0, f"n={total}, {dim}={cov:.2%}"

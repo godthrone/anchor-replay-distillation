@@ -85,6 +85,8 @@ graph TD
         TY["Types (core/types.py)"]
         ON["Ontology (core/ontology.py)"]
         EM["Embeddings (core/embeddings.py)"]
+        CL["Vector Cloud (core/cloud.py)"]
+        CV["Coverage (core/coverage.py)"]
         SM["Sampler (core/sampler.py)"]
         QT["Quota (core/quota.py)"]
         SP["System Prompt (core/system_prompt.py)"]
@@ -116,7 +118,9 @@ graph TD
     SM --> ON
     SM --> QT
     SM --> SP
-    SM --> EM
+    SM --> CL
+    CL --> EM
+    CV --> CL
     BK --> AO
     IS --> EM
 ```
@@ -130,7 +134,9 @@ graph TD
 | **Pipeline** | `pipeline.py` | 编排整体流程：加载本体 → 采样 → 图片分配 → 生成 → 输出 |
 | **Types** | `core/types.py` | 定义纯数据类（`AnchorSpec`, `TurnSpec`, `GeneratedAnchor` 等） |
 | **Ontology** | `core/ontology.py` | 加载 `anchor_ontology.json`，提供本体数据访问 |
-| **Embeddings** | `core/embeddings.py` | 加载预计算嵌入向量，执行 FPS 算法 |
+| **Embeddings** | `core/embeddings.py` | 加载预计算嵌入向量，并给出该文件所定义嵌入空间的指纹（`embedding_space_id`） |
+| **Vector Cloud** | `core/cloud.py` | 携带空间标识的向量载体（`CloudVectors` / `CloudIndex`）与空间安全的 FPS 选择（`fps`）：跨云、跨空间的下标与距离运算在运行期抛异常，绝不静默计算 |
+| **Coverage** | `core/coverage.py` | 空间安全的覆盖测量：`coverage_to`（目标云 × 选择云的显式跨云测量）与 `self_coverage`（同云自覆盖），返回带来源身份的 `CoverageStats` |
 | **Sampler** | `core/sampler.py` | 从本体组合空间中采样锚点规格 |
 | **Quota** | `core/quota.py` | 分配多轮对话轮次配额和图片到锚点的配额 |
 | **System Prompt** | `core/system_prompt.py` | 拥有 system prompt 采样维度的契约：`system_prompt_presence` / `system_prompt_style` 及其合并值 `system_prompt_mode`（下游路由与计数的唯一取值来源），并提供提示文本生成指令 |
@@ -148,6 +154,7 @@ graph TD
 - **Config → Pipeline**：`ARDConfig` (Pydantic model)
 - **Pipeline → Core**：`AnchorGenerationConfig` (dataclass) + `ontology` dict
 - **Core → Pipeline**：`list[AnchorSpec]`
+- **Core → Core（选择与测量）**：`CloudVectors`（向量矩阵 + `space_id` + `cloud_id`）与 `CoverageStats`（五个统计量 + 目标/选择两侧的身份）；行下标只以 `CloudIndex` 形式流动，见 §4.6
 - **Pipeline → Domain**：`list[AnchorSpec]` + `ChatAPIClient` 实例
 - **Domain → Backends**：`list[dict]` (OpenAI 格式消息) → `str` / `ChatResult`
 - **Domain → Bank**：`GeneratedAnchor` → JSONL 行
@@ -408,6 +415,47 @@ ARD 使用最远点采样（Farthest Point Sampling, FPS）作为唯一采样策
 **建议**：需要能力维度全覆盖的训练场景，**不能依赖提高 `target_count`**——
 应大幅提高 `target_count` 到接近组合规模（`k = 5040` 时实测 18/20），或新增按维度
 分层的配额 / 后验补样（当前代码均不提供）。
+
+### 4.6 空间安全的 FPS 与覆盖测量接口
+
+**要解决的问题。** 覆盖测量问的是"用一组选出的向量去覆盖另一组向量，最远的那一点有多远"。
+一旦"另一组"与"选出的那组"不是同一个云，行下标就不再通用：把 A 云选出的下标投到 B 云上，
+运算照常完成、数字照常有值，但它度量的已经不是要测的东西。项目曾因此在**无异常、无 NaN**
+的情况下得到一个错误结论并传播了一整轮。结论是：**这类错误必须由接口在运行期拦下**，
+不能靠"下次更仔细"。
+
+**两个身份（各只有一个来源）。**
+
+| 身份 | 含义 | 约束的运算 | 唯一来源 |
+|------|------|-----------|---------|
+| `space_id` | 嵌入器指纹：向量由哪个嵌入空间产生 | 向量级运算（距离 / 覆盖）只在同一 `space_id` 内可比 | `embeddings.embedding_space_id()`（读嵌入文件的 `model` + `embedding_dimension`） |
+| `cloud_id` | 行集身份：这一片行属于哪个云 | 行下标只在同一 `cloud_id` 内有效 | 构造 `CloudVectors` 的调用方显式声明 |
+
+两者必须分开：同一个嵌入器产生的"标签名云"与"生成文本云"共享 `space_id`，但它们的行下标
+互不通用——这正是缺陷发生的形状，只看 `space_id` 抓不住。
+
+**接口边界**（模块 `core/cloud.py` 与 `core/coverage.py`）。
+
+| 接口 | 签名 | 边界语义 |
+|------|------|---------|
+| `fps` | `(cloud, n, *, seed=None) -> (CloudIndex, CloudVectors)` | 唯一的选点入口。贪心最远点规则不变；返回的是**带身份的下标**与**选出的向量本身**，调用方拿不到裸 `list[int]` |
+| `CloudVectors.index_of` | `(positions) -> CloudIndex` | 把"本云的行号"标记成本云的 `CloudIndex`（随机基线等非 FPS 选择走这里） |
+| `CloudVectors.select` | `(index: CloudIndex) -> CloudVectors` | 取行。`index` 来自别的云或别的空间 → **抛异常**，不计算 |
+| `coverage_to` | `(target: CloudVectors, selected: CloudVectors) -> CoverageStats` | **显式的跨云测量**：只用 `selected` 的向量投到 `target`，因此两边可以是不同的云；两边必须同一 `space_id` |
+| `self_coverage` | `(cloud: CloudVectors, selection: CloudVectors) -> CoverageStats` | **同云自覆盖**：`selection` 必须来自 `cloud` 本身，否则抛异常 |
+| `CoverageStats` | 五个统计量 + 两侧 `space_id`/`cloud_id` + 行数 | 数值口径与历史 `coverage(U_all, sel)` 逐位一致；身份字段让"谁覆盖谁、在哪个空间"可事后审计 |
+
+**异常契约**（均继承 `ValueError`，在边界上阻断而非降级）。
+
+| 异常 | 触发条件 |
+|------|---------|
+| `SpaceMismatchError` | 行下标跨 `space_id` 使用；两个云 `space_id` 不同；或两个云声称同一 `space_id` 却维度不同 |
+| `CloudMismatchError` | 行下标跨 `cloud_id` 使用（同一嵌入空间内）；`self_coverage` 收到别的云的选择 |
+
+**不变式**（`tests/core/test_coverage.py` 固化）：
+`coverage_to(X, X[sel]) == self_coverage(X, sel)`；
+而当 `X`、`Y` 是同一空间中的不同云时，`coverage_to(X, Y[sel]) != self_coverage(X, sel)`
+——把后者当前者用，正是那个静默失败。
 
 ---
 
@@ -1022,7 +1070,7 @@ overwrite = false       # 是否覆盖已有输出目录（预授权退路，遵
 ### 核心模块
 
 > 行数为**本表更新时的实测值**（`wc -l`），会随代码演进过期；以仓库文件为准。
-> 重现口径：`wc -l src/ard/**/*.py src/ard/*.py`（2026-09-16 更新）。
+> 重现口径：`wc -l src/ard/**/*.py src/ard/*.py`（2026-09-17 更新）。
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
@@ -1032,8 +1080,10 @@ overwrite = false       # 是否覆盖已有输出目录（预授权退路，遵
 | `src/ard/pipeline.py` | 501 | 流程编排（含续跑差额重采样、推理计数 delta 发布） |
 | `src/ard/core/types.py` | 136 | 核心数据类型 |
 | `src/ard/core/ontology.py` | 29 | 本体加载 |
-| `src/ard/core/embeddings.py` | 134 | 嵌入加载与 FPS 算法 |
-| `src/ard/core/_fps.py` | 532 | 分层 FPS 算法实现 |
+| `src/ard/core/embeddings.py` | 109 | 嵌入加载与嵌入空间指纹 |
+| `src/ard/core/cloud.py` | 336 | 空间标识向量载体（`CloudVectors` / `CloudIndex`）与空间安全 FPS（`fps`） |
+| `src/ard/core/coverage.py` | 148 | 空间安全覆盖测量（`coverage_to` / `self_coverage` / `CoverageStats`） |
+| `src/ard/core/_fps.py` | 554 | 分层 FPS 算法实现 |
 | `src/ard/core/sampler.py` | 176 | 锚点采样与 anchor id 哈希（`generate_anchor_id`） |
 | `src/ard/core/quota.py` | 103 | 配额分配 |
 | `src/ard/core/system_prompt.py` | 238 | system prompt 采样维度契约（presence/style → mode）与提示文本生成 |

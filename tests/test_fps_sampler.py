@@ -210,7 +210,7 @@ def test_sample_anchors_items_have_required_keys():
 def test_seed_resolved_by_config_reaches_fps_as_concrete_int(monkeypatch):
     """config 解析出的 seed 必须以具体 int 抵达 FPS 层。
 
-    守卫 ``embeddings.farthest_point_sampling`` 里的
+    守卫 ``ard.core.cloud.fps`` 里的
     ``seed if seed is not None else 42`` 回落：若把 ``None`` 一路传到 FPS，
     未配置 seed 的运行会静默退回旧的硬编码 42，随机化只覆盖一半链条。
     """
@@ -221,13 +221,13 @@ def test_seed_resolved_by_config_reaches_fps_as_concrete_int(monkeypatch):
     assert isinstance(resolved, int)
 
     seen: list[object] = []
-    real = fps_mod.farthest_point_sampling
+    real = fps_mod.fps
 
     def _spy(*args, **kwargs):
         seen.append(kwargs.get("seed"))
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(fps_mod, "farthest_point_sampling", _spy)
+    monkeypatch.setattr(fps_mod, "fps", _spy)
     ontology = json.load(open("ontology/anchor_ontology.json"))
     config = AnchorGenerationConfig(
         target_count=8, seed=resolved,

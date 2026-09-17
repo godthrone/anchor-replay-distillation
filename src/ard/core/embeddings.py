@@ -1,8 +1,11 @@
 """Embedding utilities for ARD anchor ontology.
 
-Pure computation layer: loading pre-computed embeddings from JSON
-and farthest-point sampling for anchor selection.  No network, no GPU
-management, no file-system side-effects beyond the JSON load path.
+Pure computation layer: loading pre-computed embeddings from JSON and naming the
+embedding space they define.  Farthest-point selection does **not** live here —
+it lives in :mod:`ard.core.cloud`, because a selection must carry the identity of
+the cloud it came from (a bare position list is exactly what once allowed one
+cloud's row numbers to index another cloud).  No network, no GPU management, no
+file-system side-effects beyond the JSON load path.
 """
 
 from __future__ import annotations
@@ -10,19 +13,6 @@ from __future__ import annotations
 import json
 import pathlib
 from typing import Any
-
-import numpy as np
-
-_np = None
-
-
-def _get_np():
-    global _np
-    if _np is None:
-        import numpy as _np_module
-        _np = _np_module
-    return _np
-
 
 # ---------------------------------------------------------------------------
 # 1.  Loading pre-computed embeddings
@@ -61,8 +51,8 @@ def load_embeddings(path: str) -> dict[str, Any]:
       ``scripts/generate_ontology_embeddings.py`` for the derivation.
 
     There is no ``distance`` key — the metric is not data.  It is fixed in the
-    code that consumes the vectors: :func:`farthest_point_sampling` below
-    normalises each vector to unit length and measures **cosine** distance
+    code that consumes the vectors: :func:`ard.core.cloud.fps` normalises each
+    vector to unit length and measures **cosine** distance
     (``1 - cosine similarity``).
 
     An ``items`` **list** — the previous format, whose per-item dicts carried
@@ -83,84 +73,36 @@ def load_embeddings(path: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 2.  Farthest Point Sampling (FPS)
+# 2.  Embedding-space identity
 # ---------------------------------------------------------------------------
 
 
-def farthest_point_sampling(
-    embeddings: np.ndarray,
-    n: int,
-    *,
-    seed: int | None = None,
-) -> list[int]:
-    """Select *n* diverse points via Farthest Point Sampling (FPS).
+def embedding_space_id(data: dict[str, Any]) -> str:
+    """Fingerprint of the embedding space a loaded embeddings file describes.
 
-    Starting from a random initial point, the algorithm iteratively picks
-    the point whose **minimum cosine distance** to the already-selected
-    set is the largest.  This yields a subset that is well-spread in the
-    embedding space.
+    The fingerprint is ``"{model}:{embedding_dimension}"`` — the embedder name
+    recorded by the generator plus the vector length.  It becomes the
+    ``space_id`` of every :class:`ard.core.cloud.CloudVectors` built from this
+    file, so that two clouds may only be compared arithmetically when their
+    fingerprints match.
 
     Args:
-        embeddings: Array of shape ``(N, D)`` — *N* points, each a
-            *D*-dimensional embedding vector.
-        n: Number of points to select.  Must satisfy ``1 <= n <= N``.
-        seed: Optional random seed for the initial point selection.
-            When ``None`` (default) the first point is chosen via a
-            fixed-seed RNG for reproducibility.
+        data: Parsed ``anchor_ontology_embeddings.json`` (see
+            :func:`load_embeddings`).
 
     Returns:
-        List of *n* indices into ``embeddings``.
+        Non-empty fingerprint string, e.g. ``"embedding:1024"``.
 
     Raises:
-        ValueError: If ``n`` is out of range or ``embeddings`` is empty.
+        ValueError: If the file carries no ``model`` or ``embedding_dimension``.
+            A space without an identity cannot be guarded (§2.3 边界校验即防呆),
+            so this fails at the boundary instead of defaulting to a wildcard.
     """
-    np = _get_np()
-    N = embeddings.shape[0]
-    if N == 0:
-        raise ValueError("embeddings array is empty")
-    if n < 1 or n > N:
+    model = data.get("model")
+    dimension = data.get("embedding_dimension")
+    if not model or not dimension:
         raise ValueError(
-            f"n must be in [1, {N}], got {n}"
+            "embeddings file has no usable 'model'/'embedding_dimension': the embedding "
+            "space cannot be identified, so space-safe operations cannot be used"
         )
-
-    if n == 1:
-        rng = np.random.default_rng(seed if seed is not None else 42)
-        return [int(rng.integers(0, N))]
-
-    # When n == N, we fall through to the normal FPS loop below.
-    # The loop ``range(1, N)`` plus the initial random point produces
-    # a true diversity ordering of all N points (not just range(N)).
-
-    # -- normalize for cosine-distance computation --------------------------
-    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-    # Guard against zero vectors — replace with tiny value so division
-    # succeeds and the zero vector ends up at the origin.
-    norms = np.where(norms == 0.0, 1e-12, norms)
-    unit = embeddings / norms
-
-    # -- initialise ---------------------------------------------------------
-    rng = np.random.default_rng(seed if seed is not None else 42)
-    selected: list[int] = [int(rng.integers(0, N))]
-
-    # min_dist[i] = min cosine distance from point i to any selected point
-    # Cosine distance = 1 - cosine_similarity
-    first_vec = unit[selected[0]]  # (D,)
-    sim = unit @ first_vec          # (N,)  — dot products with first point
-    min_dist = 1.0 - sim            # (N,)  — cosine distances
-
-    # -- iterate ------------------------------------------------------------
-    for _ in range(1, n):
-        # Pick the point with the largest minimum distance.
-        mask = np.ones(N, dtype=bool)
-        mask[selected] = False
-        masked_dist = np.where(mask, min_dist, -np.inf)
-        best = int(np.argmax(masked_dist))
-        selected.append(best)
-
-        # Update min_dist: for every point, the distance to the new point
-        # might be smaller than the current min_dist.
-        new_sim = unit @ unit[best]          # (N,)
-        new_dist = 1.0 - new_sim             # (N,)
-        min_dist = np.minimum(min_dist, new_dist)
-
-    return selected
+    return f"{model}:{dimension}"

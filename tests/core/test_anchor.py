@@ -8,7 +8,8 @@ import pytest
 from ard.core.types import AnchorSpec, GeneratedAnchor, AnchorGenerationConfig
 from ard.core.ontology import load_ontology
 from ard.core.sampler import sample_anchors, generate_anchor_id
-from ard.core.embeddings import load_embeddings, farthest_point_sampling
+from ard.core.embeddings import load_embeddings
+from ard.core.cloud import CloudVectors, fps
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -167,59 +168,68 @@ def test_generate_anchor_id_different_inputs():
     assert id1 != id2
 
 
-# ── Embeddings ──────────────────────────────────────────────────────────────
+# ── Embeddings / FPS (space-safe API) ───────────────────────────────────────
 
 
-def test_farthest_point_sampling_basic():
-    """farthest_point_sampling returns n indices."""
+def _fps_positions(emb, n, seed=42):
+    """Run space-safe FPS and return the row positions (test-local helper)."""
+    cloud = CloudVectors(
+        space_id=f"test-anchor:{emb.shape[1]}", cloud_id="test_anchor", vectors=emb
+    )
+    index, _selection = fps(cloud, n=n, seed=seed)
+    return list(index.positions)
+
+
+def test_fps_basic():
+    """fps returns n distinct row positions."""
     import numpy as np
     emb = np.random.randn(100, 64).astype(np.float32)
-    indices = farthest_point_sampling(emb, 10, seed=42)
+    indices = _fps_positions(emb, 10)
     assert len(indices) == 10
     assert len(set(indices)) == 10  # all unique
     assert all(0 <= i < 100 for i in indices)
 
 
-def test_farthest_point_sampling_n_equals_N():
-    """When n == N, returns all indices."""
+def test_fps_n_equals_N():
+    """When n == N, returns all positions."""
     import numpy as np
     emb = np.random.randn(5, 8).astype(np.float32)
-    indices = farthest_point_sampling(emb, 5, seed=42)
+    indices = _fps_positions(emb, 5)
     assert sorted(indices) == [0, 1, 2, 3, 4]
 
 
-def test_farthest_point_sampling_n_one():
-    """When n == 1, returns a single index."""
+def test_fps_n_one():
+    """When n == 1, returns a single position."""
     import numpy as np
     emb = np.random.randn(10, 8).astype(np.float32)
-    indices = farthest_point_sampling(emb, 1, seed=42)
+    indices = _fps_positions(emb, 1)
     assert len(indices) == 1
 
 
-def test_farthest_point_sampling_deterministic():
+def test_fps_deterministic():
     """Same seed produces same result."""
     import numpy as np
     emb = np.random.randn(50, 16).astype(np.float32)
-    r1 = farthest_point_sampling(emb, 5, seed=123)
-    r2 = farthest_point_sampling(emb, 5, seed=123)
+    r1 = _fps_positions(emb, 5, seed=123)
+    r2 = _fps_positions(emb, 5, seed=123)
     assert r1 == r2
 
 
-def test_farthest_point_sampling_empty_raises():
-    """Empty array raises ValueError."""
+def test_fps_empty_raises():
+    """An empty matrix is rejected at the carrier boundary."""
     import numpy as np
-    with pytest.raises(ValueError, match="empty"):
-        farthest_point_sampling(np.array([]).reshape(0, 8), 1)
+    with pytest.raises(ValueError, match="at least one row"):
+        _fps_positions(np.array([]).reshape(0, 8), 1)
 
 
-def test_farthest_point_sampling_n_out_of_range():
+def test_fps_n_out_of_range():
     """n out of range raises ValueError."""
     import numpy as np
     emb = np.random.randn(10, 8).astype(np.float32)
     with pytest.raises(ValueError, match="n must be"):
-        farthest_point_sampling(emb, 0)
+        _fps_positions(emb, 0)
     with pytest.raises(ValueError, match="n must be"):
-        farthest_point_sampling(emb, 11)
+        _fps_positions(emb, 11)
 
 
 # ── Config ──────────────────────────────────────────────────────────────────

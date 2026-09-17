@@ -18,7 +18,8 @@ from typing import Any
 
 import numpy as np
 
-from ard.core.embeddings import farthest_point_sampling
+from ard.core.cloud import CloudVectors, fps
+from ard.core.embeddings import embedding_space_id
 from ard.core.system_prompt import (
     SYSTEM_PROMPT_STYLE_ABSENT,
     SYSTEM_PROMPT_STYLE_ORDER,
@@ -165,8 +166,16 @@ def _farthest_domain_order(
         [domain_embeddings[name] for name in names],
         dtype=np.float64,
     )
-    order = farthest_point_sampling(vectors, n=len(vectors), seed=seed)
-    return [names[i] for i in order]
+    cloud = CloudVectors(
+        space_id=embedding_space_id(data),
+        cloud_id="knowledge_domains",
+        vectors=vectors,
+        item_ids=tuple(names),
+    )
+    _index, selected = fps(cloud, n=len(names), seed=seed)
+    # Domain *names* travel as item_ids, so the FPS positions are never used to
+    # index a second, parallel array (the pattern that once mixed clouds).
+    return list(selected.require_item_ids())
 
 
 # ---------------------------------------------------------------------------
@@ -418,8 +427,10 @@ def _sample_farthest(
     domain: the capability / language / conversation-type / system-prompt
     vectors do not depend on the domain, so composing per domain normalised the
     same vectors again and again, and step 6 composed the leftovers a third
-    time.  Both steps now only *slice* the precomputed matrix, which also
-    guarantees that a combination looks identical to step 5 and step 6.
+    time.  Both steps now only *slice* the precomputed matrix through
+    :class:`~ard.core.cloud.CloudVectors`, which also guarantees that a
+    combination looks identical to step 5 and step 6, and keeps every selection
+    bound to the cloud it came from.
 
     Args:
         ontology: Loaded ontology dict.
@@ -489,6 +500,17 @@ def _sample_farthest(
         for (start, end), vector in zip(slot_bounds, slots):
             vectors[position, start:end] = vector
 
+    # The composed matrix is one cloud.  Its rows are the combinations in
+    # ``combos`` order, and each row's item_id is that combination position — so a
+    # selection maps back to its combination through *identity*, never through a
+    # parallel array of positions (the pattern that once mixed clouds).
+    composed = CloudVectors(
+        space_id=f"{embedding_space_id(embeddings_data)}+composed6",
+        cloud_id="ontology_combinations",
+        vectors=vectors,
+        item_ids=tuple(str(position) for position in range(len(combos))),
+    )
+
     result: list[dict[str, Any]] = []
     # Bookkeeping is by *position* in ``combos``: two combinations are distinct
     # exactly when their positions differ, because one combination is built per
@@ -503,10 +525,10 @@ def _sample_farthest(
         positions = by_domain[domain]
         n = min(per_domain, len(positions))
         if n > 0:
-            vectors_for_domain = vectors[np.array(positions)]
-            order = farthest_point_sampling(vectors_for_domain, n=n, seed=config.seed)
-            for idx in order:
-                position = positions[idx]
+            domain_cloud = composed.select(composed.index_of(positions))
+            _index, selected = fps(domain_cloud, n=n, seed=config.seed)
+            for item_id in selected.require_item_ids():
+                position = int(item_id)
                 result.append(combos[position])
                 used_positions.add(position)
 
@@ -517,14 +539,14 @@ def _sample_farthest(
         ]
         n_missing = config.target_count - len(result)
         if remaining_positions:
-            remaining_vectors = vectors[np.array(remaining_positions)]
-            order = farthest_point_sampling(
-                remaining_vectors,
+            remaining_cloud = composed.select(composed.index_of(remaining_positions))
+            _index, selected = fps(
+                remaining_cloud,
                 n=min(n_missing, len(remaining_positions)),
                 seed=config.seed,
             )
-            for idx in order:
-                result.append(combos[remaining_positions[idx]])
+            for item_id in selected.require_item_ids():
+                result.append(combos[int(item_id)])
 
     # Trim if we somehow exceeded target_count
     if len(result) > config.target_count:
