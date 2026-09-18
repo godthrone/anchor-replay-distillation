@@ -279,35 +279,94 @@ class CloudVectors:
             )
 
 
+#: Greedy criterion «the largest of the blanks» — every further point is the row
+#: whose *minimum* cosine distance to the selected set is the largest (the
+#: classic farthest-point rule).  This is the historical behaviour.
+CRITERION_MAX = "max"
+
+#: Greedy criterion «the total blankness» — every further point is the row whose
+#: **sum** of distances to the nearest already-selected row (counting itself,
+#: distance 0) is the smallest.  Also known as the greedy facility-location /
+#: max-coverage step.  On clustered clouds — clusters plus isolated points, which
+#: is what the production anchor geometry looks like — this optimises the
+#: quantity the holdout radius ``r_mean`` actually measures, whereas
+#: :data:`CRITERION_MAX` optimises a statistic dominated by a single isolated
+#: point.
+CRITERION_SUM = "sum"
+
+FPS_CRITERIA: tuple[str, ...] = (CRITERION_MAX, CRITERION_SUM)
+
+# Peak memory the ``sum`` criterion may spend on the ``(n_items, n_items)``
+# distance matrix it needs.  ``max`` never materialises that matrix; ``sum``
+# cannot be evaluated without it, so the cost is bounded here rather than left
+# to whatever the caller's pool size happens to be (a 50k-row pool would ask for
+# 20 GB).  Exceeding the budget is a *boundary check*: refused loudly, never
+# silently degraded to another criterion (§2.3).
+FPS_SUM_MATRIX_MAX_BYTES = 1 << 30  # 1 GiB
+
+
+def _check_criterion(criterion: str) -> str:
+    """Return *criterion* if it is a known greedy rule, else raise.
+
+    A typo must never fall back to the default: silently running the wrong
+    objective is exactly the failure this API exists to make impossible
+    (§2.1 契约即防呆).
+    """
+    if criterion not in FPS_CRITERIA:
+        raise ValueError(
+            f"criterion must be one of {list(FPS_CRITERIA)}, got {criterion!r}"
+        )
+    return criterion
+
+
+def _sum_matrix_limit() -> int:
+    """Largest ``n_items`` whose ``(n, n)`` float64 distance matrix fits the budget."""
+    return int(np.sqrt(FPS_SUM_MATRIX_MAX_BYTES // 8))
+
+
 def fps(
     cloud: CloudVectors,
     n: int,
     *,
     seed: int | None = None,
+    criterion: str = CRITERION_MAX,
 ) -> tuple[CloudIndex, CloudVectors]:
     """Select *n* diverse rows of *cloud* by greedy farthest-point sampling.
 
-    The selection rule is unchanged from the historical FPS helper this module
-    replaced: rows are unit-normalised, the first point is
-    drawn with ``numpy.random.default_rng(seed if seed is not None else 42)``,
-    and every further point is the row whose minimum cosine distance to the
-    already selected rows is the largest.  What changed is the *contract*: the
-    caller receives a :class:`CloudIndex` carrying ``cloud``'s identity plus
-    the selected vectors — never a bare ``list[int]`` that could be used to
-    index a different cloud.
+    Rows are unit-normalised and the first point is drawn with
+    ``numpy.random.default_rng(seed if seed is not None else 42)``; the contract
+    is that the caller receives a :class:`CloudIndex` carrying ``cloud``'s
+    identity plus the selected vectors — never a bare ``list[int]`` that could be
+    used to index a different cloud.
+
+    Every further point is chosen by *criterion*:
+
+    * :data:`CRITERION_MAX` (default, historical) — ``argmax_i min_j d(i, j)``:
+      the row sitting furthest from the selected set.  This is what this
+      function has always done; the code path is untouched.
+    * :data:`CRITERION_SUM` — ``argmin_i Σ_j min_j d(i, j)``: the row that
+      leaves the least *total* blankness, i.e. the greedy facility-location
+      step.  Distances are cosine on L2-normalised rows, so "distance to the
+      nearest selected row" includes the candidate itself at distance 0.
 
     Args:
         cloud: cloud to select from.
         n: number of rows to select; must satisfy ``1 <= n <= cloud.n_items``.
         seed: random seed for the initial point (``None`` → ``42``, as before).
+        criterion: greedy rule, one of :data:`FPS_CRITERIA`.  The default
+            reproduces the historical output **bit for bit**.
 
     Returns:
         ``(index, selection)`` — the labelled positions and the selected
         vectors, both carrying ``cloud``'s ``space_id`` and ``cloud_id``.
 
     Raises:
-        ValueError: if ``n`` is outside ``[1, cloud.n_items]``.
+        ValueError: if ``n`` is outside ``[1, cloud.n_items]``, if *criterion*
+            is not a known rule, or if ``CRITERION_SUM`` is asked of a cloud so
+            large that its distance matrix exceeds
+            :data:`FPS_SUM_MATRIX_MAX_BYTES`.
     """
+    criterion = _check_criterion(criterion)
     vectors = cloud.vectors
     n_items = cloud.n_items
     if n < 1 or n > n_items:
@@ -324,11 +383,52 @@ def fps(
 
         # min_dist[i] = min cosine distance from row i to any selected row.
         min_dist = 1.0 - unit @ unit[selected[0]]
+
+        # The ``sum`` rule needs every pairwise distance, while the ``max`` rule
+        # only needs the running minima.  Materialising the matrix once is what
+        # makes the k greedy steps affordable; it is done only when asked for,
+        # so the default path allocates nothing new.
+        pair_distances: np.ndarray | None = None
+        if criterion == CRITERION_SUM:
+            limit = _sum_matrix_limit()
+            if n_items > limit:
+                raise ValueError(
+                    f"criterion={CRITERION_SUM!r} needs the full ({n_items}, {n_items}) "
+                    f"distance matrix ({n_items * n_items * 8 / 2**30:.1f} GiB), which "
+                    f"exceeds FPS_SUM_MATRIX_MAX_BYTES={FPS_SUM_MATRIX_MAX_BYTES} "
+                    f"(limits the cloud to {limit} rows). Refusing rather than silently "
+                    "falling back to a different criterion."
+                )
+            # ``np.clip`` because ``1 - <u, u>`` is 0 only up to rounding: a
+            # cosine *distance* is never negative, and the rest of the project
+            # measures coverage with the same clamp (``coverage_to``).  This also
+            # makes ``d(i, i)`` exactly 0, so a candidate's own row contributes
+            # exactly the "already covered" term the objective means.
+            pair_distances = np.clip(1.0 - unit @ unit.T, 0.0, None)
+
         for _ in range(1, n):
             mask = np.ones(n_items, dtype=bool)
             mask[selected] = False
-            masked_dist = np.where(mask, min_dist, -np.inf)
-            best = int(np.argmax(masked_dist))
+            if criterion == CRITERION_MAX:
+                masked_dist = np.where(mask, min_dist, -np.inf)
+                best = int(np.argmax(masked_dist))
+            else:
+                assert pair_distances is not None  # set above for CRITERION_SUM
+                # scores[i] = Σ_j min(min_dist[j], d(i, j)) — the distance from
+                # every row to the nearest member of ``selected ∪ {i}``, summed.
+                # Selected rows contribute their own 0, so they need no masking.
+                # Row-blocked so the transient is a fixed 64 MiB instead of a
+                # second ``(n, n)`` matrix.
+                scores = np.empty(n_items, dtype=np.float64)
+                nearest = np.clip(min_dist, 0.0, None)
+                block = max(1, (64 << 20) // (n_items * 8))
+                for start in range(0, n_items, block):
+                    stop = min(start + block, n_items)
+                    scores[start:stop] = np.minimum(
+                        pair_distances[start:stop], nearest[None, :]
+                    ).sum(axis=1)
+                masked_scores = np.where(mask, scores, np.inf)
+                best = int(np.argmin(masked_scores))
             selected.append(best)
             min_dist = np.minimum(min_dist, 1.0 - unit @ unit[best])
 

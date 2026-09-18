@@ -12,6 +12,7 @@ import random
 from typing import Any
 
 from ard.core._fps import _sample_farthest
+from ard.core.cloud import CRITERION_MAX
 from ard.core.system_prompt import get_system_prompt_values, system_prompt_mode
 from ard.core.types import AnchorGenerationConfig, AnchorSpec, TurnSpec
 
@@ -20,6 +21,8 @@ def sample_anchors(
     ontology: dict[str, Any],
     config: AnchorGenerationConfig,
     rng: random.Random,
+    *,
+    criterion: str = CRITERION_MAX,
 ) -> list[AnchorSpec]:
     """Sample anchors using farthest-point sampling (FPS).
 
@@ -31,13 +34,18 @@ def sample_anchors(
         ontology: Loaded ontology dict.
         config: Generation configuration (must include ``max_turns``).
         rng: Seeded :class:`random.Random` instance.
+        criterion: greedy rule for the within-domain FPS, one of
+            :data:`ard.core.cloud.FPS_CRITERIA`.  The default reproduces the
+            historical selection bit for bit; ``"sum"`` selects the combination
+            that minimises the *total* remaining cosine distance instead of the
+            single largest one.
 
     Returns:
         List of :class:`AnchorSpec` objects ready for generation.
     """
     from ard.core.quota import compute_turn_distribution
 
-    meta_dicts = _sample_farthest(ontology, config, rng)
+    meta_dicts = _sample_farthest(ontology, config, rng, criterion=criterion)
 
     max_turns = config.max_turns
     # Only odd turn counts are valid (last turn must be user).

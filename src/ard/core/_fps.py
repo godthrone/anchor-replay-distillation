@@ -4,6 +4,10 @@ Pure computation layer: Layer 1 FPS over knowledge domain embeddings,
 Layer 2 FPS within each domain over composed 4096-dim vectors.  No network,
 no GPU management, no file-system side-effects beyond the JSON load path.
 
+The Layer 2 greedy rule is selectable (``criterion``, see
+:data:`ard.core.cloud.FPS_CRITERIA`); the default ``"max"`` keeps the historical
+selection bit for bit.
+
 NOTE: This file is ~347 lines (exceeds the 300-line guideline) because it
 bundles FPS algorithm, embedding composition, and validation which are
 tightly coupled and share the same domain concept.
@@ -18,7 +22,7 @@ from typing import Any
 
 import numpy as np
 
-from ard.core.cloud import CloudVectors, fps
+from ard.core.cloud import CRITERION_MAX, CloudVectors, fps
 from ard.core.embeddings import embedding_space_id
 from ard.core.system_prompt import (
     SYSTEM_PROMPT_STYLE_ABSENT,
@@ -410,6 +414,8 @@ def _sample_farthest(
     ontology: dict[str, Any],
     config: Any,  # AnchorGenerationConfig
     rng: random.Random,
+    *,
+    criterion: str = CRITERION_MAX,
 ) -> list[dict[str, Any]]:
     """Hierarchical FPS: Layer 1 selects diverse domains, Layer 2 balances
     within each domain using composed embedding vectors.
@@ -438,12 +444,20 @@ def _sample_farthest(
             and ``target_count`` attributes.
         rng: Seeded :class:`random.Random` instance (used only for
             final trimming when ``len(result) > target_count``).
+        criterion: greedy rule for **Layer 2** (the within-domain and remainder
+            FPS over composed vectors), one of :data:`ard.core.cloud.FPS_CRITERIA`.
+            The default reproduces the historical output bit for bit.  Layer 1
+            (:func:`_farthest_domain_order`) deliberately keeps
+            :data:`~ard.core.cloud.CRITERION_MAX`: it permutes *all* domains, so
+            the criterion only reorders them and changing it would move two
+            variables at once.
 
     Returns:
         List of sampled anchor meta dicts.
 
     Raises:
-        ValueError: If embeddings validation fails or no domains overlap.
+        ValueError: If embeddings validation fails, no domains overlap, or
+            *criterion* is unknown (see :func:`ard.core.cloud.fps`).
     """
     from ard.core.sampler import _build_all_combinations  # lazy import
 
@@ -526,7 +540,9 @@ def _sample_farthest(
         n = min(per_domain, len(positions))
         if n > 0:
             domain_cloud = composed.select(composed.index_of(positions))
-            _index, selected = fps(domain_cloud, n=n, seed=config.seed)
+            _index, selected = fps(
+                domain_cloud, n=n, seed=config.seed, criterion=criterion
+            )
             for item_id in selected.require_item_ids():
                 position = int(item_id)
                 result.append(combos[position])
@@ -544,6 +560,7 @@ def _sample_farthest(
                 remaining_cloud,
                 n=min(n_missing, len(remaining_positions)),
                 seed=config.seed,
+                criterion=criterion,
             )
             for item_id in selected.require_item_ids():
                 result.append(combos[int(item_id)])
