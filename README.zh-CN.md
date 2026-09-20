@@ -31,7 +31,7 @@ OpenAI 兼容的 chat-completions 端点。
 | 你需要 | 没有会怎样 | 能否降级照跑？ |
 |--------|-----------|----------------|
 | **Docker** | `bash docker/build.sh` 与 `bash run.sh` 完全跑不起来 | 不能——没有容器运行时什么都跑不了。请先装 Docker。 |
-| **一个 OpenAI 兼容端点 + 模型名**（`api_base`、`model_name`），提问与作答各一份 | 运行会在创建一个空的 `outputs/ard_dataset_*/` 目录后以 `ValueError: api_base must not be None` 中止 | 可以——两个角色可以指向**同一个**服务/模型，也可以指向本地 vLLM/Ollama/llama.cpp 服务。项目**不提供**离线演示模式。 |
+| **一个 OpenAI 兼容端点 + 模型名**（`api_base`、`model_name`），提问与作答各一份 | 运行会在**动手之前**就被拒绝，报一条字段级错误 `ERROR: [input_generator] is missing ...`（或 `[target_model] ...`），点明缺哪个字段；**不会创建任何输出目录** | 可以——两个角色可以指向**同一个**服务/模型，也可以指向本地 vLLM/Ollama/llama.cpp 服务。项目**不提供**离线演示模式。 |
 | **API key** | 只有当你的端点校验密钥时才必要 | 可以——`api_key` 不填（或删掉该行）就不会发送 `Authorization` 头。 |
 | **本体与嵌入数据**（`ontology/*.json`） | 需要重新用 embedding API 生成 | 不是问题：两个文件都**已随仓库跟踪**，clone 后即存在（55 个预计算嵌入向量，1024 维，供分层 FPS 采样器使用）。只读输入，不是生成产物。 |
 | **RAW 图片支持**（`rawpy`，已在 `pyproject.toml` 依赖中） | 无法读取 RAW（CR2/NEF/ARW/DNG/…）输入 | 可以——文本锚点与 JPG/PNG/GIF/WebP 多模态锚点均不受影响。该库以 manylinux wheel 发布，自带 `libraw.so`，导入是懒加载。 |
@@ -107,16 +107,17 @@ python3 -c "import json,glob; print(json.load(open(sorted(glob.glob('outputs/ard
 tail -3 outputs/ard_dataset_*/logs/ard.log      # 结尾是：Done! Output: outputs/ard_dataset_...
 ```
 
-一轮没产出任何锚点，也照样会写出 `config.json` 和 `logs/`——真正区分成功与
-失败的是 `anchor_bank.jsonl` 的行数。多模态运行还要多看一处：记录的
+一轮只要通过了凭证校验、却没产出任何锚点，也照样会写出 `config.json` 和
+`logs/`——真正区分成功与失败的是 `anchor_bank.jsonl` 的行数。多模态运行还要多看一处：记录的
 `data_source` 必须是 `ard_multi`（纯文本运行则是 `ard_text`）。
 
 ### 第 3 步或第 4 步失败时
 
-- **`ValueError: api_base must not be None`** —— `api_base` / `model_name`
-  还是空的。（`--override` 指向一个不存在的文件时也会看到同一段报错，所以先
-  确认路径。）注意流水线在报错前已经创建了空的
-  `outputs/ard_dataset_<时间戳>/` 目录。
+- **`ERROR: [input_generator] is missing ...`**（或 **`[target_model] ...`**）——
+  那个配置段的 `api_base` / `model_name` 还是空的（`configs/config.toml` 里两者
+  都写作 `""`，空值一律按"未设置"处理）。消息会点明每个缺失字段，而且运行在
+  **创建任何输出目录、写出任何文件之前**就停下，没有残留需要清理。按第 3 步把
+  字段填进 `.local/config.override.toml` 即可。
 - **`ERROR: override config not found: <路径>`** —— `--override` 路径写错了。
   如果**省略** `--override`，它只会自动检测**与 `--config` 同目录**的
   `config.override.toml`——那是 `configs/`，不是 `.local/`。请像上面那样显式
@@ -230,7 +231,7 @@ ARD 采用**分层 TOML 配置**模型。有两个配置文件：
 | — | — | — | 系统提示词不再是配置开关：由本体采样决定（`system_prompt_presence` / `system_prompt_style`），带 system 的锚点其文本在运行时生成并写入 `messages[0]` |
 | `max_turns_with_image` | int | `1` | 含图片的最大轮数（≤ `max_turns`） |
 | `embeddings_path` | string | `"ontology/anchor_ontology_embeddings.json"` | 预计算本体论 embedding 文件路径 |
-| `criterion` | string | `"max"` | 域内最远点选择的贪心规则。`"max"` = 经典最远点（保持 `"max"` 可逐位复现此前所有版本）；`"sum"` = total-blankness / 贪心设施选址，它需要完整的 (n, n) 距离矩阵，因此超过约 11,585 行（1 GiB）时会被**拒绝**，而不是静默降级。**而在生产路径上它本来就会被拒绝：** 常规运行的余量填充那一段云约 **50,310** 行，需要约 **18.9 GiB**，因此在当前本体组合云的生产路径上被**规模预算拒绝**。也就是说 `"sum"` **在生产路径上不可选**——预算直接取消该选项，而不是假装结果没变；同一份约 1 GiB 的规模预算也适用于 `"max"`，所以这不是"`max` 还是 `sum`"的偏好选择。其他取值会在**配置加载时被拒绝**——不存在静默回退 |
+| `criterion` | string | `"max"` | 域内最远点选择的贪心规则。`"max"` = 经典最远点（保持 `"max"` 可逐位复现此前所有版本）；`"sum"` = total-blankness / 贪心设施选址，它需要完整的 (n, n) 距离矩阵，因此超过约 11,585 行（1 GiB）时会被**拒绝**，而不是静默降级。**而在生产路径上它本来就会被拒绝：** 常规运行的余量填充那一段云约 **50,310** 行，需要约 **18.9 GiB**，因此在当前本体组合云的生产路径上被**规模预算拒绝**。也就是说 `"sum"` **在生产路径上不可选**——预算直接取消该选项，而不是假装结果没变。该预算**只**约束 `"sum"`（`"max"` 根本不会物化距离矩阵，因此没有这个上限），所以这属于规模限制，而不是"`max` 还是 `sum`"的偏好选择。其他取值会在**配置加载时被拒绝**——不存在静默回退 |
 | `backpressure_threshold` | int | `3` | 连续服务端类失败达到该次数即触发冷却 |
 | `backpressure_cooldown` | float | `60.0` | 触发阈值后的冷却暂停秒数 |
 
@@ -447,9 +448,13 @@ examples/
 
 ## 原理（算法总览）
 
-在翻配置参考之前，建议先看 [`docs/ard-algorithm.md`](docs/ard-algorithm.md)：它是**算法原理与九步流程总览**，
-不用公式、不写参数取值、不展开实现细节，每一步都带一行"实现状态"（即当前真正在跑的是哪一步）。
-它与 `docs/architecture.md` 互补——后者写的是模块边界与数据流。
+在翻配置参考之前，建议先看 [`docs/ard-algorithm.md`](docs/ard-algorithm.md)：它先给**算法的宏观全貌**，
+再逐个看完**九个环节各自的具体操作**；不用公式、不写参数取值、不展开代码结构，每一步都带一行
+"实现状态"（即当前真正在跑的是哪一步）。它与 `docs/architecture.md` 互补——后者写的是模块边界与数据流。
+
+[`docs/measurement-methods.md`](docs/measurement-methods.md) 回答的是另一个问题：**哪个变量真的在移动语言空间、
+下一份预算该花在哪**。它存放采样权重背后的**测量方法学**（口径、基线、零分布、可复现纪律），
+适合要重推或重跑一次测量时查阅；只跑 ARD 不需要它。
 
 ## Docker
 
@@ -525,10 +530,10 @@ api_key = "REPLACE_WITH_YOUR_API_KEY"
 ### 没有 API key / 没有模型端点，能先试试吗？
 
 **没有离线演示模式**：每条锚点都要调用所配置的两个模型，项目不自带任何端点。
-没有凭证时你能验证到第一次 API 调用之前的一切——镜像能构建、配置能加载、
-流水线会创建 `outputs/ard_dataset_<时间戳>/` 并写入 `config.json` 与 `logs/`，
-然后停在 `ValueError: api_base must not be None`。如果你的端点不需要密钥，
-`api_key` 留空即可，请求不会带认证头。两个角色也可以指向同一个本地
+没有凭证时，你仍能验证镜像能构建、配置能加载——随后运行会停在配置边界上，
+报一条字段级错误 `ERROR: [input_generator] is missing ...`，点明是哪个配置段、
+缺哪些字段，而且是在**创建输出目录、写出任何文件之前**停下。如果你的端点不需要
+密钥，`api_key` 留空即可，请求不会带认证头。两个角色也可以指向同一个本地
 OpenAI 兼容服务（vLLM、Ollama、llama.cpp、LM Studio 等），这是看到完整一轮
 产出最省事的办法。
 
@@ -581,6 +586,10 @@ bash run.sh --config configs/config.toml --override .local/config.override.toml 
 
 ARD 自动从上次已完成的锚点恢复。只需重新运行相同的命令——流水线会检测
 `anchor_bank.jsonl` 中已有的锚点，只生成剩余数量以达到 `target_count`。
+
+凭证校验发生在**续跑判断之前**，所以即使 bank 已经补齐，端点字段也必须保持填写：
+带着缺失的 `api_base` / `model_name` 重跑一个已完成的目录会被拒绝（见**第 3 步或第 4 步失败时**），
+而不是静默地报告"没有剩余工作"。
 
 ### 已知行为边界
 

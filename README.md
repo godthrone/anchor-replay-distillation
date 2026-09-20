@@ -38,7 +38,7 @@ Docker, and an OpenAI-compatible chat-completions endpoint.
 | You need | Without it | Can you run anyway? |
 |----------|-----------|---------------------|
 | **Docker** | `bash docker/build.sh` and `bash run.sh` cannot run at all | No — nothing runs without a container runtime. Install Docker first. |
-| **An OpenAI-compatible endpoint + model name** (`api_base`, `model_name`), one for questions and one for answers | The run aborts with `ValueError: api_base must not be None` after creating an empty `outputs/ard_dataset_*/` directory | Yes — both roles may point at the **same** server/model, or at a local vLLM/Ollama/llama.cpp server. There is no bundled offline demo mode. |
+| **An OpenAI-compatible endpoint + model name** (`api_base`, `model_name`), one for questions and one for answers | The run is refused **before it does anything**, with a field-level `ERROR: [input_generator] is missing ...` (or `[target_model] ...`) that names the missing field(s). No output directory is created | Yes — both roles may point at the **same** server/model, or at a local vLLM/Ollama/llama.cpp server. There is no bundled offline demo mode. |
 | **API key** | Only matters if your endpoint checks one | Yes — leave `api_key` unset (or delete the line) and no `Authorization` header is sent. |
 | **Ontology + embeddings** (`ontology/*.json`) | Would have to be regenerated with an embedding API | Not a problem: both files are **tracked in this repo**, so a clone already has them (55 pre-computed embeddings, 1024-dim, used by the hierarchical FPS sampler). Read-only input, not generated output. |
 | **RAW image support** (`rawpy`, in `pyproject.toml` dependencies) | RAW (CR2/NEF/ARW/DNG/…) inputs are unavailable | Yes — text and JPG/PNG/GIF/WebP multimodal anchors are unaffected. The library ships as a manylinux wheel with bundled `libraw.so` and its import is lazy. |
@@ -119,17 +119,20 @@ python3 -c "import json,glob; print(json.load(open(sorted(glob.glob('outputs/ard
 tail -3 outputs/ard_dataset_*/logs/ard.log      # ends with: Done! Output: outputs/ard_dataset_...
 ```
 
-A run that produced no anchors still writes `config.json` and `logs/` — the
-`anchor_bank.jsonl` line count is the thing that tells success from failure.
+A run that got past the credential check but produced no anchors still writes
+`config.json` and `logs/` — the `anchor_bank.jsonl` line count is the thing that
+tells success from failure.
 For a multimodal run, check the record as well: its `data_source` must be
 `ard_multi` (and `ard_text` for a text-only run).
 
 ### If step 3 or 4 fails
 
-- **`ValueError: api_base must not be None`** — `api_base` / `model_name` were
-  still empty. (The same traceback appears if `--override` points at a file
-  that does not exist, so fix the path first.) Note the pipeline creates an
-  empty `outputs/ard_dataset_<timestamp>/` directory before it aborts.
+- **`ERROR: [input_generator] is missing ...`** (or **`[target_model] ...`**) —
+  that section's `api_base` / `model_name` is still empty (`configs/config.toml`
+  ships both as `""`, and a blank value counts as unset). The message names
+  every missing field, and the run stops **before** it creates an output
+  directory or writes anything, so there is nothing to clean up. Fill the
+  fields into `.local/config.override.toml` as in step 3.
 - **`ERROR: override config not found: <path>`** — the `--override` path is
   wrong. If you *omit* `--override`, it is auto-detected as
   `config.override.toml` **sitting next to `--config`** — which is
@@ -253,7 +256,7 @@ roles downstream frameworks talk about:
 | — | — | — | The system prompt is no longer a config switch: the ontology samples it (`system_prompt_presence` / `system_prompt_style`), and each anchor that has one gets its text generated at run time and stored in `messages[0]` |
 | `max_turns_with_image` | int | `1` | Max turns with image (≤ `max_turns`) |
 | `embeddings_path` | string | `"ontology/anchor_ontology_embeddings.json"` | Pre-computed ontology embedding file |
-| `criterion` | string | `"max"` | Greedy rule of the within-domain farthest-point selection. `"max"` = classic farthest point (leaving it at `"max"` reproduces every previous release bit for bit); `"sum"` = total-blankness / greedy facility location — it needs the full (n, n) distance matrix, so it is **refused** above ~11,585 rows (1 GiB) instead of silently degrading. **On the production path it is refused anyway:** the margin-filling selection of a normal run (≈ **50,310** rows) would need ≈ **18.9 GiB**, so it is **rejected by the scale budget** of the current-ontology combination cloud. That makes `"sum"` **not selectable in production** — the budget cancels the option instead of pretending the outcome is unchanged, and the same ≈1 GiB budget also applies to `"max"`, so this is not a `"max"`-vs-`"sum"` preference. Any other value is **refused at config load** — there is no silent fallback |
+| `criterion` | string | `"max"` | Greedy rule of the within-domain farthest-point selection. `"max"` = classic farthest point (leaving it at `"max"` reproduces every previous release bit for bit); `"sum"` = total-blankness / greedy facility location — it needs the full (n, n) distance matrix, so it is **refused** above ~11,585 rows (1 GiB) instead of silently degrading. **On the production path it is refused anyway:** the margin-filling selection of a normal run (≈ **50,310** rows) would need ≈ **18.9 GiB**, so it is **rejected by the scale budget** of the current-ontology combination cloud. That makes `"sum"` **not selectable in production** — the budget cancels the option instead of pretending the outcome is unchanged. The budget bounds `"sum"` **only** (`"max"` never materialises the matrix, so it has no such ceiling), which is why this reads as a scale limit and not as a `"max"`-vs-`"sum"` preference contest. Any other value is **refused at config load** — there is no silent fallback |
 | `backpressure_threshold` | int | `3` | Consecutive server-side failures that trigger a cooldown |
 | `backpressure_cooldown` | float | `60.0` | Cooldown pause in seconds once the threshold is reached |
 
@@ -493,11 +496,18 @@ You can browse `examples/` directly on GitHub to see the input/output format.
 ## How it works (algorithm)
 
 Before reading the configuration reference, [`docs/ard-algorithm.md`](docs/ard-algorithm.md) is the
-place to start: an **algorithm-level overview and the nine-step pipeline**,
-written without formulas, parameter values, or implementation details, with an
-implementation-status line for each step (i.e. what actually runs today). It is
-the "why this design" companion to `docs/architecture.md`, which covers module
-boundaries and data flow.
+place to start: a **big-picture view of the algorithm, then the concrete
+operations of each of its nine steps**, written without formulas, parameter
+values, or code-structure details, with an implementation-status line for every
+step (i.e. what actually runs today). It is the "why this design" companion to
+`docs/architecture.md`, which covers module boundaries and data flow.
+
+[`docs/measurement-methods.md`](docs/measurement-methods.md) answers a different
+question: **which variable actually moves the language space, and where the next
+budget should go**. It holds the measurement methodology behind the sampling
+weights (protocols, baselines, zero distributions, reproducibility discipline)
+and is the reference when re-deriving or re-running a measurement; it is not
+needed to run ARD.
 
 ## Docker
 
@@ -578,14 +588,14 @@ meant to leave at its default.
 ### Can I try it without an API key / without a model endpoint?
 
 There is **no offline demo mode**: every anchor is produced by calling the two
-configured models, and no endpoint ships with the project. What you can do
-without credentials is verify everything up to the first API call — the image
-builds, the config loads, and the pipeline creates
-`outputs/ard_dataset_<timestamp>/` with `config.json` and `logs/` before it
-stops on `ValueError: api_base must not be None`. If your endpoint needs no
-key, leave `api_key` unset and the header is omitted. Both roles may point at
-one local OpenAI-compatible server (vLLM, Ollama, llama.cpp, LM Studio, …),
-which is the cheapest way to see a complete run.
+configured models, and no endpoint ships with the project. Without credentials
+you can still verify that the image builds and the config loads — the run then
+stops at the config boundary with a field-level
+`ERROR: [input_generator] is missing ...` naming the section and the missing
+field(s), **before** it creates an output directory or writes any file. If your
+endpoint needs no key, leave `api_key` unset and the header is omitted. Both
+roles may point at one local OpenAI-compatible server (vLLM, Ollama, llama.cpp,
+LM Studio, …), which is the cheapest way to see a complete run.
 
 ### How do I add a custom ontology?
 
@@ -641,6 +651,11 @@ Both types use the same record format, but one run produces only one of them
 ARD automatically resumes from the last committed anchor. Just re-run the
 same command — the pipeline detects existing anchors in `anchor_bank.jsonl`
 and only generates the remaining ones up to `target_count`.
+
+The credential check runs **before** the resume check, so the endpoint fields
+must stay filled in even when the bank is already complete: re-running a
+finished directory without `api_base` / `model_name` is refused (see **If step
+3 or 4 fails**) instead of quietly reporting "nothing left to do".
 
 ### Known behavior boundaries
 
