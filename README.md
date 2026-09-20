@@ -30,37 +30,44 @@ Graspo reinforcement learning pipelines.
 
 ## Quick Start
 
-**Clone → first dataset in four commands.** You need exactly two things:
+**Clone → first dataset in three commands.** You need exactly two things:
 Docker, and an OpenAI-compatible chat-completions endpoint.
 
 ### What you need — and what happens without it
 
 | You need | Without it | Can you run anyway? |
 |----------|-----------|---------------------|
-| **Docker** | `bash docker/build.sh` and `bash run.sh` cannot run at all | No — nothing runs without a container runtime. Install Docker first. |
+| **Docker** | `bash run.sh` cannot run at all — and since it builds the image on first use, neither can `bash docker/build.sh` | No — nothing runs without a container runtime. Install Docker first. |
 | **An OpenAI-compatible endpoint + model name** (`api_base`, `model_name`), one for questions and one for answers | The run is refused **before it does anything**, with a field-level `ERROR: [input_generator] is missing ...` (or `[target_model] ...`) that names the missing field(s). No output directory is created | Yes — both roles may point at the **same** server/model, or at a local vLLM/Ollama/llama.cpp server. There is no bundled offline demo mode. |
 | **API key** | Only matters if your endpoint checks one | Yes — leave `api_key` unset (or delete the line) and no `Authorization` header is sent. |
 | **Ontology + embeddings** (`ontology/*.json`) | Would have to be regenerated with an embedding API | Not a problem: both files are **tracked in this repo**, so a clone already has them (55 pre-computed embeddings, 1024-dim, used by the hierarchical FPS sampler). Read-only input, not generated output. |
 | **RAW image support** (`rawpy`, in `pyproject.toml` dependencies) | RAW (CR2/NEF/ARW/DNG/…) inputs are unavailable | Yes — text and JPG/PNG/GIF/WebP multimodal anchors are unaffected. The library ships as a manylinux wheel with bundled `libraw.so` and its import is lazy. |
 
-### 1. Clone and build the image (one command)
+### 1. Clone the repository (one command)
 
 ```bash
 git clone https://github.com/godthrone/anchor-replay-distillation.git && cd anchor-replay-distillation
-bash docker/build.sh
 ```
 
-The first build compiles the dependency layer (75 packages locked in `uv.lock`, plus the
-`python:3.11-slim` base) and needs network access to PyPI; the printed
-`Built: ard:<version>` line is your confirmation.
+There is no separate build step: on the first run, `run.sh` notices that the
+image is missing and builds it before starting the container (it delegates to
+`docker/build.sh`, so the tag stays under your control — see
+[Custom image tag](#custom-image-tag)). The first build compiles the dependency
+layer (75 packages locked in `uv.lock`, plus the `python:3.11-slim` base), needs
+network access to PyPI, and **takes a few minutes**; every later run reuses the
+image and starts immediately. The printed `Built: ard:<version>` line is your
+confirmation that the build happened.
 
-### 2. Create your override config (one command)
+`run.sh` itself never pulls from a registry — it builds only when the image is
+absent locally. If you would rather use a pre-built image from a registry,
+`docker pull <tag>` it first: the image then exists locally and `run.sh` skips
+the build entirely, exactly as before.
+
+### 2. Create your override config and fill in the fields (one command + one edit)
 
 ```bash
 mkdir -p .local && cp configs/config.override.sample.toml .local/config.override.toml
 ```
-
-### 3. Fill in the fields (edit one file)
 
 > **Heads-up about the template.** `configs/config.override.sample.toml` lists a
 > field for **every** field the base `configs/config.toml` defines, so it can
@@ -69,12 +76,16 @@ mkdir -p .local && cp configs/config.override.sample.toml .local/config.override
 > commented out (e.g. `target_count = 100`, `concurrency = 4`,
 > `max_turns = 1`, `[ontology].path`). Anything left
 > uncommented in the override **overrides the base config**, so if you meant to
-> keep a default, comment the line out or delete it. Rather than editing the
+> keep a default, comment the line out or delete it. **Never add a second copy
+> of a section that is already in the file** — a duplicate table declaration
+> (`[generation]` twice) is a TOML parse error, not a merge. Rather than editing the
 > whole template, you can replace it with just the block below — the loader
 > deep-merges it into `configs/config.toml`, and a partial file is valid.
 
-In `.local/config.override.toml`, these six values are the **minimum** — every
-other field already has a usable default in `configs/config.toml`:
+In `.local/config.override.toml`, **four values are required** — `api_base` and
+`model_name` for each role. `api_key` is **optional**: fill it only if your
+endpoint checks one, otherwise leave it out and no `Authorization` header is
+sent. Every other field already has a usable default in `configs/config.toml`:
 
 ```toml
 [input_generator]        # asks the questions
@@ -88,7 +99,7 @@ model_name = "your-model-name"
 api_key = "REPLACE_ME"
 ```
 
-### 4. Generate anchors (one command)
+### 3. Generate anchors (one command)
 
 ```bash
 bash run.sh --config configs/config.toml --override .local/config.override.toml
@@ -98,13 +109,17 @@ Add `--image-dir examples/images` to produce multimodal anchors instead of
 text-only ones. The default run asks for **100 anchors** and takes as long as
 your endpoint needs.
 
-### 5. See the first output in seconds (optional)
+### 4. See the first output in seconds (optional)
 
 To confirm the whole path works before a full run, point one run at a tiny
-target — append this to the same override file:
+target — set these two values **inside the `[generation]` section that already
+exists** in your override file. Do **not** add a second `[generation]` table:
+if you copied the whole template in step 2, it already contains one, and TOML
+refuses to declare the same table twice (`TOMLDecodeError: Cannot declare
+('generation',) twice`). Fill the two lines in where they are:
 
 ```toml
-[generation]
+[generation]             # the section that is already there — do not repeat this header
 target_count = 2
 concurrency = 1
 ```
@@ -125,22 +140,25 @@ tells success from failure.
 For a multimodal run, check the record as well: its `data_source` must be
 `ard_multi` (and `ard_text` for a text-only run).
 
-### If step 3 or 4 fails
+### If step 2 or 3 fails
 
 - **`ERROR: [input_generator] is missing ...`** (or **`[target_model] ...`**) —
   that section's `api_base` / `model_name` is still empty (`configs/config.toml`
   ships both as `""`, and a blank value counts as unset). The message names
   every missing field, and the run stops **before** it creates an output
   directory or writes anything, so there is nothing to clean up. Fill the
-  fields into `.local/config.override.toml` as in step 3.
+  fields into `.local/config.override.toml` as in step 2.
 - **`ERROR: override config not found: <path>`** — the `--override` path is
   wrong. If you *omit* `--override`, it is auto-detected as
   `config.override.toml` **sitting next to `--config`** — which is
   `configs/`, not `.local/`. Pass `--override .local/config.override.toml`
   explicitly, as above.
-- **`bash docker/build.sh` fails** — Docker missing, or the build needs PyPI
-  access. `run.sh` needs the image `ard:<git version>` to exist locally; a
-  missing image makes it try to pull `ard:1.0.0` from Docker Hub and fail.
+- **The automatic build fails on the first run** — either `run.sh: docker not
+  found in PATH` (Docker is not installed) or
+  `run.sh: building image '<tag>' failed (docker/build.sh exit N)` (Docker is not
+  running, or the build could not reach PyPI). The build recipe lives in this
+  repository, so the image is never pulled from a registry; fix the cause, then
+  build it by hand once with `bash docker/build.sh`.
 
 Everything below is reference material for when you want to tune a run — you
 do **not** need to read it to get your first dataset.
@@ -157,8 +175,9 @@ ARD uses a **layered TOML configuration** model. There are two config files:
 **`configs/config.toml`** is the single source of truth for the configuration
 schema. It defines every field with sensible defaults. Non-secret fields
 (e.g., `temperature`, `max_tokens`, `seed`) are ready to use out of the box.
-Secret fields (`api_base`, `model_name`, `api_key`) are left empty and must
-be filled via the override file.
+The endpoint fields (`api_base`, `model_name`) are left empty and must be filled
+via the override file. `api_key` is optional — it is left empty too, and you
+fill it in only if your endpoint checks one.
 
 **`.local/config.override.toml`** contains only the fields you need to
 override — typically `api_base`, `model_name`, and `api_key` for both
@@ -180,8 +199,9 @@ there are never two configuration sources inside the program.
 
 ## Configuration Reference
 
-All parameters are defined in `configs/config.toml`. Secret fields (`api_base`,
-`model_name`, `api_key`) are left empty and filled in `.local/config.override.toml`.
+All parameters are defined in `configs/config.toml`. The endpoint fields
+(`api_base`, `model_name`) are left empty and filled in `.local/config.override.toml`;
+`api_key` can stay unset when the endpoint needs no bearer token.
 
 ### Model terminology — ARD vs. downstream SFT/OPD
 
@@ -215,11 +235,12 @@ roles downstream frameworks talk about:
 | `max_retries` | int | `3` | Retries on failure |
 
 > **Note:** the question generator never runs in reasoning mode. It is always
-> called with `enable_thinking = false` sent explicitly to the server, and this
-> is **not** configurable — `[input_generator]` has no `enable_thinking` field,
-> and `[target_model].enable_thinking` affects the teacher model only. The
-> generated user turn is stored verbatim as the anchor's question, so reasoning
-> tokens would spend `max_tokens` on text that must not end up in the question.
+> called with `chat_template_kwargs.enable_thinking = false` sent explicitly to
+> the server, and this is **not** configurable — `[input_generator]` has no
+> `enable_thinking` field, and `[target_model].enable_thinking` affects the
+> teacher model only. The generated user turn is stored verbatim as the anchor's
+> question, so reasoning tokens would spend `max_tokens` on text that must not
+> end up in the question.
 
 ### `[target_model]` — Target Answering Model (= teacher)
 
@@ -235,13 +256,18 @@ roles downstream frameworks talk about:
 | `inter_token_timeout` | float | `15.0` | Maximum wait between tokens after first, in seconds |
 | `retry_on_timeout` | bool | `false` | Whether to retry on timeout errors (requires `max_retries > 0`) |
 | `max_retries` | int | `3` | Retries on failure |
-| `enable_thinking` | bool | `false` | Enable reasoning mode (Qwen3, DeepSeek-R1, etc.). When enabled, the model's reasoning is streamed into the separate `reasoning` field of `targets[0].output` and is **never** merged into `content`; when disabled, `reasoning` is `null`. **Only enable when distilling to a reasoning model**. **This value is always sent to the server** — `false` explicitly disables reasoning, `true` explicitly enables it |
+| `enable_thinking` | bool | `false` | Enable reasoning mode (Qwen3, DeepSeek-R1, etc.). When enabled, the model's reasoning is streamed into the separate `reasoning` field of `targets[0].output` and is **never** merged into `content`; when disabled, `reasoning` is `null`. **Only enable when distilling to a reasoning model**. The value is **always sent as `chat_template_kwargs.enable_thinking`** — nested one level deep. The request body has **no** top-level `enable_thinking` key, and a top-level key would be ignored: it is the server's **chat template**, not the OpenAI API, that reads this switch, and only `chat_template_kwargs` is forwarded into it. `false` explicitly disables reasoning, `true` explicitly enables it |
 
-> **⚠️ Behavior change (v0.3+):** Prior versions did **not** send `enable_thinking` to the server
-> when set to `false` — the server's chat template treated "undefined" as "reasoning ON",
-> so `false` was silently ignored. As of this version, `enable_thinking` is **always** sent
-> explicitly. If you relied on the old behavior (reasoning *on* with `enable_thinking = false`),
-> set it to `true`.
+> **⚠️ Behavior change (v0.3+):** Prior versions did **not** send
+> `chat_template_kwargs.enable_thinking` to the server when set to `false` — the
+> server's chat template treated "undefined" as "reasoning ON", so `false` was
+> silently ignored. As of this version the key is **always** sent, explicitly,
+> **nested inside `chat_template_kwargs`**. Why the nesting matters: a top-level
+> `enable_thinking` key is **inert** — only `chat_template_kwargs` is forwarded
+> into the chat template, so sending the flag at the top level is the same as not
+> sending it at all, and reasoning silently turns back on. If you relied on the
+> old behavior (reasoning *on* with `enable_thinking = false`), set the config
+> field to `true`.
 
 ### `[generation]` — Generation Control
 
@@ -481,10 +507,10 @@ examples/
 ├── README.md                    # What's in here and how to read it
 ├── images/                      # Sample images for multimodal mode
 │   ├── sample_01.jpg
-│   └── ...                      # 10 small JPEGs (400×267), safe for smoke runs
+│   └── ...                      # 10 small JPEGs (400 px wide, heights vary), safe for smoke runs
 ├── anchor_bank.sample.jsonl     # Sample output: 6 real anchors
-│                                #   (3 single-turn `U` + 3 three-turn `UAU`,
-│                                #    4 languages, 1–2 images each)
+│                                #   (2 single-turn `U` + 4 `SU` = system + user,
+│                                #    4 languages, 1 image per multimodal record)
 └── manifest.sample.json         # The run manifest a real run writes alongside it
 ```
 
@@ -655,7 +681,7 @@ and only generates the remaining ones up to `target_count`.
 The credential check runs **before** the resume check, so the endpoint fields
 must stay filled in even when the bank is already complete: re-running a
 finished directory without `api_base` / `model_name` is refused (see **If step
-3 or 4 fails**) instead of quietly reporting "nothing left to do".
+2 or 3 fails**) instead of quietly reporting "nothing left to do".
 
 ### Known behavior boundaries
 

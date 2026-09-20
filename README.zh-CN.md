@@ -23,47 +23,56 @@
 
 ## 快速开始
 
-**Clone → 第一个数据集，四条命令。** 你只需要两样东西：Docker，以及一个
+**Clone → 第一个数据集，三条命令。** 你只需要两样东西：Docker，以及一个
 OpenAI 兼容的 chat-completions 端点。
 
 ### 你需要什么——没有会怎样
 
 | 你需要 | 没有会怎样 | 能否降级照跑？ |
 |--------|-----------|----------------|
-| **Docker** | `bash docker/build.sh` 与 `bash run.sh` 完全跑不起来 | 不能——没有容器运行时什么都跑不了。请先装 Docker。 |
+| **Docker** | `bash run.sh` 完全跑不起来——它首次运行会自动构建镜像，所以 `bash docker/build.sh` 同样跑不起来 | 不能——没有容器运行时什么都跑不了。请先装 Docker。 |
 | **一个 OpenAI 兼容端点 + 模型名**（`api_base`、`model_name`），提问与作答各一份 | 运行会在**动手之前**就被拒绝，报一条字段级错误 `ERROR: [input_generator] is missing ...`（或 `[target_model] ...`），点明缺哪个字段；**不会创建任何输出目录** | 可以——两个角色可以指向**同一个**服务/模型，也可以指向本地 vLLM/Ollama/llama.cpp 服务。项目**不提供**离线演示模式。 |
 | **API key** | 只有当你的端点校验密钥时才必要 | 可以——`api_key` 不填（或删掉该行）就不会发送 `Authorization` 头。 |
 | **本体与嵌入数据**（`ontology/*.json`） | 需要重新用 embedding API 生成 | 不是问题：两个文件都**已随仓库跟踪**，clone 后即存在（55 个预计算嵌入向量，1024 维，供分层 FPS 采样器使用）。只读输入，不是生成产物。 |
 | **RAW 图片支持**（`rawpy`，已在 `pyproject.toml` 依赖中） | 无法读取 RAW（CR2/NEF/ARW/DNG/…）输入 | 可以——文本锚点与 JPG/PNG/GIF/WebP 多模态锚点均不受影响。该库以 manylinux wheel 发布，自带 `libraw.so`，导入是懒加载。 |
 
-### 1. clone 并构建镜像（一条命令）
+### 1. clone 仓库（一条命令）
 
 ```bash
 git clone https://github.com/godthrone/anchor-replay-distillation.git && cd anchor-replay-distillation
-bash docker/build.sh
 ```
 
-首次构建会编译依赖层（`uv.lock` 锁定的 75 个包 + `python:3.11-slim` 基础镜像），
-需要能访问 PyPI；脚本打印的 `Built: ard:<version>` 就是成功确认。
+**不需要单独的构建步骤**：首次运行 `run.sh` 时会发现镜像不存在，于是先构建镜像、
+再启动容器（构建委托给 `docker/build.sh`，所以镜像标签仍由你掌控——见
+[自定义镜像标签](#自定义镜像标签)）。首次构建会编译依赖层（`uv.lock` 锁定的
+75 个包 + `python:3.11-slim` 基础镜像），需要能访问 PyPI，**耗时几分钟**；
+之后的每次运行都直接复用镜像、立即开始。脚本打印的 `Built: ard:<version>`
+就是构建确实发生过的确认。
 
-### 2. 创建覆写配置（一条命令）
+`run.sh` 自己**从不从 registry 拉取**——它只在本地不存在该镜像时才构建。
+如果你想用**预构建 / 来自 registry 的镜像**，先 `docker pull <tag>` 把它拉到
+本地：镜像存在后 `run.sh` 会整块跳过构建，行为与从前完全一致。
+
+### 2. 创建覆写配置并填入字段（一条命令 + 一次编辑）
 
 ```bash
 mkdir -p .local && cp configs/config.override.sample.toml .local/config.override.toml
 ```
-
-### 3. 填入字段（编辑一个文件）
 
 > **关于模板的先说一句。** `configs/config.override.sample.toml` 为基础配置
 > `configs/config.toml` 定义的**每个**字段都列了一行，因此可以兼作字段文档
 > ——它是手册，不是清单：你并不需要保留它、也不必填满它。其中有些行**并没有
 > 注释掉**（如 `target_count = 100`、`concurrency = 4`、`max_turns = 1`、
 > `[ontology].path`）。覆写文件里任何未注释的行都会**覆盖基础配置**——如果你
-> 想保留默认值，请把该行注释掉或删除。与其改整个模板，直接把下面这段写进
+> 想保留默认值，请把该行注释掉或删除。**绝不要重复声明文件中已有的段**——
+> 同一个段写成两份（如两个 `[generation]`）是 TOML 解析错误，不会被合并。
+> 与其改整个模板，直接把下面这段写进
 > `.local/config.override.toml` 也可以：加载器会把它深度合并进
 > `configs/config.toml`，**部分字段的覆写文件是合法的**。
 
-`.local/config.override.toml` 里这六个值是**最少必填**——其余字段在
+`.local/config.override.toml` 里**必填的是四个值**——两个角色各自的
+`api_base` 与 `model_name`。`api_key` **按需**：只有当你的端点校验密钥时才填，
+否则删掉该行即可，此时不会发送 `Authorization` 头。其余字段在
 `configs/config.toml` 里都有可用的默认值：
 
 ```toml
@@ -78,7 +87,7 @@ model_name = "your-model-name"
 api_key = "REPLACE_ME"
 ```
 
-### 4. 生成锚点（一条命令）
+### 3. 生成锚点（一条命令）
 
 ```bash
 bash run.sh --config configs/config.toml --override .local/config.override.toml
@@ -87,13 +96,16 @@ bash run.sh --config configs/config.toml --override .local/config.override.toml
 加上 `--image-dir examples/images` 就产出多模态锚点（而不是纯文本）。
 默认一轮要 **100 个锚点**，耗时取决于你的端点。
 
-### 5. 几秒钟就看到第一个产出（可选）
+### 4. 几秒钟就看到第一个产出（可选）
 
-想在完整跑之前先确认整条链路通，就让某一轮跑一个很小的目标——把这段追加到
-同一个覆写文件里：
+想在完整跑之前先确认整条链路通，就让某一轮跑一个很小的目标——把这两个值填进
+覆写文件里**已经存在的那个 `[generation]` 段**。**不要新增第二个 `[generation]`
+表**：如果你按第 2 步拷了整份模板，里面本来就有一个，而 TOML 不允许同一个表被
+声明两次（`TOMLDecodeError: Cannot declare ('generation',) twice`）。就地在原有
+位置改这两行：
 
 ```toml
-[generation]
+[generation]             # 这是已经存在的段——不要再写一遍这个表头
 target_count = 2
 concurrency = 1
 ```
@@ -111,20 +123,22 @@ tail -3 outputs/ard_dataset_*/logs/ard.log      # 结尾是：Done! Output: outp
 `logs/`——真正区分成功与失败的是 `anchor_bank.jsonl` 的行数。多模态运行还要多看一处：记录的
 `data_source` 必须是 `ard_multi`（纯文本运行则是 `ard_text`）。
 
-### 第 3 步或第 4 步失败时
+### 第 2 步或第 3 步失败时
 
 - **`ERROR: [input_generator] is missing ...`**（或 **`[target_model] ...`**）——
   那个配置段的 `api_base` / `model_name` 还是空的（`configs/config.toml` 里两者
   都写作 `""`，空值一律按"未设置"处理）。消息会点明每个缺失字段，而且运行在
-  **创建任何输出目录、写出任何文件之前**就停下，没有残留需要清理。按第 3 步把
+  **创建任何输出目录、写出任何文件之前**就停下，没有残留需要清理。按第 2 步把
   字段填进 `.local/config.override.toml` 即可。
 - **`ERROR: override config not found: <路径>`** —— `--override` 路径写错了。
   如果**省略** `--override`，它只会自动检测**与 `--config` 同目录**的
   `config.override.toml`——那是 `configs/`，不是 `.local/`。请像上面那样显式
   传 `--override .local/config.override.toml`。
-- **`bash docker/build.sh` 失败** —— 没装 Docker，或构建需要访问 PyPI。
-  `run.sh` 需要本地存在 `ard:<git 版本>` 镜像；镜像不存在时它会去 Docker Hub
-  拉 `ard:1.0.0` 并失败。
+- **首次运行自动构建镜像失败** —— 要么是 `run.sh: docker not found in PATH`
+  （没装 Docker），要么是
+  `run.sh: building image '<tag>' failed (docker/build.sh exit N)`（Docker 没运行，
+  或构建无法访问 PyPI）。构建配方就在本仓库里，镜像绝不会从任何 registry 拉取；
+  排除原因后手动构建一次即可：`bash docker/build.sh`。
 
 以下内容都是"想调参时再看"的参考资料——**上手第一份数据集不需要读它们**。
 
@@ -139,7 +153,8 @@ ARD 采用**分层 TOML 配置**模型。有两个配置文件：
 
 **`configs/config.toml`** 是配置结构的唯一权威来源。它定义了所有字段及其
 合理的默认值。非机密字段（如 `temperature`、`max_tokens`、`seed`）开箱即用。
-机密字段（`api_base`、`model_name`、`api_key`）留空，由覆写文件填充。
+端点字段（`api_base`、`model_name`）留空，必须由覆写文件填充。`api_key` 是
+可选的——它同样留空，只有当你的端点校验密钥时才需要填。
 
 **`.local/config.override.toml`** 只包含你需要覆写的字段——通常是
 `[input_generator]` 和 `[target_model]` 的 `api_base`、`model_name`、
@@ -159,8 +174,9 @@ ARD 采用**分层 TOML 配置**模型。有两个配置文件：
 
 ## 配置参考
 
-所有参数定义在 `configs/config.toml` 中。机密字段（`api_base`、`model_name`、`api_key`）
-留空，在 `.local/config.override.toml` 中填写。
+所有参数定义在 `configs/config.toml` 中。端点字段（`api_base`、`model_name`）
+留空，在 `.local/config.override.toml` 中填写；端点不需要 bearer token 时
+`api_key` 可以一直不填。
 
 ### 模型术语对照表 — ARD vs 下游 SFT/OPD
 
@@ -191,9 +207,10 @@ ARD 采用**分层 TOML 配置**模型。有两个配置文件：
 | `retry_on_timeout` | bool | `false` | 超时后是否重试（需 `max_retries > 0`） |
 | `max_retries` | int | `3` | 请求失败重试次数 |
 
-> **注意：** 问题生成模型永远不会进入推理模式。它总是以 `enable_thinking = false`
-> 显式发送到服务端，且**不可配置** —— `[input_generator]` 没有 `enable_thinking`
-> 字段，`[target_model].enable_thinking` 只影响教师模型。生成出的 user 轮会被原样
+> **注意：** 问题生成模型永远不会进入推理模式。它总是以
+> `chat_template_kwargs.enable_thinking = false` 显式发送到服务端，且**不可配置**
+> —— `[input_generator]` 没有 `enable_thinking` 字段，`[target_model].enable_thinking`
+> 只影响教师模型。生成出的 user 轮会被原样
 > 存为锚点的提问，因此推理 token 会先把 `max_tokens` 花在**不该出现在提问里**的
 > 文字上。
 
@@ -211,12 +228,16 @@ ARD 采用**分层 TOML 配置**模型。有两个配置文件：
 | `inter_token_timeout` | float | `15.0` | 首个 token 后 token 间最大等待秒数 |
 | `retry_on_timeout` | bool | `false` | 超时后是否重试（需 `max_retries > 0`） |
 | `max_retries` | int | `3` | 请求失败重试次数 |
-| `enable_thinking` | bool | `false` | 启用推理模式（Qwen3/DeepSeek-R1 等）。开启后，模型的推理过程流入 `targets[0].output` 中独立的 `reasoning` 字段，**绝不**并入 `content`；关闭时 `reasoning` 为 `null`。**仅当蒸馏目标为推理模型时开启**。该值**总会发送到服务端** — `false` 显式关闭推理，`true` 显式开启 |
+| `enable_thinking` | bool | `false` | 启用推理模式（Qwen3/DeepSeek-R1 等）。开启后，模型的推理过程流入 `targets[0].output` 中独立的 `reasoning` 字段，**绝不**并入 `content`；关闭时 `reasoning` 为 `null`。**仅当蒸馏目标为推理模型时开启**。该值**总是以 `chat_template_kwargs.enable_thinking` 发送**——嵌套一层。请求体里**没有**顶层的 `enable_thinking` 键，写顶层也无效：读取这个开关的是服务端的 **chat template**，不是 OpenAI API，而只有 `chat_template_kwargs` 会被转发进去。`false` 显式关闭推理，`true` 显式开启 |
 
-> **⚠️ 行为变更（v0.3+）：** 旧版本在 `enable_thinking = false` 时**不发送**该参数到服务端
-> — 服务端的 chat template 将"未定义"视为"推理开启"，因此 `false` 被静默忽略。
-> 自本版本起，`enable_thinking` 会**始终显式发送**。如果你依赖旧行为（`enable_thinking = false` 时
-> 推理仍开启），请将其设为 `true`。
+> **⚠️ 行为变更（v0.3+）：** 旧版本在 `enable_thinking = false` 时**不发送**
+> `chat_template_kwargs.enable_thinking` 到服务端 — 服务端的 chat template 将
+> "未定义"视为"推理开启"，因此 `false` 被静默忽略。
+> 自本版本起，该键会**始终显式发送**，且**嵌套在 `chat_template_kwargs` 内**。
+> 为什么必须嵌套：顶层的 `enable_thinking` 键是**无效的**——只有
+> `chat_template_kwargs` 会被转发进 chat template，写在顶层等同于没写，
+> 推理会静默重新开启。如果你依赖旧行为（`enable_thinking = false` 时
+> 推理仍开启），请把该配置字段设为 `true`。
 
 ### `[generation]` — 生成控制
 
@@ -434,10 +455,10 @@ examples/
 ├── README.md                    # 本目录内容说明与格式解读
 ├── images/                      # 多模态模式样例图片
 │   ├── sample_01.jpg
-│   └── ...                      # 10 张小 JPEG（400×267），适合冒烟试跑
+│   └── ...                      # 10 张小 JPEG（宽 400 px，高度不一），适合冒烟试跑
 ├── anchor_bank.sample.jsonl     # 样例输出：6 条真实锚点
-│                                #   （3 条单轮 `U` + 3 条三轮 `UAU`、
-│                                #    4 种语言、每条 1–2 张图）
+│                                #   （2 条单轮 `U` + 4 条 `SU` = system + user、
+│                                #    4 种语言、每条多模态记录 1 张图）
 └── manifest.sample.json         # 真实运行会一并写出的 manifest 清单
 ```
 
@@ -588,7 +609,7 @@ ARD 自动从上次已完成的锚点恢复。只需重新运行相同的命令�
 `anchor_bank.jsonl` 中已有的锚点，只生成剩余数量以达到 `target_count`。
 
 凭证校验发生在**续跑判断之前**，所以即使 bank 已经补齐，端点字段也必须保持填写：
-带着缺失的 `api_base` / `model_name` 重跑一个已完成的目录会被拒绝（见**第 3 步或第 4 步失败时**），
+带着缺失的 `api_base` / `model_name` 重跑一个已完成的目录会被拒绝（见**第 2 步或第 3 步失败时**），
 而不是静默地报告"没有剩余工作"。
 
 ### 已知行为边界
