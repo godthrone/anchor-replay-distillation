@@ -211,8 +211,8 @@ graph TD
 | 模块 | 文件 | 职责（一句话） |
 |------|------|---------------|
 | **CLI** | `cli.py` | 解析命令行参数，加载配置，调用 Pipeline |
-| **Config** | `config.py` | 定义 Pydantic 配置模型，加载/合并/校验 TOML 配置；未固定 seed 时每轮解析出一个权威 seed；`[generation].criterion` 在配置边界即校验（合法集合取自 `core.cloud.FPS_CRITERIA`，见 §4.7） |
-| **Pipeline** | `pipeline.py` | 编排整体流程：加载本体 → 采样 → 图片分配 → 生成 → 输出 |
+| **Config** | `config.py` | 定义 Pydantic 配置模型，加载/合并/校验 TOML 配置；未固定 seed 时每轮解析出一个权威 seed；`[generation].criterion` 在配置边界即校验（合法集合取自 `core.cloud.FPS_CRITERIA`，见 §4.7）；**凭证字段也在这一层收口**——空串 `""` 归一为 `None`，`resolved_endpoint()` 把 `api_base` / `model_name` 收敛为非空 `LLMEndpoint`，缺失即抛 `ConfigError`（§3.1） |
+| **Pipeline** | `pipeline.py` | 编排整体流程：**先做凭证边界校验（`resolved_endpoint()`，发生在任何落盘动作之前）** → 加载本体 → 采样 → 图片分配 → 生成 → 输出 |
 | **Types** | `core/types.py` | 定义纯数据类（`AnchorSpec`, `TurnSpec`, `GeneratedAnchor` 等） |
 | **Ontology** | `core/ontology.py` | 加载 `anchor_ontology.json`，提供本体数据访问 |
 | **Embeddings** | `core/embeddings.py` | 加载预计算嵌入向量，并给出该文件所定义嵌入空间的指纹（`embedding_space_id`） |
@@ -234,7 +234,8 @@ graph TD
 
 模块间通过**明确的 Python 类型**而非隐式约定通信：
 
-- **Config → Pipeline**：`ARDConfig` (Pydantic model)
+- **Config → Pipeline**：`ARDConfig` (Pydantic model)；`ARDConfig.<section>.resolved_endpoint() -> LLMEndpoint`
+  （非空凭证视图：`api_base` / `model_name` 在此从 `str | None` 收敛为 `str`，缺失即抛 `ConfigError`，见 §3.1）
 - **Pipeline → Core**：`AnchorGenerationConfig` (dataclass) + `ontology` dict
 - **Pipeline → Sampler**：`sample_anchors(ontology, config, rng, *, criterion: str | None = None) -> list[AnchorSpec]`
   （`criterion=None` 表示"交给 `config.criterion`，再回落到历史默认 `"max"`"；显式关键字优先于配置）
@@ -254,11 +255,11 @@ graph TD
 | 依赖方 \ 被依赖方 | `core.types` | `core.ontology` | `core.embeddings` | `core.system_prompt` | `core.sampler` | `core.quota` | `core.cloud` | `core._fps` |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
 | `cli.py` | · | · | · | · | · | · | · | · |
-| `config.py` | · | · | · | · | · | · | · | · |
-| `pipeline.py` | · | ✓ | · | · | ✓ | ✓ | · | · |
+| `config.py` | · | · | · | · | · | · | ✓ | · |
+| `pipeline.py` | ✓ | ✓ | · | · | ✓ | ✓ | · | · |
 | `core.sampler` | ✓ | · | · | ✓ | — | · | ✓ | ✓ |
 | `core._fps` | · | · | ✓ | ✓ | · | · | ✓ | — |
-| `domain.text_anchor.py` | ✓ | · | · | · | · | · | · | · |
+| `domain.text_anchor.py` | ✓ | · | · | ✓ | · | · | · | · |
 | `domain.bank.py` | ✓ | · | · | · | · | · | · | · |
 
 **Domain / Backends 层的依赖**：
@@ -273,7 +274,9 @@ graph TD
 
 ✓ = 直接依赖（import），· = 无依赖。
 
-模块依赖严格遵循单向依赖原则：Core 层无任何外部依赖，Backends 层仅依赖 stdlib，Domain 层依赖 Core + Backends，Pipeline 层依赖所有下层。
+模块依赖严格遵循单向依赖原则：Core 层不依赖任何其他内部层（第三方仅 `numpy`），
+Backends 层不依赖任何其他内部层（第三方仅 `httpx`），Domain 层依赖 Core + Backends，
+Pipeline 层依赖所有下层。
 
 ### 2.5 空间安全的选点与测量接口
 
@@ -343,7 +346,7 @@ flowchart LR
         LOAD["1. Load Config"]
         MERGE["2. Deep Merge"]
         VALID["3. Validate (Pydantic)"]
-        MMVAL{"4. Has image-dir?<br/>Check api_base/model_name"}
+        MMVAL{"4. Resolve LLM endpoints<br/>(api_base / model_name)"}
         CKPT{"5. Checkpoint?"}
         ONTL["6. Load Ontology"]
         SMPL["7. Sample Anchors (FPS)"]
@@ -365,8 +368,8 @@ flowchart LR
     LOAD --> MERGE
     MERGE --> VALID
     VALID --> MMVAL
-    MMVAL -->|"pass (api_base/model_name set)"| CKPT
-    MMVAL -->|"error: api_base/model_name missing"| ERR["❌ Error Exit"]
+    MMVAL -->|"both resolved (no side effect yet)"| CKPT
+    MMVAL -->|"field(s) missing: ConfigError"| ERR["❌ Error Exit"]
     CKPT -->|"resume (remaining > 0)"| ONTL
     CKPT -->|"skip (already done)"| EXP
     ONT --> ONTL
@@ -388,11 +391,17 @@ flowchart LR
 否则仅生成剩余数量（`remaining = target_count - existing_count`）。
 每条锚点生成后立即通过 `O_APPEND` 原子写入 JSONL，确保中断后可从上一次提交点恢复。
 
-**Multimodal Validation**：当 `--image-dir` 传入时，Pipeline 在生成前验证
-`input_generator` 和 `target_model` 的 `api_base` 和 `model_name` 是否已设置。
-任一为 `None` 时，Pipeline 立即报错退出。多模态支持由模型本身决定——
-如果模型不支持多模态，API 会直接返回错误，无需手动维护配置开关。
-这是 BADGE 宪法 §2.3（边界校验即防呆）的具体实践。
+**凭证边界校验（对每一次运行，不只是多模态）**：`pipeline.py` 在**创建输出目录
+之前**调用两个配置段的 `resolved_endpoint()`，把 `api_base` / `model_name` 从可空字段
+收敛为非空 `LLMEndpoint`；任一为空（TOML 的 `""` 已在配置边界归一为 `None`）即抛
+`ConfigError`，消息按**段名 + 缺失字段名**给出（例如 `[input_generator]` 缺
+`api_base`、`model_name`），由 CLI 打印并以退出码 1 结束。
+该校验同样位于**续跑判断（Checkpoint / Resume）之前**：即使 bank 已补齐 `target_count`，
+凭证缺失也会被拒绝，而不是直接跳过生成退出。
+**由于校验发生在任何落盘动作之前，缺凭证不再留下空的 `outputs/ard_dataset_*/` 目录，
+也不写 `config.json` / `logs/`。** 多模态支持由模型本身决定——如果模型不支持多模态，
+API 会直接返回错误，无需手动维护配置开关。这是 BADGE 宪法 §2.3（边界校验即防呆）与
+§3.4（防线不是退路）的具体实践。
 
 ### 3.2 从 Ontology 到 Anchor 的采样流
 
@@ -625,6 +634,11 @@ presence 槽位取「风格质心的反方向」——与所有风格尽可能�
 有效样本量（ESS）≈ **1.5**；同一轮里"最大"与"第二大"只差 **3.4%**。
 也就是说 `r_max` 这个统计量对"整体铺得均不均匀"几乎没有分辨率。
 实测证据见 `.local/hb-workspace/20260917-1330-ard-coverage-v2/task-mechanism-bench/report.md` §一 Q4。
+
+> **方法学的归属**：本节与 §4.7 用到的读数口径（`r_max` / `r_p95` / `r_mean`）、基线、零分布
+> 与可分辨性纪律，其完整方法学（为什么位移与散布必须并报、ICC 与重复的边际收益、置换检验、
+> 指标纪律与留痕要求）已整体迁到 [`docs/measurement-methods.md`](measurement-methods.md)；
+> 本文只保留与架构决策直接相关的结论。两条链的定名（候选池 / 组合云 / 实验向量云）见 §0.2。
 
 ### 4.7 贪心准则：`max` 与 `sum`（**本节是覆盖度 v2 的核心修正**）
 
@@ -1111,8 +1125,10 @@ flowchart TD
 
 ### 6.1 前提条件
 
-**多模态锚点生成要求 `input_generator` 和 `target_model` 的 `api_base` 和 `model_name` 均已设置。**
-Pipeline 在启动时验证此条件——任一为 `None` 时，立即报错退出。
+**任何一次运行（文本与多模态一样）都要求 `input_generator` 和 `target_model` 的
+`api_base` 和 `model_name` 均已设置。** Pipeline 在**创建输出目录之前**统一校验
+（`resolved_endpoint()` → `ConfigError`，见 §3.1）——任一为空即拒绝，且不留下任何落盘副作用；
+这条校验**不再**是"仅 `--image-dir` 时"的特例。
 多模态能力由模型 API 端自行校验：如果模型不支持多模态输入，API 会返回错误，
 直接透传给用户。无需在配置中手动维护 `is_multimodal` 开关。
 
@@ -1463,9 +1479,9 @@ overwrite = false       # 是否覆盖已有输出目录（预授权退路，遵
 |------|------|
 | `src/ard/__main__.py` | `python -m ard` 入口（转发到 CLI） |
 | `src/ard/cli.py` | CLI 入口 |
-| `src/ard/config.py` | 配置模型与加载 |
+| `src/ard/config.py` | 配置模型与加载（含空串归一、凭证边界校验 `resolved_endpoint()` → `ConfigError`） |
 | `src/ard/logging.py` | 统一日志配置（`get_logger` 辅助函数） |
-| `src/ard/pipeline.py` | 流程编排（含续跑差额重采样、推理计数 delta 发布） |
+| `src/ard/pipeline.py` | 流程编排（含**落盘前的凭证边界校验**、续跑差额重采样、推理计数 delta 发布） |
 | `src/ard/core/__init__.py` | Core 层包标记 |
 | `src/ard/core/types.py` | 核心数据类型 |
 | `src/ard/core/ontology.py` | 本体加载 |
@@ -1496,7 +1512,7 @@ overwrite = false       # 是否覆盖已有输出目录（预授权退路，遵
 | `.local/config.override.toml` | gitignored | 部署覆写（机密信息） |
 | `scripts/generate_ontology_embeddings.py` | git | 一次性离线工具：为本体生成预计算嵌入（跑之前需要嵌入端点） |
 | `scripts/poolbuild/` | **尚未入 git（待搬运）** | 一次性离线建池工具链。**当前 `scripts/` 下只有 `generate_ontology_embeddings.py`**；池建工具仍驻留开发工位 `.local/hb-workspace/…/task-handover-fix/to-move/scripts/poolbuild/`，搬运前"路径即事实"的说法不成立（§4.12） |
-| `docs/pool/pool-schema.v1.0.0.json`、`docs/pool-build.md` | **尚未入 git（待搬运）** | 池 schema 与池建 run book；与上一条同批搬运，**当前 `docs/` 下只有 `architecture.md` 与 `ard-algorithm.md`** |
+| `docs/pool/pool-schema.v1.0.0.json`、`docs/pool-build.md` | **尚未入 git（待搬运）** | 池 schema 与池建 run book；与上一条同批搬运，**当前 `docs/` 下只有 `architecture.md`、`ard-algorithm.md` 与 `measurement-methods.md`**（后者为算法文档拆出的测量方法学，见 §4.6） |
 | `examples/` | git | 样例图片与样例产物（`anchor_bank.sample.jsonl`、`manifest.sample.json`） |
 | `ontology/` | git（刻意跟踪） | 本体定义与预计算嵌入；`.gitignore` 对其有显式反向豁免（干净 clone 无法重建） |
 
