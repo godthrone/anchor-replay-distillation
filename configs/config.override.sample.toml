@@ -74,6 +74,17 @@ max_turns = 1
 max_turns_with_image = 1
 # Path to pre-computed ontology embeddings for farthest-point sampling
 embeddings_path = "ontology/anchor_ontology_embeddings.json"
+# Greedy rule of the within-domain farthest-point selection (geometric pick on
+# the Ontology combination cloud — NOT the pool-build path).
+#   "max" (default) = classic farthest point; reproduces every previous release
+#                     bit for bit (leave this line commented out for "max").
+#   "sum"           = total blankness (greedy facility location); needs the full
+#                     (n, n) distance matrix, so it is refused for clouds above
+#                     FPS_SUM_MATRIX_MAX_BYTES (1 GiB ≈ 11,585 rows).  On the
+#                     current ontology the remainder-fill cloud is ~50k rows, so
+#                     "sum" is refused at run time — see docs/architecture.md §4.7.
+# Any other value is refused at config load — no silent fallback.
+# criterion = "max"
 # Consecutive server-side failures (timeouts / transport errors) that trigger
 # the backpressure cooldown below. Model-output failures (empty content) are
 # counted separately and never trigger a cooldown.

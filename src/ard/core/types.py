@@ -134,3 +134,10 @@ class AnchorGenerationConfig:
     max_turns: int = 1
     max_turns_with_image: int = 1
     embeddings_path: str = "ontology/anchor_ontology_embeddings.json"
+    # Greedy rule of the within-domain farthest-point selection.  ``None`` means
+    # "not specified by the caller", and the sampler resolves it to the
+    # historical default (``ard.core.cloud.CRITERION_MAX``) — a literal default
+    # here would be a second, silently-drifting copy of that constant.  This
+    # dataclass stays dependency-free (no numpy), so the cloud constants are
+    # deliberately not imported here.
+    criterion: str | None = None

@@ -346,6 +346,7 @@ def run(
         max_turns=config.generation.max_turns,
         max_turns_with_image=config.generation.max_turns_with_image,
         embeddings_path=config.generation.embeddings_path,
+        criterion=config.generation.criterion,
     )
 
     # ── API clients ───────────────────────────────────────────────────────

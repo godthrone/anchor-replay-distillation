@@ -65,6 +65,21 @@ max_turns = 1
 max_turns_with_image = 1
 # Path to pre-computed ontology embeddings for farthest-point sampling
 embeddings_path = "ontology/anchor_ontology_embeddings.json"
+# Greedy rule of the within-domain farthest-point selection (geometric pick on
+# the Ontology combination cloud — NOT the pool-build path).
+#   "max" (default) = classic farthest point: every step takes the row with the
+#                     largest distance to the nearest already-selected row.
+#                     This is the historical behaviour: leaving this line at
+#                     "max" reproduces every previous release bit for bit.
+#   "sum"           = total blankness (greedy facility location): every step
+#                     takes the row that leaves the least *total* remaining
+#                     cosine distance.  Measured better than "max" on the real
+#                     clustered anchor geometry, but needs the full (n, n)
+#                     distance matrix, so it is refused for clouds above
+#                     FPS_SUM_MATRIX_MAX_BYTES (1 GiB ≈ 11,585 rows) instead of
+#                     silently degrading to "max".
+# Any other value is refused at config load — no silent fallback.
+criterion = "max"
 
 # Consecutive timeouts to trigger backpressure cooldown
 backpressure_threshold = 3

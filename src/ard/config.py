@@ -9,7 +9,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from ard.core.cloud import CRITERION_MAX, FPS_CRITERIA
 
 # ── TOML parsing ──────────────────────────────────────────────────────────
 if sys.version_info >= (3, 11):
@@ -96,8 +98,32 @@ class GenerationConfig(BaseModel):
     max_turns: int = Field(default=1, ge=1, le=10)
     max_turns_with_image: int = Field(default=1, ge=0, le=5)
     embeddings_path: str = "ontology/anchor_ontology_embeddings.json"
+    # Greedy rule of the within-domain farthest-point selection.  `max` is the
+    # historical rule and the default, so an unset config selects exactly what
+    # every previous release selected; `sum` (total-blankness / greedy
+    # facility-location) is the measured-better rule on the real anchor
+    # geometry.  Validated against `ard.core.cloud.FPS_CRITERIA` — the single
+    # source of truth for the legal values — so a typo is refused at config load
+    # rather than silently running a different objective (§2.1 契约即防呆).
+    criterion: str = CRITERION_MAX
     backpressure_threshold: int = 3       # 连续超时触发冷却的阈值
     backpressure_cooldown: float = 60.0   # 冷却暂停秒数
+
+    @field_validator("criterion")
+    @classmethod
+    def _validate_criterion(cls, value: str) -> str:
+        """Refuse an unknown greedy rule instead of falling back to the default.
+
+        The legal set lives in ``ard.core.cloud`` (next to the code that
+        consumes it); this validator makes the *config boundary* enforce the
+        same contract, so a misspelled rule fails at load time with the list of
+        accepted values rather than deep inside the sampler.
+        """
+        if value not in FPS_CRITERIA:
+            raise ValueError(
+                f"criterion must be one of {list(FPS_CRITERIA)}, got {value!r}"
+            )
+        return value
 
     @model_validator(mode="after")
     def _resolve_seed(self) -> GenerationConfig:

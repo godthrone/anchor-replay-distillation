@@ -22,7 +22,7 @@ def sample_anchors(
     config: AnchorGenerationConfig,
     rng: random.Random,
     *,
-    criterion: str = CRITERION_MAX,
+    criterion: str | None = None,
 ) -> list[AnchorSpec]:
     """Sample anchors using farthest-point sampling (FPS).
 
@@ -35,16 +35,20 @@ def sample_anchors(
         config: Generation configuration (must include ``max_turns``).
         rng: Seeded :class:`random.Random` instance.
         criterion: greedy rule for the within-domain FPS, one of
-            :data:`ard.core.cloud.FPS_CRITERIA`.  The default reproduces the
-            historical selection bit for bit; ``"sum"`` selects the combination
-            that minimises the *total* remaining cosine distance instead of the
-            single largest one.
+            :data:`ard.core.cloud.FPS_CRITERIA`.  ``None`` (the default) defers
+            to ``config.criterion`` when set and otherwise to
+            :data:`ard.core.cloud.CRITERION_MAX`; either way an unset value
+            reproduces the historical selection bit for bit.  ``"sum"`` selects
+            the combination that minimises the *total* remaining cosine
+            distance instead of the single largest one.
 
     Returns:
         List of :class:`AnchorSpec` objects ready for generation.
     """
     from ard.core.quota import compute_turn_distribution
 
+    if criterion is None:
+        criterion = config.criterion if config.criterion is not None else CRITERION_MAX
     meta_dicts = _sample_farthest(ontology, config, rng, criterion=criterion)
 
     max_turns = config.max_turns
