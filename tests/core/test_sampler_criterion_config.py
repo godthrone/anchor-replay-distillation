@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import random
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import pytest
 
@@ -36,6 +36,19 @@ from ard.core.types import AnchorGenerationConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SHIPPED_CONFIG = REPO_ROOT / "configs" / "config.toml"
+
+
+class _DefaultPathKwargs(TypedDict):
+    """Fields shared by the two ``AnchorGenerationConfig``s compared in §4.
+
+    The point of that test is that *only* ``criterion`` differs; spelling the
+    shared fields once (and unpacking them into both constructions) keeps the
+    two calls from drifting apart.
+    """
+
+    target_count: int
+    seed: int
+    embeddings_path: str
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +322,14 @@ def test_default_and_explicit_max_select_the_same_anchors(tmp_path: Path) -> Non
     """
     embeddings_path = _make_embeddings(tmp_path / "embeddings.json")
     ontology = _make_ontology()
-    kwargs = dict(target_count=5, seed=99, embeddings_path=str(embeddings_path))
+    # A TypedDict (not a bare ``dict``) so ``**kwargs`` still type-checks against
+    # ``AnchorGenerationConfig``'s fields: an untyped dict literal widens every
+    # value to ``object`` and mypy refuses the call outright.
+    kwargs: _DefaultPathKwargs = {
+        "target_count": 5,
+        "seed": 99,
+        "embeddings_path": str(embeddings_path),
+    }
 
     implicit = sample_anchors(ontology, AnchorGenerationConfig(**kwargs), random.Random(99))
     explicit = sample_anchors(

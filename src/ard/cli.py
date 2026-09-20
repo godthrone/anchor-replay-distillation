@@ -10,7 +10,7 @@ import logging
 import sys
 from pathlib import Path
 
-from ard.config import load_config
+from ard.config import ConfigError, load_config
 from ard.logging import get_logger
 from ard.pipeline import run as run_pipeline
 
@@ -55,15 +55,16 @@ def main() -> None:
     config_path = Path(args.config)
 
     # Auto-detect or use explicit override config
+    override_path: Path | None
     if args.override:
-        override_path: Path | None = Path(args.override)
-        if not override_path.exists():
+        candidate = Path(args.override)
+        if not candidate.exists():
             logger.error("override config not found: %s", args.override)
             sys.exit(1)
+        override_path = candidate
     else:
-        override_path = config_path.parent / "config.override.toml"
-        if not override_path.exists():
-            override_path = None
+        sibling = config_path.parent / "config.override.toml"
+        override_path = sibling if sibling.exists() else None
 
     # Load config
     try:
@@ -83,6 +84,12 @@ def main() -> None:
         output_dir = run_pipeline(config, image_dir=args.image_dir, no_convert=args.no_convert)
         logger.info("Done! Output: %s", output_dir)
     except FileNotFoundError as exc:
+        logger.error("%s", exc)
+        sys.exit(1)
+    except ConfigError as exc:
+        # A boundary rejection (§2.3), not a crash: print the field-level
+        # message instead of a traceback.  Nothing was written — the guard runs
+        # before the output directory is created.
         logger.error("%s", exc)
         sys.exit(1)
     except RuntimeError as exc:

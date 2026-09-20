@@ -45,6 +45,7 @@ from ard.domain.bank import (
     count_unique_anchor_ids,
     read_anchor_bank,
 )
+from ard.domain.text_anchor import AnchorGenerationStats
 
 #: Target used by the "incomplete bank" cases: small enough to read at a glance,
 #: large enough that "2 existing + 3 missing" is not a coincidence of the bank.
@@ -120,6 +121,7 @@ class _RunSpy:
         stats = kwargs["stats"]
         assert isinstance(specs, list)
         assert isinstance(output_path, Path)
+        assert isinstance(stats, AnchorGenerationStats)
         self.requested.append(len(specs))
         written: list[GeneratedAnchor] = []
         for spec in specs:
@@ -452,10 +454,13 @@ def test_failed_resume_grows_the_bank_without_rewriting_it(
     def _half_delivery(**kwargs: object) -> list[GeneratedAnchor]:
         specs = kwargs["specs"]
         stats = kwargs["stats"]
+        output_path = kwargs["output_path"]
         assert isinstance(specs, list)
+        assert isinstance(stats, AnchorGenerationStats)
+        assert isinstance(output_path, Path)
         spy.requested.append(len(specs))
         anchor = _anchor("only-one")
-        append_anchor(anchor, kwargs["output_path"])
+        append_anchor(anchor, output_path)
         stats.requested = len(specs)
         stats.written = 1
         stats.succeeded = 1

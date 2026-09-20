@@ -7,7 +7,7 @@ from __future__ import annotations
 import random
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -25,6 +25,41 @@ else:
         ) from exc
 
 
+# ── Boundary validation (§2.3) ────────────────────────────────────────────
+
+
+class ConfigError(ValueError):
+    """A configuration value is missing or unusable at a boundary.
+
+    Raised where the value is *first* consumed — config validation or the start
+    of a run — and never after a side effect has been performed, so an unusable
+    config cannot leave a half-built output directory behind (§2.3 边界校验即防呆).
+    Subclasses :class:`ValueError` because that is what a caller supplying a bad
+    config value would expect; the CLI catches it explicitly to print the
+    message instead of a traceback.
+    """
+
+
+class LLMEndpoint(BaseModel):
+    """The non-optional view of one LLM section's credentials.
+
+    :meth:`_LLMConfig.resolved_endpoint` builds this after checking the fields
+    the pipeline cannot run without.  Downstream code therefore sees plain
+    ``str`` instead of ``str | None``: "this might be unset" is refused once, at
+    the boundary, rather than re-checked (or silently assumed away) at every
+    use site (§2.1 契约即防呆).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    api_base: str
+    model_name: str
+    api_key: str | None = None
+    """Secret — never logged.  ``None`` is legal: many OpenAI-compatible local
+    servers (vLLM, llama.cpp) need no bearer token, and the shipped base config
+    leaves the field empty on purpose."""
+
+
 # ── Section configs ───────────────────────────────────────────────────────
 
 
@@ -35,6 +70,10 @@ class _LLMConfig(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid")
+
+    SECTION: ClassVar[str] = "llm"
+    """TOML table this section is loaded from — used to make a boundary error
+    point at the right table instead of saying "somewhere in the config"."""
 
     api_base: str | None = None
     model_name: str | None = None
@@ -48,9 +87,66 @@ class _LLMConfig(BaseModel):
     temperature: float
     """Sampling temperature — different defaults for input vs target."""
 
+    @field_validator("api_base", "model_name", "api_key", mode="before")
+    @classmethod
+    def _empty_string_means_unset(cls, value: object) -> object:
+        """Normalize the TOML "left blank" placeholder to ``None`` (§2.2).
+
+        ``configs/config.toml`` ships ``api_base = ""`` for the user to fill in,
+        and TOML has no ``null``.  ``""`` must therefore become ``None`` at the
+        model boundary — otherwise a blank endpoint satisfies every ``is None``
+        check and only fails deep inside the HTTP client (the original
+        ``ValueError: api_base must not be None`` traceback).  Doing it here also
+        covers sections built directly in Python, not just TOML loads.
+        """
+        if value == "":
+            return None
+        return value
+
+    def resolved_endpoint(self) -> LLMEndpoint:
+        """Return this section's credentials, or refuse with a field-level error.
+
+        Returns:
+            The endpoint with ``api_base`` and ``model_name`` narrowed to ``str``.
+
+        Raises:
+            ConfigError: If ``api_base`` or ``model_name`` is unset.  The message
+                names the missing field(s), the TOML table, and how to set them.
+
+        The pipeline calls this **before** it creates its output directory, so
+        an unusable config cannot leave an empty directory (or a config snapshot)
+        behind — the failure is a readable boundary rejection, not a traceback
+        from somewhere deep in the HTTP layer.
+        """
+        api_base = self.api_base
+        model_name = self.model_name
+        if api_base is None or model_name is None:
+            missing = [
+                name
+                for name, value in (("api_base", api_base), ("model_name", model_name))
+                if value is None
+            ]
+            listed = ", ".join(f"`{name}`" for name in missing)
+            example = "\n".join(
+                (
+                    f"[{self.SECTION}]",
+                    'api_base = "http://<host>:<port>/v1"',
+                    'model_name = "<served-model-name>"',
+                )
+            )
+            raise ConfigError(
+                f"[{self.SECTION}] is missing {listed}. The LLM endpoint cannot be "
+                f"called. Set the missing field(s) in the config passed to --config, "
+                f"or in the override file next to it (config.override.toml), e.g.:\n"
+                f"{example}"
+            )
+        return LLMEndpoint(api_base=api_base, model_name=model_name, api_key=self.api_key)
+
 
 class InputGeneratorConfig(_LLMConfig):
     """Configuration for the input generator (question creator) LLM API."""
+
+    SECTION: ClassVar[str] = "input_generator"
 
     temperature: float = 0.8
 
@@ -64,6 +160,8 @@ class TargetModelConfig(_LLMConfig):
     deterministic — which under-sampled answer diversity; 0.1 keeps answers
     near-greedy while letting the teacher vary phrasing between anchors).
     """
+
+    SECTION: ClassVar[str] = "target_model"
 
     temperature: float = 0.1
     enable_thinking: bool = False

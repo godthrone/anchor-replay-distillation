@@ -278,9 +278,30 @@ def run(
         Path to the output directory.
 
     Raises:
-        RuntimeError: If multimodal mode is requested but LLM API
-            configuration is incomplete.
+        ConfigError: If a required LLM endpoint field (``api_base`` /
+            ``model_name``) is unset.  Checked before the output directory is
+            created, so a refused config leaves no side effect behind (§2.3).
     """
+    # ── Credential boundary check (§2.3 边界校验即防呆) ─────────────────────
+    # Done *before* the output directory exists: a config without an endpoint
+    # used to explode later inside ChatAPIConfig, after a half-built output dir
+    # (and a config snapshot) had already been written.  Refusing here keeps the
+    # failure readable and side-effect free, and gives the pipeline plain ``str``
+    # values to hand to the clients instead of ``str | None``.
+    #
+    # The check is deliberately unconditional and sits first, ahead of **every**
+    # side effect — including the output directory.  One consequence is
+    # intended: a run whose bank is already complete ("nothing left to do, just
+    # re-run/inspect it") is refused too when credentials are missing, even
+    # though that path would never have contacted an endpoint.  That is a
+    # deliberate behaviour change: fail before touching anything, with a
+    # field-level actionable message, rather than create the directory first and
+    # die later (the old order left an empty ``out/config.json`` and ``logs/``
+    # behind).  If "re-run a finished bank without credentials" is ever needed,
+    # restructure the side-effect order — do not move this guard down.
+    input_endpoint = config.input_generator.resolved_endpoint()
+    target_endpoint = config.target_model.resolved_endpoint()
+
     # ── Output directory ──────────────────────────────────────────────────
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     dataset_name = f"ard_dataset_{timestamp}"
@@ -352,9 +373,9 @@ def run(
     # ── API clients ───────────────────────────────────────────────────────
     input_client = ChatAPIClient(
         ChatAPIConfig(
-            api_base=config.input_generator.api_base,
-            model_name=config.input_generator.model_name,
-            api_key=config.input_generator.api_key,
+            api_base=input_endpoint.api_base,
+            model_name=input_endpoint.model_name,
+            api_key=input_endpoint.api_key,
             temperature=config.input_generator.temperature,
             max_tokens=config.input_generator.max_tokens,
             connect_timeout=config.input_generator.connect_timeout,
@@ -384,9 +405,9 @@ def run(
     )
     target_client = ChatAPIClient(
         ChatAPIConfig(
-            api_base=config.target_model.api_base,
-            model_name=config.target_model.model_name,
-            api_key=config.target_model.api_key,
+            api_base=target_endpoint.api_base,
+            model_name=target_endpoint.model_name,
+            api_key=target_endpoint.api_key,
             temperature=config.target_model.temperature,
             max_tokens=config.target_model.max_tokens,
             connect_timeout=config.target_model.connect_timeout,
@@ -397,29 +418,6 @@ def run(
             enable_thinking=config.target_model.enable_thinking,
         )
     )
-
-    # ── Multimodal validation ───────────────────────────────────────────
-    if image_dir:
-        if config.input_generator.api_base is None:
-            raise RuntimeError(
-                "Multimodal mode (--image-dir) requires input_generator.api_base "
-                "to be set in config."
-            )
-        if config.target_model.api_base is None:
-            raise RuntimeError(
-                "Multimodal mode (--image-dir) requires target_model.api_base "
-                "to be set in config."
-            )
-        if config.input_generator.model_name is None:
-            raise RuntimeError(
-                "Multimodal mode (--image-dir) requires input_generator.model_name "
-                "to be set in config."
-            )
-        if config.target_model.model_name is None:
-            raise RuntimeError(
-                "Multimodal mode (--image-dir) requires target_model.model_name "
-                "to be set in config."
-            )
 
     # ── Generate anchors (unified flow) ───────────────────────────────────
     rng = random.Random(gen_config.seed)
@@ -481,8 +479,8 @@ def run(
         specs=specs,
         input_client=input_client,
         target_client=target_client,
-        input_model_name=config.input_generator.model_name,
-        target_model_name=config.target_model.model_name,
+        input_model_name=input_endpoint.model_name,
+        target_model_name=target_endpoint.model_name,
         concurrency=gen_config.concurrency,
         output_path=output_path,
         backpressure_threshold=config.generation.backpressure_threshold,

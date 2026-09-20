@@ -193,8 +193,11 @@ def test_convert_image_rawpy_boundary_mock_then_real_jpeg_encode(
         def __enter__(self) -> _FakeRaw:
             return self
 
-        def __exit__(self, *exc: object) -> bool:
-            return False
+        def __exit__(self, *exc: object) -> None:
+            # ``None``/``False`` both mean "do not suppress the exception"; the
+            # ``None`` annotation is the one mypy accepts for a context manager
+            # that never swallows one.
+            return None
 
         def postprocess(self) -> np.ndarray:
             return np.full((4, 4, 3), 33, dtype=np.uint8)

@@ -180,7 +180,10 @@ def convert_image(src: Path, dst: Path, quality: int = 95) -> bool:
     try:
         from PIL import Image  # noqa: PLC0415
 
-        img = Image.open(str(src))
+        # ``Image.open`` is typed as returning ``ImageFile`` while ``convert``
+        # returns ``Image``; annotating the wider base lets the reassignment
+        # below (RGBA/P/LA → RGB) keep one variable, as the code reads.
+        img: Image.Image = Image.open(str(src))
         if img.mode in ("RGBA", "P", "LA"):
             img = img.convert("RGB")
         dst_jpg = dst.with_suffix(".jpg")

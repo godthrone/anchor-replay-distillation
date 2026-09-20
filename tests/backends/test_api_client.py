@@ -12,19 +12,6 @@ import pytest
 
 try:  # preferred: the installed package
     from ard.backends import api_client as api_module
-    from ard.backends.api_client import (
-        ARDEmptyContentError,
-        ARDTimeoutError,
-        ChatAPIClient,
-        ChatAPIConfig,
-        ChatRequest,
-        ChatResponse,
-        ChatResult,
-        _build_payload,
-        encode_image_to_base64,
-        reasoning_stats,
-        reset_reasoning_stats,
-    )
 except ModuleNotFoundError:  # pragma: no cover - env without the full dep set
     # ``ard/__init__.py`` eagerly imports the pipeline, which needs numpy.
     # Load this one module directly from its source file so the SSE-parsing
@@ -36,19 +23,23 @@ except ModuleNotFoundError:  # pragma: no cover - env without the full dep set
     assert _SPEC is not None and _SPEC.loader is not None
     api_module = importlib.util.module_from_spec(_SPEC)
     sys.modules[_SPEC.name] = api_module  # dataclasses needs the module registered
-    _SPEC.loader.exec_module(api_module)  # type: ignore[union-attr]
+    _SPEC.loader.exec_module(api_module)
 
-    ARDEmptyContentError = api_module.ARDEmptyContentError
-    ARDTimeoutError = api_module.ARDTimeoutError
-    ChatAPIClient = api_module.ChatAPIClient
-    ChatAPIConfig = api_module.ChatAPIConfig
-    ChatRequest = api_module.ChatRequest
-    ChatResponse = api_module.ChatResponse
-    ChatResult = api_module.ChatResult
-    _build_payload = api_module._build_payload
-    encode_image_to_base64 = api_module.encode_image_to_base64
-    reasoning_stats = api_module.reasoning_stats
-    reset_reasoning_stats = api_module.reset_reasoning_stats
+# Both paths above land in ``api_module``, so every name is bound from it once.
+# Re-binding the names imported by the ``try`` branch directly in the ``except``
+# branch is a mypy error ("cannot assign to a type") — this shape keeps the
+# fallback and the static types.
+ARDEmptyContentError = api_module.ARDEmptyContentError
+ARDTimeoutError = api_module.ARDTimeoutError
+ChatAPIClient = api_module.ChatAPIClient
+ChatAPIConfig = api_module.ChatAPIConfig
+ChatRequest = api_module.ChatRequest
+ChatResponse = api_module.ChatResponse
+ChatResult = api_module.ChatResult
+_build_payload = api_module._build_payload
+encode_image_to_base64 = api_module.encode_image_to_base64
+reasoning_stats = api_module.reasoning_stats
+reset_reasoning_stats = api_module.reset_reasoning_stats
 
 # Captured before any monkeypatching: the module under test creates its own
 # ``httpx.Client``, so tests that replace ``httpx.Client`` must still be able
@@ -339,8 +330,12 @@ class _SlowSSEServer:
         self._server.ard_server = self  # type: ignore[attr-defined]
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
-        host, port = self._server.server_address[:2]
-        self.url = f"http://{host}:{port}"
+        # ``server_address[0]`` is typed as ``bytes`` by typeshed even though a
+        # bound IPv4 server reports a ``str`` at run time, so build the URL from
+        # the address the server was actually constructed with — no decode of a
+        # value that is not bytes at runtime.
+        port = self._server.server_address[1]
+        self.url = f"http://127.0.0.1:{port}"
 
     def close(self) -> None:
         self._server.shutdown()

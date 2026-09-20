@@ -941,6 +941,11 @@ class TestManifestGenerationReport:
         )
         base["generation"]["target_count"] = 1  # already satisfied → resume path
         base["output"]["directory"] = str(output_dir)
+        # Endpoints are required by ``run`` before it touches anything (§2.3);
+        # the resume path never reaches the clients.
+        for section in ("input_generator", "target_model"):
+            base[section]["api_base"] = "http://127.0.0.1:1/v1"
+            base[section]["model_name"] = f"{section}-model"
         config_path.write_text(_toml_dump(base), encoding="utf-8")
 
         monkeypatch.setattr(

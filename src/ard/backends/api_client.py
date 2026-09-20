@@ -196,7 +196,14 @@ class ChatAPIConfig:
 
     api_base: str
     model_name: str
-    api_key: str
+    api_key: str | None = None
+    """Bearer token, or ``None`` when the endpoint needs none.
+
+    ``None`` is the only legal "no key" value (§2.2): the config loader turns
+    the TOML placeholder ``api_key = ""`` into ``None`` before it reaches this
+    dataclass, and many local OpenAI-compatible servers (vLLM, llama.cpp) run
+    without any authorisation at all.
+    """
     temperature: float = 0.7
     max_tokens: int | None = None  # None means omit from request (use provider default)
     connect_timeout: float = 10.0  # connection / TLS handshake
@@ -211,6 +218,11 @@ class ChatAPIConfig:
             raise ValueError("api_base must not be None")
         if self.model_name is None:
             raise ValueError("model_name must not be None")
+        # §2.2: ``""`` is not a legal "no key" — normalize it to ``None`` so the
+        # request builder tests exactly one thing ("was a key supplied?") and
+        # never treats an empty string as a credential.
+        if self.api_key == "":
+            self.api_key = None
         # §2.1 契约即防呆: ``enable_thinking`` is a **two-state** bool, not a
         # tri-state.  The measured server behaviour makes the third state
         # (`null` / "do not send the key") actively harmful:
@@ -705,7 +717,7 @@ def _send_streaming_request(
     )
 
     headers: dict[str, str] = {"Content-Type": "application/json"}
-    if config.api_key:
+    if config.api_key is not None:
         headers["Authorization"] = f"Bearer {config.api_key}"
 
     # No httpx read timeout on purpose (zombie-request defense is provided by

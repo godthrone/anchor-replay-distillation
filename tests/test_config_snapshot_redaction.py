@@ -47,6 +47,9 @@ def _write_config(tmp_path: Path, output_dir: Path, target_count: int = 5) -> Pa
     base["input_generator"]["api_key"] = FAKE_INPUT_KEY
     base["target_model"]["api_key"] = FAKE_TARGET_KEY
     for section in ("input_generator", "target_model"):
+        # ``run`` refuses a config without an endpoint before it writes anything
+        # (§2.3); these tests only exercise the write path, never the endpoint.
+        base[section]["api_base"] = "http://127.0.0.1:9/v1"
         base[section]["model_name"] = f"{section}-model"
     config_path = tmp_path / "config.toml"
     config_path.write_text(_toml_dump(base), encoding="utf-8")
