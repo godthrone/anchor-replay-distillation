@@ -30,67 +30,117 @@ Graspo reinforcement learning pipelines.
 
 ## Quick Start
 
-### Prerequisites
+**Clone → first dataset in four commands.** You need exactly two things:
+Docker, and an OpenAI-compatible chat-completions endpoint.
 
-- Docker
-- Embedding data: `ontology/anchor_ontology_embeddings.json` — **tracked in this
-  repo**, so a clone already has it (55 pre-computed embeddings, 1024-dim, used
-  by the hierarchical FPS sampler). It is a read-only pipeline input, not
-  generated output.
-- **Optional:** `rawpy` (included in `pyproject.toml` dependencies) for RAW
-  image format support (19 formats: CR2, NEF, ARW, DNG, etc.). The library ships as a
-  manylinux wheel with bundled `libraw.so` — no system packages required.
-  If RAW formats are not needed, rawpy's import is lazy and won't be triggered.
+### What you need — and what happens without it
 
-### 1. Build the Docker image
+| You need | Without it | Can you run anyway? |
+|----------|-----------|---------------------|
+| **Docker** | `bash docker/build.sh` and `bash run.sh` cannot run at all | No — nothing runs without a container runtime. Install Docker first. |
+| **An OpenAI-compatible endpoint + model name** (`api_base`, `model_name`), one for questions and one for answers | The run aborts with `ValueError: api_base must not be None` after creating an empty `outputs/ard_dataset_*/` directory | Yes — both roles may point at the **same** server/model, or at a local vLLM/Ollama/llama.cpp server. There is no bundled offline demo mode. |
+| **API key** | Only matters if your endpoint checks one | Yes — leave `api_key` unset (or delete the line) and no `Authorization` header is sent. |
+| **Ontology + embeddings** (`ontology/*.json`) | Would have to be regenerated with an embedding API | Not a problem: both files are **tracked in this repo**, so a clone already has them (55 pre-computed embeddings, 1024-dim, used by the hierarchical FPS sampler). Read-only input, not generated output. |
+| **RAW image support** (`rawpy`, in `pyproject.toml` dependencies) | RAW (CR2/NEF/ARW/DNG/…) inputs are unavailable | Yes — text and JPG/PNG/GIF/WebP multimodal anchors are unaffected. The library ships as a manylinux wheel with bundled `libraw.so` and its import is lazy. |
+
+### 1. Clone and build the image (one command)
 
 ```bash
-git clone https://github.com/godthrone/anchor-replay-distillation.git
-cd anchor-replay-distillation
+git clone https://github.com/godthrone/anchor-replay-distillation.git && cd anchor-replay-distillation
 bash docker/build.sh
 ```
 
-### 2. Create your override config
+The first build compiles the dependency layer (75 packages locked in `uv.lock`, plus the
+`python:3.11-slim` base) and needs network access to PyPI; the printed
+`Built: ard:<version>` line is your confirmation.
+
+### 2. Create your override config (one command)
 
 ```bash
-mkdir -p .local
-cp configs/config.override.sample.toml .local/config.override.toml
-# Edit .local/config.override.toml: fill in api_base, model_name, api_key
+mkdir -p .local && cp configs/config.override.sample.toml .local/config.override.toml
 ```
 
-Edit `.local/config.override.toml` and fill in your API credentials:
+### 3. Fill in the fields (edit one file)
+
+> **Heads-up about the template.** `configs/config.override.sample.toml` lists a
+> field for **every** field the base `configs/config.toml` defines, so it can
+> double as documentation — it is a handbook, not a checklist: you do not have
+> to keep, or fill, any of it. Note that some of those lines are **not**
+> commented out (e.g. `target_count = 100`, `concurrency = 4`,
+> `max_turns = 1`, `[ontology].path`). Anything left
+> uncommented in the override **overrides the base config**, so if you meant to
+> keep a default, comment the line out or delete it. Rather than editing the
+> whole template, you can replace it with just the block below — the loader
+> deep-merges it into `configs/config.toml`, and a partial file is valid.
+
+In `.local/config.override.toml`, these six values are the **minimum** — every
+other field already has a usable default in `configs/config.toml`:
 
 ```toml
-[input_generator]
+[input_generator]        # asks the questions
 api_base = "https://your-api.example.com/v1"
 model_name = "your-model-name"
-api_key = "your-api-key"
+api_key = "REPLACE_ME"   # or delete the line if your endpoint needs none
 
-[target_model]
+[target_model]           # answers them (= the teacher whose answer becomes the target)
 api_base = "https://your-api.example.com/v1"
 model_name = "your-model-name"
-api_key = "your-api-key"
+api_key = "REPLACE_ME"
 ```
 
-### 3. Generate anchors
+### 4. Generate anchors (one command)
 
 ```bash
-# Text-only anchors
 bash run.sh --config configs/config.toml --override .local/config.override.toml
-
-# Multimodal anchors (with sample images)
-bash run.sh --config configs/config.toml --override .local/config.override.toml \
-    --image-dir examples/images
 ```
 
-### 4. Check the output
+Add `--image-dir examples/images` to produce multimodal anchors instead of
+text-only ones. The default run asks for **100 anchors** and takes as long as
+your endpoint needs.
+
+### 5. See the first output in seconds (optional)
+
+To confirm the whole path works before a full run, point one run at a tiny
+target — append this to the same override file:
+
+```toml
+[generation]
+target_count = 2
+concurrency = 1
+```
+
+...then run the same command and look at the output. Reliable markers of a
+successful run — if you see all four, the pipeline reached the end:
 
 ```bash
-ls outputs/
+ls -t outputs/ | head -1                 # the newest ard_dataset_<timestamp>/ directory
+wc -l outputs/ard_dataset_*/anchor_bank.jsonl   # == target_count lines, one JSON object per line
+python3 -c "import json,glob; print(json.load(open(sorted(glob.glob('outputs/ard_dataset_*/manifest.json'))[-1]))['total_anchors'])"
+tail -3 outputs/ard_dataset_*/logs/ard.log      # ends with: Done! Output: outputs/ard_dataset_...
 ```
 
-Find the `ard_dataset_*` directory (e.g. `ard_dataset_20240101_120000`).
-See `examples/anchor_bank.sample.jsonl` for the expected format.
+A run that produced no anchors still writes `config.json` and `logs/` — the
+`anchor_bank.jsonl` line count is the thing that tells success from failure.
+For a multimodal run, check the record as well: its `data_source` must be
+`ard_multi` (and `ard_text` for a text-only run).
+
+### If step 3 or 4 fails
+
+- **`ValueError: api_base must not be None`** — `api_base` / `model_name` were
+  still empty. (The same traceback appears if `--override` points at a file
+  that does not exist, so fix the path first.) Note the pipeline creates an
+  empty `outputs/ard_dataset_<timestamp>/` directory before it aborts.
+- **`ERROR: override config not found: <path>`** — the `--override` path is
+  wrong. If you *omit* `--override`, it is auto-detected as
+  `config.override.toml` **sitting next to `--config`** — which is
+  `configs/`, not `.local/`. Pass `--override .local/config.override.toml`
+  explicitly, as above.
+- **`bash docker/build.sh` fails** — Docker missing, or the build needs PyPI
+  access. `run.sh` needs the image `ard:<git version>` to exist locally; a
+  missing image makes it try to pull `ard:1.0.0` from Docker Hub and fail.
+
+Everything below is reference material for when you want to tune a run — you
+do **not** need to read it to get your first dataset.
 
 ## Configuration
 
@@ -203,6 +253,7 @@ roles downstream frameworks talk about:
 | — | — | — | The system prompt is no longer a config switch: the ontology samples it (`system_prompt_presence` / `system_prompt_style`), and each anchor that has one gets its text generated at run time and stored in `messages[0]` |
 | `max_turns_with_image` | int | `1` | Max turns with image (≤ `max_turns`) |
 | `embeddings_path` | string | `"ontology/anchor_ontology_embeddings.json"` | Pre-computed ontology embedding file |
+| `criterion` | string | `"max"` | Greedy rule of the within-domain farthest-point selection. `"max"` = classic farthest point (leaving it at `"max"` reproduces every previous release bit for bit); `"sum"` = total-blankness / greedy facility location — it needs the full (n, n) distance matrix, so it is **refused** above ~11,585 rows (1 GiB) instead of silently degrading. **On the production path it is refused anyway:** the margin-filling selection of a normal run (≈ **50,310** rows) would need ≈ **18.9 GiB**, so it is **rejected by the scale budget** of the current-ontology combination cloud. That makes `"sum"` **not selectable in production** — the budget cancels the option instead of pretending the outcome is unchanged, and the same ≈1 GiB budget also applies to `"max"`, so this is not a `"max"`-vs-`"sum"` preference. Any other value is **refused at config load** — there is no silent fallback |
 | `backpressure_threshold` | int | `3` | Consecutive server-side failures that trigger a cooldown |
 | `backpressure_cooldown` | float | `60.0` | Cooldown pause in seconds once the threshold is reached |
 
@@ -439,6 +490,15 @@ and shows why `messages` always starts and ends with a `user` turn.
 
 You can browse `examples/` directly on GitHub to see the input/output format.
 
+## How it works (algorithm)
+
+Before reading the configuration reference, [`docs/ard-algorithm.md`](docs/ard-algorithm.md) is the
+place to start: an **algorithm-level overview and the nine-step pipeline**,
+written without formulas, parameter values, or implementation details, with an
+implementation-status line for each step (i.e. what actually runs today). It is
+the "why this design" companion to `docs/architecture.md`, which covers module
+boundaries and data flow.
+
 ## Docker
 
 The Docker image is built with `docker/build.sh`, which tags the image with the
@@ -508,6 +568,24 @@ api_key = "REPLACE_WITH_YOUR_API_KEY"
 
 The override file is deep-merged with `configs/config.toml` at startup.
 Only secrets go here; all other configuration stays in `configs/config.toml`.
+
+Partial override files are valid — you do **not** have to keep every field the
+sample template lists. One caveat when you do copy the full template: its
+uncommented lines (`target_count`, `concurrency`, `max_turns`,
+`[ontology].path`, …) override the base config, so comment out anything you
+meant to leave at its default.
+
+### Can I try it without an API key / without a model endpoint?
+
+There is **no offline demo mode**: every anchor is produced by calling the two
+configured models, and no endpoint ships with the project. What you can do
+without credentials is verify everything up to the first API call — the image
+builds, the config loads, and the pipeline creates
+`outputs/ard_dataset_<timestamp>/` with `config.json` and `logs/` before it
+stops on `ValueError: api_base must not be None`. If your endpoint needs no
+key, leave `api_key` unset and the header is omitted. Both roles may point at
+one local OpenAI-compatible server (vLLM, Ollama, llama.cpp, LM Studio, …),
+which is the cheapest way to see a complete run.
 
 ### How do I add a custom ontology?
 

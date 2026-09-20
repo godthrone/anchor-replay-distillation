@@ -23,66 +23,109 @@
 
 ## 快速开始
 
-### 环境要求
+**Clone → 第一个数据集，四条命令。** 你只需要两样东西：Docker，以及一个
+OpenAI 兼容的 chat-completions 端点。
 
-- Docker
-- 嵌入数据：`ontology/anchor_ontology_embeddings.json` —— **已随仓库跟踪**，
-  clone 后即存在（55 个预计算嵌入向量，1024 维，供分层 FPS 采样器使用）。
-  它是只读的流水线输入，不是生成产物。
-- **可选：** `rawpy`（已包含在 `pyproject.toml` 依赖中）用于 RAW 图片格式支持
-  （CR2、NEF、ARW、DNG 等 19 种）。该库以 manylinux wheel 发布，自带
-  `libraw.so`，无需安装系统包。如果不需要 RAW 格式，rawpy 的导入是懒加载的，
-  不会被触发。
+### 你需要什么——没有会怎样
 
-### 1. 构建 Docker 镜像
+| 你需要 | 没有会怎样 | 能否降级照跑？ |
+|--------|-----------|----------------|
+| **Docker** | `bash docker/build.sh` 与 `bash run.sh` 完全跑不起来 | 不能——没有容器运行时什么都跑不了。请先装 Docker。 |
+| **一个 OpenAI 兼容端点 + 模型名**（`api_base`、`model_name`），提问与作答各一份 | 运行会在创建一个空的 `outputs/ard_dataset_*/` 目录后以 `ValueError: api_base must not be None` 中止 | 可以——两个角色可以指向**同一个**服务/模型，也可以指向本地 vLLM/Ollama/llama.cpp 服务。项目**不提供**离线演示模式。 |
+| **API key** | 只有当你的端点校验密钥时才必要 | 可以——`api_key` 不填（或删掉该行）就不会发送 `Authorization` 头。 |
+| **本体与嵌入数据**（`ontology/*.json`） | 需要重新用 embedding API 生成 | 不是问题：两个文件都**已随仓库跟踪**，clone 后即存在（55 个预计算嵌入向量，1024 维，供分层 FPS 采样器使用）。只读输入，不是生成产物。 |
+| **RAW 图片支持**（`rawpy`，已在 `pyproject.toml` 依赖中） | 无法读取 RAW（CR2/NEF/ARW/DNG/…）输入 | 可以——文本锚点与 JPG/PNG/GIF/WebP 多模态锚点均不受影响。该库以 manylinux wheel 发布，自带 `libraw.so`，导入是懒加载。 |
+
+### 1. clone 并构建镜像（一条命令）
 
 ```bash
-git clone https://github.com/godthrone/anchor-replay-distillation.git
-cd anchor-replay-distillation
+git clone https://github.com/godthrone/anchor-replay-distillation.git && cd anchor-replay-distillation
 bash docker/build.sh
 ```
 
-### 2. 创建覆写配置
+首次构建会编译依赖层（`uv.lock` 锁定的 75 个包 + `python:3.11-slim` 基础镜像），
+需要能访问 PyPI；脚本打印的 `Built: ard:<version>` 就是成功确认。
+
+### 2. 创建覆写配置（一条命令）
 
 ```bash
-mkdir -p .local
-cp configs/config.override.sample.toml .local/config.override.toml
-# 编辑 .local/config.override.toml: 填入 api_base, model_name, api_key
+mkdir -p .local && cp configs/config.override.sample.toml .local/config.override.toml
 ```
 
-编辑 `.local/config.override.toml`，填入你的 API 凭证：
+### 3. 填入字段（编辑一个文件）
+
+> **关于模板的先说一句。** `configs/config.override.sample.toml` 为基础配置
+> `configs/config.toml` 定义的**每个**字段都列了一行，因此可以兼作字段文档
+> ——它是手册，不是清单：你并不需要保留它、也不必填满它。其中有些行**并没有
+> 注释掉**（如 `target_count = 100`、`concurrency = 4`、`max_turns = 1`、
+> `[ontology].path`）。覆写文件里任何未注释的行都会**覆盖基础配置**——如果你
+> 想保留默认值，请把该行注释掉或删除。与其改整个模板，直接把下面这段写进
+> `.local/config.override.toml` 也可以：加载器会把它深度合并进
+> `configs/config.toml`，**部分字段的覆写文件是合法的**。
+
+`.local/config.override.toml` 里这六个值是**最少必填**——其余字段在
+`configs/config.toml` 里都有可用的默认值：
 
 ```toml
-[input_generator]
+[input_generator]        # 出题端
 api_base = "https://your-api.example.com/v1"
 model_name = "your-model-name"
-api_key = "your-api-key"
+api_key = "REPLACE_ME"   # 端点不需要密钥就删掉这行
 
-[target_model]
+[target_model]           # 作答端（= 教师：它的答案就是监督目标）
 api_base = "https://your-api.example.com/v1"
 model_name = "your-model-name"
-api_key = "your-api-key"
+api_key = "REPLACE_ME"
 ```
 
-### 3. 生成锚点
+### 4. 生成锚点（一条命令）
 
 ```bash
-# 纯文本锚点
 bash run.sh --config configs/config.toml --override .local/config.override.toml
-
-# 多模态锚点（使用样例图片）
-bash run.sh --config configs/config.toml --override .local/config.override.toml \
-    --image-dir examples/images
 ```
 
-### 4. 查看输出
+加上 `--image-dir examples/images` 就产出多模态锚点（而不是纯文本）。
+默认一轮要 **100 个锚点**，耗时取决于你的端点。
+
+### 5. 几秒钟就看到第一个产出（可选）
+
+想在完整跑之前先确认整条链路通，就让某一轮跑一个很小的目标——把这段追加到
+同一个覆写文件里：
+
+```toml
+[generation]
+target_count = 2
+concurrency = 1
+```
+
+...然后用同一条命令运行，看产出。以下四条全都命中，就说明流水线跑到了终点：
 
 ```bash
-ls outputs/
+ls -t outputs/ | head -1                 # 最新的 ard_dataset_<时间戳>/ 目录
+wc -l outputs/ard_dataset_*/anchor_bank.jsonl   # == target_count 行，每行一个 JSON 对象
+python3 -c "import json,glob; print(json.load(open(sorted(glob.glob('outputs/ard_dataset_*/manifest.json'))[-1]))['total_anchors'])"
+tail -3 outputs/ard_dataset_*/logs/ard.log      # 结尾是：Done! Output: outputs/ard_dataset_...
 ```
 
-找到 `ard_dataset_*` 目录（如 `ard_dataset_20240101_120000`）。
-参考 `examples/anchor_bank.sample.jsonl` 了解输出格式。
+一轮没产出任何锚点，也照样会写出 `config.json` 和 `logs/`——真正区分成功与
+失败的是 `anchor_bank.jsonl` 的行数。多模态运行还要多看一处：记录的
+`data_source` 必须是 `ard_multi`（纯文本运行则是 `ard_text`）。
+
+### 第 3 步或第 4 步失败时
+
+- **`ValueError: api_base must not be None`** —— `api_base` / `model_name`
+  还是空的。（`--override` 指向一个不存在的文件时也会看到同一段报错，所以先
+  确认路径。）注意流水线在报错前已经创建了空的
+  `outputs/ard_dataset_<时间戳>/` 目录。
+- **`ERROR: override config not found: <路径>`** —— `--override` 路径写错了。
+  如果**省略** `--override`，它只会自动检测**与 `--config` 同目录**的
+  `config.override.toml`——那是 `configs/`，不是 `.local/`。请像上面那样显式
+  传 `--override .local/config.override.toml`。
+- **`bash docker/build.sh` 失败** —— 没装 Docker，或构建需要访问 PyPI。
+  `run.sh` 需要本地存在 `ard:<git 版本>` 镜像；镜像不存在时它会去 Docker Hub
+  拉 `ard:1.0.0` 并失败。
+
+以下内容都是"想调参时再看"的参考资料——**上手第一份数据集不需要读它们**。
 
 ## 配置
 
@@ -187,6 +230,7 @@ ARD 采用**分层 TOML 配置**模型。有两个配置文件：
 | — | — | — | 系统提示词不再是配置开关：由本体采样决定（`system_prompt_presence` / `system_prompt_style`），带 system 的锚点其文本在运行时生成并写入 `messages[0]` |
 | `max_turns_with_image` | int | `1` | 含图片的最大轮数（≤ `max_turns`） |
 | `embeddings_path` | string | `"ontology/anchor_ontology_embeddings.json"` | 预计算本体论 embedding 文件路径 |
+| `criterion` | string | `"max"` | 域内最远点选择的贪心规则。`"max"` = 经典最远点（保持 `"max"` 可逐位复现此前所有版本）；`"sum"` = total-blankness / 贪心设施选址，它需要完整的 (n, n) 距离矩阵，因此超过约 11,585 行（1 GiB）时会被**拒绝**，而不是静默降级。**而在生产路径上它本来就会被拒绝：** 常规运行的余量填充那一段云约 **50,310** 行，需要约 **18.9 GiB**，因此在当前本体组合云的生产路径上被**规模预算拒绝**。也就是说 `"sum"` **在生产路径上不可选**——预算直接取消该选项，而不是假装结果没变；同一份约 1 GiB 的规模预算也适用于 `"max"`，所以这不是"`max` 还是 `sum`"的偏好选择。其他取值会在**配置加载时被拒绝**——不存在静默回退 |
 | `backpressure_threshold` | int | `3` | 连续服务端类失败达到该次数即触发冷却 |
 | `backpressure_cooldown` | float | `60.0` | 触发阈值后的冷却暂停秒数 |
 
@@ -401,6 +445,12 @@ examples/
 
 你可以在 GitHub 上直接浏览 `examples/` 查看输入输出格式。
 
+## 原理（算法总览）
+
+在翻配置参考之前，建议先看 [`docs/ard-algorithm.md`](docs/ard-algorithm.md)：它是**算法原理与九步流程总览**，
+不用公式、不写参数取值、不展开实现细节，每一步都带一行"实现状态"（即当前真正在跑的是哪一步）。
+它与 `docs/architecture.md` 互补——后者写的是模块边界与数据流。
+
 ## Docker
 
 Docker 镜像通过 `docker/build.sh` 构建，使用当前 git 版本号作为标签。
@@ -467,6 +517,20 @@ api_key = "REPLACE_WITH_YOUR_API_KEY"
 
 启动时覆写文件会与 `configs/config.toml` 深度合并。只有机密信息放这里，
 其他配置仍在 `configs/config.toml` 中。
+
+覆写文件可以是**部分字段**的——不需要把样例模板里的每个字段都留着。但如果你
+确实整份复制了模板，注意其中未注释的行（`target_count`、`concurrency`、
+`max_turns`、`[ontology].path` 等）会覆盖基础配置；想保留默认值的请注释掉。
+
+### 没有 API key / 没有模型端点，能先试试吗？
+
+**没有离线演示模式**：每条锚点都要调用所配置的两个模型，项目不自带任何端点。
+没有凭证时你能验证到第一次 API 调用之前的一切——镜像能构建、配置能加载、
+流水线会创建 `outputs/ard_dataset_<时间戳>/` 并写入 `config.json` 与 `logs/`，
+然后停在 `ValueError: api_base must not be None`。如果你的端点不需要密钥，
+`api_key` 留空即可，请求不会带认证头。两个角色也可以指向同一个本地
+OpenAI 兼容服务（vLLM、Ollama、llama.cpp、LM Studio 等），这是看到完整一轮
+产出最省事的办法。
 
 ### 如何添加自定义本体论？
 
