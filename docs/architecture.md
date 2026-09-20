@@ -1283,8 +1283,12 @@ overwrite = false       # 是否覆盖已有输出目录（预授权退路，遵
 
 **`enable_thinking` 说明**：`[target_model].enable_thinking` 是**二态 bool**，默认 `false`，
 **每次请求都显式发送**（不发"未配置"这种第三态），且值必须是真正的 `bool`。
+**发送形态是嵌套的**：该值**总是装在 `chat_template_kwargs.enable_thinking` 里**发出，
+请求体**没有**顶层 `enable_thinking` 键——写顶层**等同于不发送**（读取该开关的是服务端的
+**chat template**，只有 `chat_template_kwargs` 会被转发进去）；本实现在请求离开进程前还有一道边界校验
+（`_send_streaming_request`）：payload 不带该嵌套键、或它不是 `bool`，就直接抛 `TypeError`，请求不上线路。
 
-| 发送内容 | 服务端行为 | 后果 |
+| 发送内容（嵌套在 `chat_template_kwargs` 里的取值） | 服务端行为 | 后果 |
 |----------|-----------|------|
 | `false` | 关闭推理 | 仅输出答案，适用于蒸馏非推理 student 模型 |
 | `true` | 开启推理 | 推理以 `delta.reasoning` 单独下发，不进入 `target_answer`，但**先消耗 `max_tokens`** |
