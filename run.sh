@@ -57,6 +57,36 @@ if [[ -n "${IMAGE_DIR}" ]]; then
     IMAGE_DIR_MOUNT=(-v "${IMAGE_DIR}:/data/images:ro")
 fi
 
+# Build the image on first use, so a fresh clone needs no separate build step.
+#
+# Handing a missing image to `docker run` makes Docker try to *pull* it from a
+# registry and fail with a misleading "not found" error — the build recipe lives
+# in this repository, not in a registry. The build itself is delegated to
+# docker/build.sh so the build commands stay in exactly one place; IMAGE_NAME is
+# that script's existing input for the tag, and passing our own IMAGE through
+# keeps this script the single source of truth for the tag even when ARD_IMAGE
+# names a custom one. When the image is already present this block does nothing
+# but the read-only check.
+if ! command -v docker >/dev/null 2>&1; then
+    echo "run.sh: docker not found in PATH — install Docker, then retry." >&2
+    exit 127
+fi
+
+if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
+    echo "run.sh: image '${IMAGE}' not found locally — building it now." >&2
+    echo "run.sh: first build needs PyPI access and takes a few minutes." >&2
+    if IMAGE_NAME="${IMAGE}" bash "${REPO_ROOT}/docker/build.sh"; then
+        echo "run.sh: built image '${IMAGE}'." >&2
+    else
+        BUILD_RC=$?
+        echo "run.sh: building image '${IMAGE}' failed (docker/build.sh exit ${BUILD_RC})." >&2
+        echo "run.sh: check that Docker is installed and running (docker info) and that the" >&2
+        echo "run.sh: build can reach PyPI, then build manually:" >&2
+        echo "run.sh:     bash docker/build.sh" >&2
+        exit "${BUILD_RC}"
+    fi
+fi
+
 docker run --rm --network=host \
     -v "${REPO_ROOT}/configs:/app/configs:ro" \
     -v "${REPO_ROOT}/ontology:/app/ontology:ro" \
