@@ -36,7 +36,7 @@ class LLMEndpoint(BaseModel):
     use site (§2.1 契约即防呆).
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     api_base: str
     model_name: str
@@ -303,7 +303,7 @@ class CoverageEmbedding(BaseModel):
     (§2.1 契约即防呆).
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     api_base: str
     model: str
