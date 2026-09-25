@@ -228,6 +228,9 @@ CONFIG_SNAPSHOT_HEADER = """\
 # environment fields, not secrets (§7.1), and the snapshot exists to record
 # where the run pointed.
 #
+# An unset optional field is written as "" — TOML has no null literal, and ""
+# is the representation load_config turns back into "not provided" (§2.2).
+#
 # Feed this file back as the base config, supplying the real credentials in an
 # override (§7.1), e.g.:
 #   python -m ard --config <this file> --override config.override.toml
