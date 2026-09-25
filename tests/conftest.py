@@ -1,23 +1,18 @@
 # conftest.py — Shared pytest fixtures and configuration.
-# Responsibility: provide reusable test fixtures (API clients, configs,
-# sample data) for all test modules in the test suite.
+# Responsibility: provide reusable test fixtures (ontology, configs, sample
+# data) for all test modules in the test suite.
 
 from __future__ import annotations
 
-import json
-
 import pytest
 
+from ard.core.ontology import OntologyV4, load_ontology_v4
 
-@pytest.fixture
-def ontology() -> dict:
-    """Load shared anchor ontology for tests."""
-    with open("ontology/anchor_ontology.json", encoding="utf-8") as f:
-        return json.load(f)
+#: The ontology the production pipeline reads (see ``configs/config.toml``).
+ONTOLOGY_PATH = "ontology/anchor_ontology.v4.json"
 
 
-@pytest.fixture
-def embeddings_data() -> dict:
-    """Load shared embedding data for tests."""
-    with open("ontology/anchor_ontology_embeddings.json", encoding="utf-8") as f:
-        return json.load(f)
+@pytest.fixture(scope="module")
+def ontology() -> OntologyV4:
+    """Load the shared v4 ontology for tests."""
+    return load_ontology_v4(ONTOLOGY_PATH)

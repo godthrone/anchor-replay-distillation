@@ -19,7 +19,7 @@ import pytest
 
 from ard.backends.api_client import ARDTimeoutError, ChatAPIClient, ChatResponse
 from ard.core.quota import allocate_images
-from ard.core.sampler import generate_anchor_id
+from ard.core.sampling import generate_anchor_id
 from ard.core.types import AnchorSpec, GeneratedAnchor, TurnSpec
 from ard.domain.anchor_shape import message_shape_error
 from ard.domain.bank import append_anchor, read_anchor_bank

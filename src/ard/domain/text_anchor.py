@@ -5,7 +5,7 @@ Role-driven generation: every :class:`TurnSpec` yields exactly one message.
 2. ``role == "assistant"`` → target_model generates the assistant reply.
 
 The final turn is always a ``user`` turn (guaranteed by
-:mod:`ard.core.sampler`): there the target model answers, and — when thinking is
+:mod:`ard.core.sampling`): there the target model answers, and — when thinking is
 enabled for it — its reasoning trace is kept as a separate field, because
 thinking is not the answer (``targets[0].output.content`` vs
 ``targets[0].output.reasoning``).  The message list therefore always starts

@@ -5,7 +5,7 @@ All types are plain dataclasses with slots=True. No external dependencies.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
@@ -124,20 +124,13 @@ class GeneratedAnchor:
 
 @dataclass(slots=True)
 class AnchorGenerationConfig:
-    """Lightweight config for anchor generation (core layer, not pydantic)."""
+    """Lightweight config for anchor generation (core layer, not pydantic).
 
-    target_count: int = 100
+    Deliberately tiny: everything that defines *what* the plan contains is
+    derived from the ontology and the construction rule (§1.4 single source of
+    truth).  Only the run seed (deterministic sampling) and the generation
+    concurrency belong here.
+    """
+
     seed: int = 42
     concurrency: int = 4
-    languages: list[str] = field(default_factory=list)
-    task_types: list[str] = field(default_factory=list)
-    max_turns: int = 1
-    max_turns_with_image: int = 1
-    embeddings_path: str = "ontology/anchor_ontology_embeddings.json"
-    # Greedy rule of the within-domain farthest-point selection.  ``None`` means
-    # "not specified by the caller", and the sampler resolves it to the
-    # historical default (``ard.core.cloud.CRITERION_MAX``) — a literal default
-    # here would be a second, silently-drifting copy of that constant.  This
-    # dataclass stays dependency-free (no numpy), so the cloud constants are
-    # deliberately not imported here.
-    criterion: str | None = None

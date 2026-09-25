@@ -32,9 +32,8 @@ outputs/
 anchor_bank/
 # Defensive: runtime data must never be committed.
 data/
-# Read-only pipeline *input* (ontology definition + pre-computed embeddings).
-# Tracked on purpose: the Docker build copies it, and a clean clone cannot
-# regenerate it without an embedding API. See README "Prerequisites".
+# Read-only pipeline *input*: the ontology definition.
+# Tracked on purpose: the Docker build copies it into the image.
 !ontology/
 !ontology/*.json
 *.log

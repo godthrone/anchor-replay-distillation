@@ -29,8 +29,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ard.core.constraints import ConstraintEvaluator, RestrictedBlock
-from ard.core.ontology import OntologyV4
-from ard.core.quota import compute_turn_distribution
+from ard.core.ontology import FlatAxisWithAttributes, OntologyV4
 from ard.core.types import AnchorGenerationConfig, AnchorSpec, TurnSpec
 
 #: The anchor-id dimensions, in hash order.  The set is the legacy one (v3.0.0
@@ -40,10 +39,6 @@ from ard.core.types import AnchorGenerationConfig, AnchorSpec, TurnSpec
 #: dimensions are still injective — two coordinates that differ only in a
 #: non-hashed axis cannot occur, because each legal restricted block contributes
 #: exactly one sample (see the contract tests).
-#:
-#: WP-S2b note: when :mod:`ard.core.sampler` is deleted this function (and the
-#: tuple below) must survive *here*; the legacy tests that import it from
-#: ``ard.core.sampler`` move to this module in the same step.
 ANCHOR_ID_DIMENSIONS: tuple[str, ...] = (
     "language",
     "knowledge_domain",
@@ -88,6 +83,38 @@ MODALITY_TEXT = "text_only"
 
 MODALITY_IMAGE = "image"
 """The ``modality`` sample field of a coordinate that carries an image."""
+
+# ── Turn counts: from the ontology, never from a configuration knob ─────────
+#
+# ``conversation_type.value_attributes.turns`` is the single source of a plan
+# entry's turn count (§1.4).  The ontology counts *exchanges* — a user turn plus
+# the reply it gets — while :class:`~ard.core.types.AnchorSpec` carries the
+# conversation *prefix* that ends on the final user question (the answer is the
+# generation target, not a spec turn).  So ``n`` ontology turns are
+# ``2 * n - 1`` spec turns: ``single_turn``(1) → 1, ``clarification``(2) → 3,
+# ``troubleshooting``(3) → 5, ``constraint_update``(4) → 7.  Every resolved count
+# is therefore odd and ends on a user turn, which is exactly what
+# :class:`~ard.core.types.AnchorSpec` validates.
+
+MULTI_TURN_LITERAL = "multi"
+"""The ontology's marker for a conversation type whose turn count is variable."""
+
+MULTI_TURN_DEFAULT = 4
+"""Ontology turns planned for a ``"multi"`` conversation type.
+
+``tool_assisted`` and ``source_review`` declare ``turns: "multi"`` — a variable
+count, because it depends on how many tool calls or revision rounds the exchange
+needs.  A deterministic plan still needs one number per entry; this is the
+single place that number is defined.
+
+Basis: **the largest turn count the v4 ontology itself declares**
+(``constraint_update = 4``).  Taking the ontology's own maximum invents no
+number outside the single source of truth, and makes a ``"multi"`` type planned
+at least as long as any fixed multi-turn type.  Exposed as one named constant so
+a reviewer can ratify or change it in one line; the guard in
+:func:`_spec_turns` refuses to run if the ontology ever declares something larger
+behind it.
+"""
 
 #: The rule's four expectations as an ordered table, so one failure names every
 #: mismatch at once (one run, one fix).
@@ -302,35 +329,71 @@ def sample_coordinates(ontology: OntologyV4, seed: int) -> tuple[AnchorCoordinat
     return tuple(coordinates)
 
 
-def turn_counts_for(plan_size: int, max_turns: int, rng: random.Random) -> list[int]:
-    """Distribute ``plan_size`` anchors over the odd turn counts up to ``max_turns``.
-
-    Only odd turn counts are valid — a conversation must end with a user turn —
-    so bucket ``i`` holds the anchors with ``2 * i + 1`` turns.  The
-    distribution is as even as possible and the remainder is spread by ``rng``;
-    with the shipped ``max_turns = 1`` every anchor is single-turn.
+def _spec_turns(declared: int | str | None, value: str) -> int:
+    """Translate one ontology ``turns`` attribute into a spec turn count.
 
     Args:
-        plan_size: Number of anchors to distribute.
-        max_turns: Largest allowed turn count (1..10).
-        rng: Seeded generator; consumed here so the plan's later consumers keep
-            their positions on the same stream.
+        declared: The ``turns`` attribute of one ``conversation_type`` value.
+        value: The conversation-type value, used to name a violation.
 
     Returns:
-        A list of length ``max_turns`` whose index ``n - 1`` holds the number of
-        anchors with ``n`` turns.
+        The number of :class:`~ard.core.types.AnchorSpec` turns — always odd,
+        i.e. ``2 * ontology_turns - 1`` (see :data:`MULTI_TURN_DEFAULT`).
 
     Raises:
-        SamplingError: If ``max_turns`` is not a positive turn count.
+        SamplingError: If the attribute is neither a positive integer nor
+            :data:`MULTI_TURN_LITERAL`, or if it exceeds
+            :data:`MULTI_TURN_DEFAULT` — which would silently invalidate the
+            documented basis of the ``"multi"`` bound.
     """
-    if max_turns < 1:
-        raise SamplingError(f"max_turns must be >= 1, received {max_turns}")
-    num_odd_buckets = (max_turns + 1) // 2
-    raw_turn_counts = compute_turn_distribution(plan_size, num_odd_buckets, rng)
-    turn_counts = [0] * max_turns
-    for index, count in enumerate(raw_turn_counts):
-        turn_counts[2 * index] = count
-    return turn_counts
+    if declared == MULTI_TURN_LITERAL:
+        return 2 * MULTI_TURN_DEFAULT - 1
+    if not isinstance(declared, int) or isinstance(declared, bool) or declared < 1:
+        raise SamplingError(
+            f"conversation_type {value!r} declares an unusable turns attribute: "
+            f"{declared!r} (expected a positive integer or "
+            f"{MULTI_TURN_LITERAL!r})"
+        )
+    if declared > MULTI_TURN_DEFAULT:
+        raise SamplingError(
+            f"conversation_type {value!r} declares turns={declared}, above "
+            f"MULTI_TURN_DEFAULT={MULTI_TURN_DEFAULT}: the 'multi' bound is no longer "
+            "the ontology's largest declared turn count — re-derive it."
+        )
+    return 2 * declared - 1
+
+
+def turn_counts_by_conversation_type(ontology: OntologyV4) -> dict[str, int]:
+    """Return the spec turn count of every ``conversation_type`` value.
+
+    The counts come from ``conversation_type.value_attributes.turns`` and from
+    nothing else — there is no configuration knob for turns (see
+    :data:`MULTI_TURN_DEFAULT` for how the literal ``"multi"`` resolves).
+
+    Args:
+        ontology: A validated v4 ontology.
+
+    Returns:
+        ``conversation_type value -> number of AnchorSpec turns``, one entry per
+        declared value, in ontology order.
+
+    Raises:
+        SamplingError: If the axis carries no per-value turn attributes, if a
+            value carries none, or if a declared count is unusable.
+    """
+    spec = ontology.axes.spec("conversation_type")
+    if not isinstance(spec, FlatAxisWithAttributes):
+        raise SamplingError(
+            "conversation_type must carry per-value turn attributes to derive the "
+            f"plan's turn counts, got {type(spec).__name__}"
+        )
+    counts: dict[str, int] = {}
+    for value in ontology.axis_values("conversation_type"):
+        attributes = spec.value_attributes.get(value)
+        if attributes is None:
+            raise SamplingError(f"conversation_type {value!r} declares no turn attributes")
+        counts[value] = _spec_turns(attributes.root.get("turns"), value)
+    return counts
 
 
 def generate_anchor_id(meta: dict[str, Any]) -> str:
@@ -377,66 +440,65 @@ def _build_spec(coordinate: AnchorCoordinate, num_turns: int) -> AnchorSpec:
 def build_specs(
     coordinates: tuple[AnchorCoordinate, ...],
     *,
-    max_turns: int,
-    rng: random.Random,
+    ontology: OntologyV4,
 ) -> list[AnchorSpec]:
     """Turn a coordinate plan into the run's :class:`AnchorSpec` list.
 
+    Each spec's turn count is the one its own ``conversation_type`` declares in
+    the ontology (see :func:`turn_counts_by_conversation_type`); no randomness
+    is involved, so the same ``(coordinates, ontology)`` yields the same specs.
+
     Args:
         coordinates: The plan from :func:`sample_coordinates`, in plan order.
-        max_turns: Largest allowed turn count.
-        rng: Seeded generator used only for the turn distribution.
+        ontology: The validated v4 ontology the coordinates came from.
 
     Returns:
         One spec per coordinate, in the same order.
 
     Raises:
-        SamplingError: If the distribution does not cover every coordinate.
+        SamplingError: If a coordinate's ``conversation_type`` has no declared
+            turn count, or a declared count is unusable.
     """
-    counts = turn_counts_for(len(coordinates), max_turns, rng)
-    specs: list[AnchorSpec] = []
-    coordinate_index = 0
-    for turn_count, count in enumerate(counts, start=1):
-        for _ in range(count):
-            if coordinate_index >= len(coordinates):
-                break
-            specs.append(_build_spec(coordinates[coordinate_index], turn_count))
-            coordinate_index += 1
-    if coordinate_index != len(coordinates):
+    turn_counts = turn_counts_by_conversation_type(ontology)
+    unknown = {
+        coordinate.conversation_type
+        for coordinate in coordinates
+        if coordinate.conversation_type not in turn_counts
+    }
+    if unknown:
         raise SamplingError(
-            f"turn distribution covered {coordinate_index} of {len(coordinates)} "
-            f"coordinates (counts={counts}, max_turns={max_turns})"
+            f"coordinates carry conversation_type values the ontology does not "
+            f"declare: {sorted(unknown)}"
         )
-    return specs
+    return [
+        _build_spec(coordinate, num_turns=turn_counts[coordinate.conversation_type])
+        for coordinate in coordinates
+    ]
 
 
 def sample_anchors(
     ontology: OntologyV4,
     config: AnchorGenerationConfig,
-    rng: random.Random,
 ) -> list[AnchorSpec]:
     """Sample the run's full plan from ``ontology`` (§12.1 entry point).
 
     The count is **derived** from the construction rule: the returned list has
-    exactly :data:`EXPECTED_TOTAL` entries and ``config.target_count`` is
-    deliberately ignored.  A caller that needs a prefix (the checkpoint/resume
-    path asks only for the anchors still missing) slices the result — the plan
-    itself is never shortened here, because a truncated plan would silently skip
-    coordinates.
+    exactly :data:`EXPECTED_TOTAL` entries.  A caller that needs a prefix (the
+    checkpoint/resume path asks only for the anchors still missing) slices the
+    result — the plan itself is never shortened here, because a truncated plan
+    would silently skip coordinates.
 
     Args:
         ontology: A validated v4 ontology.
-        config: Generation configuration; only ``max_turns`` and
-            ``max_turns_with_image`` are read.  ``seed`` is unused because the
-            caller passes the already-seeded ``rng``, which keeps any work that
-            runs after this call (image allocation) on the same stream.
-        rng: The single source of randomness for the plan.
+        config: Generation configuration; only ``seed`` is read.  The turn count
+            of each entry comes from the ontology, not from the config.
 
     Returns:
         The plan's :class:`AnchorSpec` objects, in plan order.
 
     Raises:
-        SamplingError: If the ontology cannot produce the rule's coordinate set.
+        SamplingError: If the ontology cannot produce the rule's coordinate set,
+            or cannot supply a turn count for one of them.
     """
     coordinates = sample_coordinates(ontology, config.seed)
-    return build_specs(coordinates, max_turns=config.max_turns, rng=rng)
+    return build_specs(coordinates, ontology=ontology)

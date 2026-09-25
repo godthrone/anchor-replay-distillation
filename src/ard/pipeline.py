@@ -262,6 +262,11 @@ def _log_target_model_reasoning_stats(
 #: argument and its default stay in sync.
 SpecSampler = Callable[[ARDConfig], list[AnchorSpec]]
 
+#: Images allocated per anchor.  The construction rule gives an image-modality
+#: coordinate exactly one ``visual_domain``, so one image per anchor is what the
+#: plan describes — it is not a configurable knob.
+IMAGES_PER_ANCHOR = 1
+
 
 def sample_specs(config: ARDConfig) -> list[AnchorSpec]:
     """Build the run's full anchor plan from the v4 ontology (the production seam).
@@ -285,10 +290,8 @@ def sample_specs(config: ARDConfig) -> list[AnchorSpec]:
     gen_config = AnchorGenerationConfig(
         seed=config.generation.resolved_seed,
         concurrency=config.generation.concurrency,
-        max_turns=config.generation.max_turns,
-        max_turns_with_image=config.generation.max_turns_with_image,
     )
-    return sample_anchors(ontology, gen_config, random.Random(gen_config.seed))
+    return sample_anchors(ontology, gen_config)
 
 
 def run(
@@ -388,13 +391,10 @@ def run(
     # first.
     # The consumers below (image allocation, the generator) read the same
     # ``AnchorGenerationConfig`` the plan builder builds; this one is for the
-    # generator's concurrency and the plan's rng, which must stay the seeded
-    # stream the rule documents.
+    # generator's concurrency and the image-allocation rng.
     gen_config = AnchorGenerationConfig(
         seed=config.generation.resolved_seed,
         concurrency=config.generation.concurrency,
-        max_turns=config.generation.max_turns,
-        max_turns_with_image=config.generation.max_turns_with_image,
     )
     rng = random.Random(gen_config.seed)
     plan = spec_sampler(config)
@@ -486,7 +486,7 @@ def run(
                 sampled = sample_images(images, 100, seed=gen_config.seed)
                 rel_paths = copy_images_to_output(sampled, output_dir)
                 specs = allocate_images(
-                    specs, rel_paths, config.generation.max_turns_with_image, rng
+                    specs, rel_paths, IMAGES_PER_ANCHOR, rng
                 )
                 # Resolve image paths relative to output_dir for base64 encoding
                 for spec in specs:
@@ -504,7 +504,7 @@ def run(
                 sampled = sample_images(images, 100, seed=gen_config.seed)
                 rel_paths = convert_and_copy_images(sampled, output_dir)
                 specs = allocate_images(
-                    specs, rel_paths, config.generation.max_turns_with_image, rng
+                    specs, rel_paths, IMAGES_PER_ANCHOR, rng
                 )
                 # Resolve image paths relative to output_dir for base64 encoding
                 for spec in specs:

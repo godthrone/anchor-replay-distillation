@@ -1,10 +1,8 @@
-"""System-prompt sampling dimension and prompt-text generation (v3.0.0).
+"""System-prompt sampling dimension and prompt-text generation.
 
 The system prompt is a **sampling dimension**, not a global switch: real
 conversation data is mixed (many turns carry no system prompt at all), so the
-generator has to cover both "no system prompt" and several styles of one, and
-FPS has to be able to spread the choice over the ontology like any other
-dimension.
+generator has to cover both "no system prompt" and several styles of one.
 
 Two ontology dimensions, deliberately kept apart (they are orthogonal):
 
@@ -16,24 +14,19 @@ Two ontology dimensions, deliberately kept apart (they are orthogonal):
 downstream routes and counts on: :data:`SYSTEM_PROMPT_NONE` when the anchor has
 no system message, otherwise the style name.
 
-This module owns that contract (vocabulary + prompt text) so the sampler, the
-FPS layer and the anchor generator all read the same definition (§1.4).
+This module owns that contract (vocabulary + prompt text) so the anchor
+generator and the domain layer read the same definition (§1.4).
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-import numpy as np
-
 __all__ = [
     "SYSTEM_PROMPT_GENERATION_INSTRUCTIONS",
     "SYSTEM_PROMPT_NONE",
-    "SYSTEM_PROMPT_STYLE_ORDER",
     "build_system_prompt_prompt",
     "get_system_prompt_values",
-    "named_style_vector",
-    "style_centroid_direction",
     "system_prompt_mode",
 ]
 
@@ -46,15 +39,6 @@ SYSTEM_PROMPT_NONE = "none"
 #: dimensions from admitting nonsensical combinations such as "no system
 #: prompt, but a detailed persona".
 SYSTEM_PROMPT_STYLE_ABSENT = SYSTEM_PROMPT_NONE
-
-#: The system-prompt style names, in the order the ontology declares them.
-#: Used to check that the sampling code and the ontology have not drifted.
-SYSTEM_PROMPT_STYLE_ORDER: tuple[str, ...] = (
-    "minimal_persona",
-    "detailed_persona",
-    "task_constraint",
-    "domain_style",
-)
 
 #: How the input generator is asked to write each style.  The mode gives the
 #: **style specification**; the concrete text is generated at run time from
@@ -96,7 +80,7 @@ def get_system_prompt_values(ontology: dict[str, Any]) -> list[tuple[str, str]]:
         system-prompt mode.  An ontology without the new sections (older
         ontologies, synthetic test fixtures) degrades to a single
         ``("none", "none")`` pair, i.e. "no system prompt", rather than
-        inventing a dimension that has no embeddings.
+        inventing a dimension the ontology does not declare.
     """
     presence = ontology.get("system_prompt_presence")
     styles = ontology.get("system_prompt_style")
@@ -127,77 +111,6 @@ def system_prompt_mode(presence: str, style: str) -> str:
     if presence == SYSTEM_PROMPT_NONE:
         return SYSTEM_PROMPT_NONE
     return style
-
-
-def named_style_vector(style: str, dimension: int, n_styles: int) -> np.ndarray:
-    """Return the composition-slot vector of a system-prompt *style*.
-
-    Styles are a **categorical** choice — a "detailed persona" and a "task
-    constraint" are not two points in semantic space, they are two different
-    kinds of instruction — so the slot uses one axis per style instead of a
-    semantic vector.  Orthogonal axes are what make two anchors that differ
-    only in style genuinely far apart; the semantic style vectors that the
-    embeddings file carries are near-parallel (cosine ≈ 0.96-0.99), which left
-    the choice of style almost invisible to FPS (measured: 1/500 anchors picked
-    the rarest style).
-
-    The absent case has **no** style, and that is exactly what it contributes:
-    :data:`SYSTEM_PROMPT_STYLE_ABSENT` maps to the zero vector.  Its own
-    direction lives in the presence slot, which is orthogonal to this one.
-
-    Args:
-        style: A ``system_prompt_style`` value (the absent marker is allowed).
-        dimension: Width of the composition slot (the embedding dimension).
-        n_styles: Number of one-hot axes needed (the real styles, excluding
-            the absent marker).
-
-    Returns:
-        Vector of shape ``(dimension,)`` — a unit one-hot, or all zeros for the
-        absent case.
-
-    Raises:
-        ValueError: If *n_styles* does not fit in *dimension*.
-    """
-    if n_styles > dimension:
-        raise ValueError(
-            f"cannot one-hot encode {n_styles} system-prompt styles in "
-            f"{dimension} dimensions"
-        )
-    vector = np.zeros(dimension, dtype=np.float64)
-    if style == SYSTEM_PROMPT_STYLE_ABSENT:
-        return vector
-    vector[SYSTEM_PROMPT_STYLE_ORDER.index(style)] = 1.0
-    return vector
-
-
-def style_centroid_direction(style_vectors: list[np.ndarray]) -> np.ndarray:
-    """Return the direction that is maximally far from every system-prompt style.
-
-    Used for the ``none`` **presence** value.  "No system prompt" is not a
-    style; it is the absence of the whole dimension, so it has no natural
-    position among the style vectors.  Giving it the *antipode* of the style
-    centroid is the one choice that states that in geometry: the absent case is
-    as far from every style as the style space allows, instead of sitting at
-    the centroid where it is equidistant from all of them — which is what made
-    FPS unable to distinguish "no system prompt" from "some system prompt"
-    (measured before this change: ``none`` was picked 1 time in 500).
-
-    Args:
-        style_vectors: Normalised style vectors (any number ≥ 1).
-
-    Returns:
-        Unit vector pointing away from the style centroid.
-
-    Raises:
-        ValueError: If *style_vectors* is empty.
-    """
-    if not style_vectors:
-        raise ValueError("style_centroid_direction needs at least one style vector")
-    centroid = np.mean(style_vectors, axis=0)
-    norm = float(np.linalg.norm(centroid))
-    if norm == 0.0:
-        raise ValueError("style vectors cancel out; no centroid direction exists")
-    return -(centroid / norm)
 
 
 def build_system_prompt_prompt(anchor_meta: dict[str, Any], mode: str) -> str:

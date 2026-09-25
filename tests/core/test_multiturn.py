@@ -1,82 +1,15 @@
-"""Tests for multi-turn anchor types, quota, and sampling."""
+"""Tests for multi-turn anchor types, quota, and config boundaries."""
 
-import json
 import random
-from pathlib import Path
 
 import pytest
 
+from ard.core.quota import compute_turn_distribution
 from ard.core.types import (
     AnchorSpec,
-    AnchorGenerationConfig,
     GeneratedAnchor,
     TurnSpec,
 )
-from ard.core.quota import compute_turn_distribution
-from ard.core.sampler import sample_anchors, _get_leaf_conversation_types
-from ard.core.ontology import load_ontology
-
-
-# ── Helpers ─────────────────────────────────────────────────────────────────
-
-
-def _minimal_ontology_payload() -> dict:
-    return {
-        "languages": ["English"],
-        "knowledge_domains": {
-            "domain_a": {"topic": ["alpha"]},
-            "domain_b": {"topic": ["beta"]},
-            "domain_c": {"topic": ["gamma"]},
-        },
-        "capabilities": {
-            "knowledge_response": ["qa"],
-            "reasoning": ["reasoning"],
-            "coding_and_data": ["coding"],
-        },
-        "conversation_types": {
-            "single_turn": ["single_turn"],
-            "clarification": ["clarification_2_turn"],
-            "troubleshooting": ["troubleshooting_3_turn"],
-        },
-        "language_features": {
-            "style": ["concise"],
-            "format": ["paragraph"],
-            "difficulty": ["basic"],
-            "context_length": ["short"],
-            "noise": ["clean"],
-            "answer_expectation": ["direct_answer"],
-        },
-    }
-
-
-def _large_ontology_payload() -> dict:
-    """Ontology large enough to support 100+ unique anchor combinations."""
-    return {
-        "languages": ["English", "简体中文"],
-        "knowledge_domains": {
-            f"domain_{i:02d}": {"topic": [f"topic_{i}"]}
-            for i in range(10)
-        },
-        "capabilities": {
-            "knowledge_response": ["qa", "explanation", "comparison"],
-            "reasoning": ["reasoning", "math_solving", "planning"],
-            "coding_and_data": ["coding", "debugging", "data_analysis"],
-        },
-        "conversation_types": {
-            "single_turn": ["single_turn"],
-            "clarification": ["clarification_2_turn"],
-            "troubleshooting": ["troubleshooting_3_turn"],
-        },
-        "language_features": {
-            "style": ["concise"],
-            "format": ["paragraph"],
-            "difficulty": ["basic"],
-            "context_length": ["short"],
-            "noise": ["clean"],
-            "answer_expectation": ["direct_answer"],
-        },
-    }
-
 
 # ── TurnSpec ────────────────────────────────────────────────────────────────
 
@@ -257,120 +190,7 @@ def test_compute_turn_distribution_deterministic():
     assert r1 == r2
 
 
-# ── sample_anchors ───────────────────────────────────────────────────────────
-
-
-def test_sample_anchors_count():
-    """sample_anchors returns correct count."""
-    ontology = load_ontology(Path("ontology/anchor_ontology.json"))
-    config = AnchorGenerationConfig(
-        target_count=100, seed=42, max_turns=3,
-    )
-    rng = random.Random(config.seed)
-    specs = sample_anchors(ontology, config, rng)
-    assert len(specs) == 100
-    assert all(isinstance(s, AnchorSpec) for s in specs)
-
-
-def test_sample_anchors_turn_distribution():
-    """Turn counts are distributed across 1..max_turns."""
-    ontology = load_ontology(Path("ontology/anchor_ontology.json"))
-    config = AnchorGenerationConfig(
-        target_count=100, seed=42, max_turns=3,
-    )
-    rng = random.Random(config.seed)
-    specs = sample_anchors(ontology, config, rng)
-
-    # Count anchors by number of turns
-    turn_counts: dict[int, int] = {}
-    for s in specs:
-        n = len(s.turns)
-        turn_counts[n] = turn_counts.get(n, 0) + 1
-
-    # All turn counts should be odd (1, 3, 5, ...) since last turn must be user
-    assert all(k % 2 == 1 for k in turn_counts)
-    # With max_turns=3, valid odd counts are 1 and 3 → ~50/50 distribution
-    for count in turn_counts.values():
-        assert 40 <= count <= 60  # roughly 50/50
-
-
-def test_sample_anchors_single_turn():
-    """max_turns=1 produces all single-turn specs."""
-    ontology = load_ontology(Path("ontology/anchor_ontology.json"))
-    config = AnchorGenerationConfig(
-        target_count=50, seed=42, max_turns=1,
-    )
-    rng = random.Random(config.seed)
-    specs = sample_anchors(ontology, config, rng)
-    assert len(specs) == 50
-    assert all(len(s.turns) == 1 for s in specs)
-    assert all(s.turns[0].role == "user" for s in specs)
-
-
-def test_sample_anchors_turns_alternate():
-    """All generated specs have valid role alternation."""
-    ontology = load_ontology(Path("ontology/anchor_ontology.json"))
-    config = AnchorGenerationConfig(
-        target_count=30, seed=7, max_turns=4,
-    )
-    rng = random.Random(config.seed)
-    specs = sample_anchors(ontology, config, rng)
-
-    for s in specs:
-        # Verify __post_init__ passes (no exception)
-        for i in range(len(s.turns) - 1):
-            assert s.turns[i].role != s.turns[i + 1].role
-        assert s.turns[0].role == "user"
-        assert s.turns[-1].role == "user"
-
-
-def test_sample_anchors_ids_unique():
-    """Each AnchorSpec has a unique id."""
-    ontology = load_ontology(Path("ontology/anchor_ontology.json"))
-    config = AnchorGenerationConfig(
-        target_count=50, seed=42, max_turns=2,
-    )
-    rng = random.Random(config.seed)
-    specs = sample_anchors(ontology, config, rng)
-    ids = {s.id for s in specs}
-    assert len(ids) == len(specs)
-
-
-# ── _get_leaf_conversation_types ────────────────────────────────────────────
-
-
-def test_leaf_conversation_types():
-    """Extracts all leaf conversation types from ontology."""
-    ontology = _minimal_ontology_payload()
-    leaves = _get_leaf_conversation_types(ontology)
-    expected = {"single_turn", "clarification_2_turn", "troubleshooting_3_turn"}
-    assert set(leaves) == expected
-
-
-def test_leaf_conversation_types_real_ontology():
-    """Real ontology has 7 leaf conversation types."""
-    ontology = load_ontology(Path("ontology/anchor_ontology.json"))
-    leaves = _get_leaf_conversation_types(ontology)
-    assert len(leaves) == 7
-    assert "single_turn" in leaves
-
-
-def test_leaf_conversation_types_fallback():
-    """Empty conversation_types returns fallback."""
-    ontology: dict = {"conversation_types": {}}
-    leaves = _get_leaf_conversation_types(ontology)
-    assert leaves == ["single_turn", "multi_turn"]
-
-
 # ── Config validation ───────────────────────────────────────────────────────
-
-
-def test_config_max_turns_default():
-    """GenerationConfig defaults max_turns=1."""
-    from ard.config import GenerationConfig
-    g = GenerationConfig()
-    assert g.max_turns == 1
-    assert g.max_turns_with_image == 1
 
 
 def test_config_has_no_system_persona_field():
@@ -381,27 +201,34 @@ def test_config_has_no_system_persona_field():
     could reintroduce it: with ``extra="forbid"`` a config file that still
     carries the key now fails loudly instead of silently doing nothing.
     """
-    from ard.config import GenerationConfig
     from pydantic import ValidationError
+
+    from ard.config import GenerationConfig
     with pytest.raises(ValidationError):
         GenerationConfig(system_persona="none")  # type: ignore[call-arg]
     assert "system_persona" not in GenerationConfig.model_fields
 
 
-def test_config_rejects_image_turns_exceeds_max():
-    """max_turns_with_image > max_turns fails validation."""
-    from ard.config import GenerationConfig
+def test_config_has_no_turn_knobs():
+    """Turn counts come from the ontology, so the old knobs are refused.
+
+    ``max_turns`` / ``max_turns_with_image`` used to drive the plan's turn
+    distribution; the v4 rule reads each entry's turns from
+    ``conversation_type.value_attributes.turns`` instead.  ``extra="forbid"`` is
+    what makes a config file that still carries them fail loudly rather than
+    silently do nothing (§18.1 不留负债).
+    """
     from pydantic import ValidationError
-    with pytest.raises(ValidationError):
-        GenerationConfig(max_turns=2, max_turns_with_image=5)
 
-
-def test_config_accepts_valid_combination():
-    """Valid max_turns/max_turns_with_image combination passes."""
     from ard.config import GenerationConfig
-    g = GenerationConfig(max_turns=3, max_turns_with_image=2)
-    assert g.max_turns == 3
-    assert g.max_turns_with_image == 2
+
+    fields = set(GenerationConfig.model_fields)
+    assert "max_turns" not in fields
+    assert "max_turns_with_image" not in fields
+    with pytest.raises(ValidationError):
+        GenerationConfig(max_turns=3)  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        GenerationConfig(max_turns_with_image=2)  # type: ignore[call-arg]
 
 
 def test_config_system_prompt_is_not_configurable():
@@ -418,30 +245,3 @@ def test_config_system_prompt_is_not_configurable():
     config_fields = set(GenerationConfig.model_fields)
     assert "system_persona" not in config_fields
     assert not any("system_prompt" in name for name in config_fields)
-
-
-# ── load_config with new fields ─────────────────────────────────────────────
-
-
-def test_load_config_with_new_fields(tmp_path):
-    """load_config reads new generation fields from TOML."""
-    from ard.config import load_config, ARDConfig
-
-    config_path = tmp_path / "config.toml"
-    config_path.write_text(
-        "[input_generator]\n"
-        'api_base = "https://api.example.com/v1"\n'
-        'model_name = "test-model"\n'
-        'api_key = "sk-test"\n'
-        "[target_model]\n"
-        'api_base = "https://api.example.com/v1"\n'
-        'model_name = "target-model"\n'
-        'api_key = "sk-target"\n'
-        "[generation]\n"
-        "max_turns = 3\n"
-        "max_turns_with_image = 2\n"
-    )
-    config = load_config(str(config_path))
-    assert isinstance(config, ARDConfig)
-    assert config.generation.max_turns == 3
-    assert config.generation.max_turns_with_image == 2

@@ -116,7 +116,7 @@ class TestSnapshotRedactionOnRealWritePath:
         # their real values, so the snapshot still reproduces the run.
         assert snapshot["output"]["directory"] == str(output_dir)
         assert snapshot["input_generator"]["model_name"] == "input_generator-model"
-        assert snapshot["generation"]["max_turns"] == 1
+        assert snapshot["generation"]["concurrency"] == 4
         assert snapshot["input_generator"]["api_key"] == REDACTED_PLACEHOLDER
         assert snapshot["target_model"]["api_key"] == REDACTED_PLACEHOLDER
 

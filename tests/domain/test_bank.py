@@ -19,7 +19,7 @@ from ard.domain.bank import (
 )
 from ard.domain.anchor_shape import message_shape_error
 from ard.domain.text_anchor import build_input_prompt, build_target_prompt
-from ard.core.sampler import generate_anchor_id
+from ard.core.sampling import generate_anchor_id
 from ard.core.types import DataSource, GeneratedAnchor, AnchorGenerationConfig
 
 

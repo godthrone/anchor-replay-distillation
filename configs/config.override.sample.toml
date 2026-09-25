@@ -61,10 +61,8 @@
 # seed = 42
 # Number of concurrent API requests (higher = faster, but may hit rate limits)
 concurrency = 4
-# Maximum conversation turns (1 = single-turn, 2-10 = multi-turn)
-max_turns = 1
-# Maximum turns with image per anchor (must be <= max_turns)
-max_turns_with_image = 1
+# Conversation turns are NOT configurable: each anchor's turn count is the
+# `turns` attribute its ontology `conversation_type` declares.
 # Consecutive server-side failures (timeouts / transport errors) that trigger
 # the backpressure cooldown below. Model-output failures (empty content) are
 # counted separately and never trigger a cooldown.

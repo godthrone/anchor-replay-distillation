@@ -11,7 +11,6 @@ rule must never allow (§2.3 边界校验即防呆).
 from __future__ import annotations
 
 import json
-import random
 
 import pytest
 
@@ -24,11 +23,12 @@ from ard.core.sampling import (
     EXPECTED_TEXT_BLOCKS,
     EXPECTED_TOTAL,
     EXPECTED_VISUAL_DOMAINS,
+    MULTI_TURN_DEFAULT,
     AnchorCoordinate,
     SamplingError,
     sample_anchors,
     sample_coordinates,
-    turn_counts_for,
+    turn_counts_by_conversation_type,
 )
 from ard.core.types import AnchorGenerationConfig
 
@@ -158,10 +158,10 @@ def test_a_different_seed_changes_the_plan(ontology: OntologyV4) -> None:
 
 
 def test_spec_plan_is_identical_for_the_same_seed(ontology: OntologyV4) -> None:
-    config = AnchorGenerationConfig(seed=99, max_turns=1)
+    config = AnchorGenerationConfig(seed=99)
 
     def fingerprint() -> str:
-        specs = sample_anchors(ontology, config, random.Random(config.seed))
+        specs = sample_anchors(ontology, config)
         return json.dumps(
             [
                 {
@@ -181,7 +181,7 @@ def test_spec_plan_is_identical_for_the_same_seed(ontology: OntologyV4) -> None:
 def test_spec_plan_has_one_spec_per_coordinate_and_unique_ids(
     ontology: OntologyV4, plan: tuple[AnchorCoordinate, ...]
 ) -> None:
-    specs = sample_anchors(ontology, AnchorGenerationConfig(seed=3, max_turns=1), random.Random(3))
+    specs = sample_anchors(ontology, AnchorGenerationConfig(seed=3))
     assert len(specs) == EXPECTED_TOTAL
     assert len({spec.id for spec in specs}) == EXPECTED_TOTAL
     assert [spec.anchor_meta["modality"] for spec in specs] == [
@@ -189,50 +189,68 @@ def test_spec_plan_has_one_spec_per_coordinate_and_unique_ids(
     ], "plan order must be preserved (the resume path slices this list)"
 
 
-def test_the_rule_count_is_never_taken_from_the_caller(ontology: OntologyV4) -> None:
-    """``target_count`` is a legacy field; the rule must ignore it."""
-    small = sample_anchors(ontology, AnchorGenerationConfig(target_count=3), random.Random(1))
-    assert len(small) == EXPECTED_TOTAL
+# ── turn counts: derived from the ontology ──────────────────────────────────
 
 
-# ── turn counts ─────────────────────────────────────────────────────────────
-
-
-def test_turn_counts_keep_only_odd_counts() -> None:
-    counts = turn_counts_for(plan_size=100, max_turns=6, rng=random.Random(42))
-    assert len(counts) == 6
-    assert counts[1] == 0 and counts[3] == 0 and counts[5] == 0, "even counts are impossible"
-    assert sum(counts) == 100
-
-
-def test_turn_counts_single_turn_default() -> None:
-    assert turn_counts_for(plan_size=7, max_turns=1, rng=random.Random(0)) == [7]
-
-
-def test_a_non_positive_max_turns_is_refused() -> None:
-    with pytest.raises(SamplingError, match="max_turns must be >= 1"):
-        turn_counts_for(plan_size=7, max_turns=0, rng=random.Random(0))
-
-
-def test_ontology_carries_per_conversation_type_turn_attributes(
+def test_turn_counts_come_from_the_conversation_type_attribute(
     ontology: OntologyV4,
 ) -> None:
-    """The v4 turn attributes are readable — S2b needs them, this WP does not.
+    """Every declared count becomes an odd spec turn count ending on ``user``.
 
-    Commander's ruling: the turn count must eventually come from the ontology
-    (``conversation_type.value_attributes.turns``) rather than from
-    ``max_turns``.  This test records the *shape* of that source so WP-S2b can
-    switch over without re-discovery, and pins the one hazard: three types
-    declare an integer turn count while two declare the literal ``"multi"``.
+    The ontology counts *exchanges*; an AnchorSpec carries the conversation
+    prefix that ends on the final user question, i.e. ``2 * n - 1`` turns.
+    """
+    counts = turn_counts_by_conversation_type(ontology)
+    assert set(counts) == set(ontology.axis_values("conversation_type"))
+    assert counts == {
+        "single_turn": 1,
+        "clarification": 3,
+        "troubleshooting": 5,
+        "iterative_revision": 5,
+        "constraint_update": 7,
+        "tool_assisted": 2 * MULTI_TURN_DEFAULT - 1,
+        "source_review": 2 * MULTI_TURN_DEFAULT - 1,
+    }
+    assert all(count % 2 == 1 and count >= 1 for count in counts.values())
+
+
+def test_multi_turn_bound_is_the_ontologys_largest_declared_count(
+    ontology: OntologyV4,
+) -> None:
+    """``"multi"`` resolves to the largest explicit count the ontology declares.
+
+    That is the documented basis of :data:`MULTI_TURN_DEFAULT`; if the ontology
+    ever declares something larger, the constant is stale and the resolution must
+    refuse rather than silently plan a shorter conversation.
     """
     spec = ontology.axes.spec("conversation_type")
-    attributes = getattr(spec, "value_attributes")
-    assert set(attributes) == set(ontology.axis_values("conversation_type"))
-    turns = {name: attrs.root["turns"] for name, attrs in attributes.items()}
-    assert turns["single_turn"] == 1
-    assert turns["clarification"] == 2
-    assert turns["troubleshooting"] == 3
-    assert turns["tool_assisted"] == "multi", "not an int — WP-S2b must resolve it"
+    declared = [
+        attributes.root["turns"]
+        for attributes in getattr(spec, "value_attributes").values()
+        if isinstance(attributes.root["turns"], int)
+    ]
+    assert isinstance(declared, list) and declared
+    assert max(declared) == MULTI_TURN_DEFAULT
+
+
+def test_an_unusable_turn_attribute_is_refused() -> None:
+    """A count that is neither a positive int nor the marker is not guessed at."""
+    from ard.core import sampling
+
+    with pytest.raises(SamplingError, match="unusable turns attribute"):
+        sampling._spec_turns("many", "tool_assisted")
+    with pytest.raises(SamplingError, match="unusable turns attribute"):
+        sampling._spec_turns(None, "tool_assisted")
+    with pytest.raises(SamplingError, match="unusable turns attribute"):
+        sampling._spec_turns(0, "single_turn")
+
+
+def test_a_declared_count_above_the_multi_bound_is_refused() -> None:
+    """A count above the ``"multi"`` bound would invalidate its documented basis."""
+    from ard.core import sampling
+
+    with pytest.raises(SamplingError, match="no longer"):
+        sampling._spec_turns(MULTI_TURN_DEFAULT + 1, "constraint_update")
 
 
 # ── no silent failure: counts and duplicates ────────────────────────────────
@@ -333,7 +351,15 @@ def test_shipped_config_points_at_the_v4_ontology() -> None:
 
 def test_shipped_config_has_no_count_or_fps_fields() -> None:
     generation = load_config("configs/config.toml").generation
-    for removed in ("target_count", "criterion", "embeddings_path", "task_types", "languages"):
+    for removed in (
+        "target_count",
+        "criterion",
+        "embeddings_path",
+        "task_types",
+        "languages",
+        "max_turns",
+        "max_turns_with_image",
+    ):
         assert not hasattr(generation, removed), f"{removed} must not be a config field"
 
 

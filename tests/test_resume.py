@@ -103,11 +103,11 @@ def _write_config(path: Path, output_dir: Path, *, overwrite: bool) -> None:
         'api_key = "unused"',
         "",
         "[generation]",
-        # No ``target_count`` since WP-S2a: the plan size comes from the
-        # construction rule, and the plan double below supplies it here.
+        # Neither the count nor the turn counts are config fields: the plan size
+        # and each entry's turns come from the ontology's construction rule, and
+        # the plan double below supplies the size here.
         "seed = 7",
         "concurrency = 1",
-        "max_turns = 1",
         "",
         "[ontology]",
         'path = "unused.json"',

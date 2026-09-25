@@ -14,7 +14,7 @@ reaches the anchor bank has passed three gates here:
    :class:`~ard.core.types.DataSource` is a record no consumer routes.  It used
    to be an unconstrained string, so a typo was persisted silently.
 3. **Id uniqueness** — one record per anchor id.  ``anchor id`` is derived
-   from 5-dimensional metadata (see :func:`ard.core.sampler.generate_anchor_id`),
+   from 5-dimensional metadata (see :func:`ard.core.sampling.generate_anchor_id`),
    so two specs can legitimately carry the same id; writing both inflates the
    bank while the resume logic in :mod:`ard.pipeline` counts records, not ids.
 
@@ -270,8 +270,8 @@ def append_anchor(anchor: GeneratedAnchor, path: Path) -> AppendOutcome:
 def count_existing_anchors(path: Path) -> int:
     """Count the anchors already stored in a JSONL file.
 
-    This is the resume counter: :func:`ard.pipeline.run` subtracts it from
-    ``generation.target_count`` to decide how many anchors are still missing.
+    This is the resume counter: :func:`ard.pipeline.run` subtracts it from the
+    plan's length to decide how many anchors are still missing.
     It therefore counts exactly what :func:`read_anchor_bank` will hand back —
     parseable, non-blank lines — and not blank or damaged ones.  Counting raw
     lines made the two disagree, and the disagreement surfaced as a crash on the
@@ -286,7 +286,7 @@ def count_unique_anchor_ids(path: Path | str) -> int:
     """Count *distinct* anchor ids in a JSONL file.
 
     The record count (:func:`count_existing_anchors`) is what the resume logic
-    in :mod:`ard.pipeline` compares against ``target_count``; this function
+    in :mod:`ard.pipeline` compares against the plan's length; this function
     makes the difference between records and real anchors visible.
     """
     return len(_read_ids(Path(path)))

@@ -1,16 +1,13 @@
-"""Tests for ARD — core types, ontology, config, sampler, embeddings, CLI."""
+"""Tests for ARD — core types, ontology, config, sampling ids, CLI."""
 
 import json
 from pathlib import Path
 
 import pytest
 
-from ard.core.types import AnchorSpec, GeneratedAnchor, AnchorGenerationConfig
 from ard.core.ontology import load_ontology
-from ard.core.sampler import sample_anchors, generate_anchor_id
-from ard.core.embeddings import load_embeddings
-from ard.core.cloud import CloudVectors, fps
-
+from ard.core.sampling import generate_anchor_id
+from ard.core.types import AnchorGenerationConfig, GeneratedAnchor
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -76,25 +73,17 @@ def test_anchor_type_with_reasoning():
 
 
 def test_anchor_generation_config_defaults():
-    """AnchorGenerationConfig has sensible defaults."""
+    """AnchorGenerationConfig carries only the run seed and the concurrency."""
     c = AnchorGenerationConfig()
-    assert c.target_count == 100
     assert c.seed == 42
     assert c.concurrency == 4
-    assert c.languages == []
-    assert c.task_types == []
 
 
 def test_anchor_generation_config_custom():
     """AnchorGenerationConfig accepts custom values."""
-    c = AnchorGenerationConfig(
-        target_count=50, seed=7, concurrency=8, languages=["English"], task_types=["qa", "coding"]
-    )
-    assert c.target_count == 50
+    c = AnchorGenerationConfig(seed=7, concurrency=8)
     assert c.seed == 7
     assert c.concurrency == 8
-    assert c.languages == ["English"]
-    assert c.task_types == ["qa", "coding"]
 
 
 # ── Ontology ────────────────────────────────────────────────────────────────
@@ -124,31 +113,7 @@ def test_ontology_file_not_found():
         load_ontology("nonexistent.json")
 
 
-# ── Sampler ─────────────────────────────────────────────────────────────────
-
-
-def test_sample_anchors_returns_list():
-    """sample_anchors returns a list of AnchorSpec objects."""
-    import random
-    ontology = load_ontology(Path("ontology/anchor_ontology.json"))
-    config = AnchorGenerationConfig(target_count=4, seed=1, languages=["English"], task_types=["qa"])
-    rng = random.Random(config.seed)
-    result = sample_anchors(ontology, config, rng)
-    assert isinstance(result, list)
-    assert len(result) <= 4
-    assert all(isinstance(item, AnchorSpec) for item in result)
-
-
-def test_sample_anchors_deterministic():
-    """Same seed+config produces same output."""
-    import random
-    ontology = load_ontology(Path("ontology/anchor_ontology.json"))
-    config = AnchorGenerationConfig(target_count=4, seed=42, languages=["English"], task_types=["qa"])
-    rng1 = random.Random(config.seed)
-    rng2 = random.Random(config.seed)
-    r1 = sample_anchors(ontology, config, rng1)
-    r2 = sample_anchors(ontology, config, rng2)
-    assert r1 == r2
+# ── Anchor ids ──────────────────────────────────────────────────────────────
 
 
 def test_generate_anchor_id_stable():
@@ -166,70 +131,6 @@ def test_generate_anchor_id_different_inputs():
     id1 = generate_anchor_id({"language": "English", "knowledge_domain": "a", "capability": "x"})
     id2 = generate_anchor_id({"language": "English", "knowledge_domain": "b", "capability": "x"})
     assert id1 != id2
-
-
-# ── Embeddings / FPS (space-safe API) ───────────────────────────────────────
-
-
-def _fps_positions(emb, n, seed=42):
-    """Run space-safe FPS and return the row positions (test-local helper)."""
-    cloud = CloudVectors(
-        space_id=f"test-anchor:{emb.shape[1]}", cloud_id="test_anchor", vectors=emb
-    )
-    index, _selection = fps(cloud, n=n, seed=seed)
-    return list(index.positions)
-
-
-def test_fps_basic():
-    """fps returns n distinct row positions."""
-    import numpy as np
-    emb = np.random.randn(100, 64).astype(np.float32)
-    indices = _fps_positions(emb, 10)
-    assert len(indices) == 10
-    assert len(set(indices)) == 10  # all unique
-    assert all(0 <= i < 100 for i in indices)
-
-
-def test_fps_n_equals_N():
-    """When n == N, returns all positions."""
-    import numpy as np
-    emb = np.random.randn(5, 8).astype(np.float32)
-    indices = _fps_positions(emb, 5)
-    assert sorted(indices) == [0, 1, 2, 3, 4]
-
-
-def test_fps_n_one():
-    """When n == 1, returns a single position."""
-    import numpy as np
-    emb = np.random.randn(10, 8).astype(np.float32)
-    indices = _fps_positions(emb, 1)
-    assert len(indices) == 1
-
-
-def test_fps_deterministic():
-    """Same seed produces same result."""
-    import numpy as np
-    emb = np.random.randn(50, 16).astype(np.float32)
-    r1 = _fps_positions(emb, 5, seed=123)
-    r2 = _fps_positions(emb, 5, seed=123)
-    assert r1 == r2
-
-
-def test_fps_empty_raises():
-    """An empty matrix is rejected at the carrier boundary."""
-    import numpy as np
-    with pytest.raises(ValueError, match="at least one row"):
-        _fps_positions(np.array([]).reshape(0, 8), 1)
-
-
-def test_fps_n_out_of_range():
-    """n out of range raises ValueError."""
-    import numpy as np
-    emb = np.random.randn(10, 8).astype(np.float32)
-    with pytest.raises(ValueError, match="n must be"):
-        _fps_positions(emb, 0)
-    with pytest.raises(ValueError, match="n must be"):
-        _fps_positions(emb, 11)
 
 
 # ── Config ──────────────────────────────────────────────────────────────────
@@ -409,9 +310,9 @@ def test_config_section_types():
     assert t.temperature == 0.1
 
     g = GenerationConfig()
-    # The count is derived from the ontology by the v4 construction rule, so the
-    # model has no count field to default (WP-S2a).
-    assert g.max_turns == 1
+    # Neither the count nor the turn counts are configurable: the v4 construction
+    # rule derives the count and the ontology supplies each entry's turns, so the
+    # model has no such field to default.
     # Unset seed is resolved to a concrete int at construction time.
     assert isinstance(g.seed, int)
     assert g.concurrency == 4
@@ -429,6 +330,5 @@ def test_ard_config_full():
     from ard.config import ARDConfig
 
     c = ARDConfig()
-    assert c.generation.max_turns == 1
     assert c.output.overwrite is False
     assert c.ontology.path == "ontology/anchor_ontology.v4.json"

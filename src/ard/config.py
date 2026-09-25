@@ -194,8 +194,6 @@ class GenerationConfig(BaseModel):
     # system random source; an explicit int pins that run's sampling order.
     seed: int | None = None
     concurrency: int = 4
-    max_turns: int = Field(default=1, ge=1, le=10)
-    max_turns_with_image: int = Field(default=1, ge=0, le=5)
     backpressure_threshold: int = 3       # 连续超时触发冷却的阈值
     backpressure_cooldown: float = 60.0   # 冷却暂停秒数
 
@@ -242,15 +240,6 @@ class GenerationConfig(BaseModel):
                 "model_construct()."
             )
         return seed
-
-    @model_validator(mode="after")
-    def _validate_image_turns(self) -> "GenerationConfig":
-        if self.max_turns_with_image > self.max_turns:
-            raise ValueError(
-                f"max_turns_with_image ({self.max_turns_with_image}) cannot exceed "
-                f"max_turns ({self.max_turns})"
-            )
-        return self
 
 
 class OutputConfig(BaseModel):
