@@ -23,13 +23,25 @@ uv run mypy src/ard/
 uv run ruff check src/ tests/
 ```
 
-## Pull Request Process
+## Branch and Review Workflow
 
-1. Create a feature branch from `main`
-2. Make your changes and ensure all tests pass
-3. Run type checking and linting
-4. Add/update tests for new functionality
-5. Submit a PR with a clear description
+ARD has **one active maintainer**, and its history reflects that: changes are committed
+**directly to `main`**, without a `feature/` branch and without a pull request. That is a
+deliberate single-contributor choice, not an oversight — a PR opened and reviewed by the same
+person adds a round trip and no reviewer.
+
+So, for a change you make yourself:
+
+1. Make the change (a local branch is fine), run the checks under "Code Quality".
+2. Add or update tests for new functionality.
+3. Commit it to `main` with a conventional-commit subject (see below).
+4. One commit = one change.
+
+**Sending a change from outside this repository:** open an issue first if it is more than a
+small fix, then send it as a **pull request against `main`**. The maintainer reviews the diff,
+asks for the checks to pass, and merges. Pull requests become mandatory for everyone — including
+the maintainer — as soon as the project gains a second regular contributor; this section is
+updated at that point.
 
 ## Commit Convention
 
