@@ -1,10 +1,7 @@
 """Tests for multi-turn anchor types, quota, and config boundaries."""
 
-import random
-
 import pytest
 
-from ard.core.quota import compute_turn_distribution
 from ard.core.types import (
     AnchorSpec,
     GeneratedAnchor,
@@ -158,36 +155,6 @@ def test_generated_anchor_with_reasoning():
         reasoning="thinking about x",
     )
     assert ga.reasoning == "thinking about x"
-
-
-# ── compute_turn_distribution ───────────────────────────────────────────────
-
-
-def test_compute_turn_distribution_even():
-    """Even distribution across max_turns."""
-    rng = random.Random(42)
-    result = compute_turn_distribution(100, 3, rng)
-    assert len(result) == 3
-    assert sum(result) == 100
-    # Should be roughly 33/33/34
-    assert min(result) >= 33
-    assert max(result) <= 34
-
-
-def test_compute_turn_distribution_single_turn():
-    """max_turns=1 returns all in one bucket."""
-    rng = random.Random(42)
-    result = compute_turn_distribution(50, 1, rng)
-    assert result == [50]
-
-
-def test_compute_turn_distribution_deterministic():
-    """Same seed produces same distribution."""
-    rng1 = random.Random(42)
-    rng2 = random.Random(42)
-    r1 = compute_turn_distribution(100, 5, rng1)
-    r2 = compute_turn_distribution(100, 5, rng2)
-    assert r1 == r2
 
 
 # ── Config validation ───────────────────────────────────────────────────────

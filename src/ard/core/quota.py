@@ -15,29 +15,6 @@ from ard.core.types import AnchorSpec
 logger = logging.getLogger(__name__)
 
 
-def compute_turn_distribution(
-    target_count: int, max_turns: int, rng: random.Random
-) -> list[int]:
-    """Distribute *target_count* anchors evenly across 1..*max_turns* turns.
-
-    Returns a list of length *max_turns* where ``result[i]`` is the number
-    of anchors that should have ``i + 1`` turns.  The distribution is as
-    even as possible; any remainder is spread randomly among the buckets.
-
-    Example:
-        >>> rng = random.Random(42)
-        >>> compute_turn_distribution(100, 3, rng)
-        [34, 33, 33]  # 34 anchors with 1 turn, 33 with 2, 33 with 3
-    """
-    base = target_count // max_turns
-    remainder = target_count % max_turns
-    result = [base] * max_turns
-    for i in range(remainder):
-        result[i] += 1
-    rng.shuffle(result)
-    return result
-
-
 def allocate_images(
     anchor_specs: list[AnchorSpec],
     image_pool: list[str],
