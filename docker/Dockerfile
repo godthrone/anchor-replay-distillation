@@ -1,4 +1,8 @@
-FROM python:3.11-slim
+# Patch-level tag, not the floating python:3.11-slim: a minor tag is re-pointed
+# whenever a new patch is released, so two builds of the same commit could run
+# on different interpreters (§14.3, §6).  3.11.15 is the patch the project's
+# uv-managed development interpreter resolves to.
+FROM python:3.11.15-slim
 WORKDIR /app
 
 # Build args for proxy (not persisted in image)

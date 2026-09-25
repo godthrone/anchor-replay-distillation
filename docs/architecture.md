@@ -103,7 +103,7 @@ flowchart LR
 ```
 
 - `run.sh` 以 `--network=host` 启动容器，只读挂载 `configs/`、`ontology/`、`examples/`、`.local/`，可写挂载 `outputs/`（`run.sh:90-97`）。
-- 容器入口是 `python -m ard`（`docker/Dockerfile:30`），即 `src/ard/__main__.py:4` → `src/ard/cli.py:113`。
+- 容器入口是 `python -m ard`（`docker/Dockerfile:34`），即 `src/ard/__main__.py:4` → `src/ard/cli.py:113`。
 - CLI 参数（`src/ard/cli.py:119-148`）覆盖 `--config`（必需）、`--override`、`--image-dir`、`--smoke`。图片是否转码由 `[images] convert` 决定，不进 CLI（宪法 §10.1）。
 - `pipeline.run`（`src/ard/pipeline.py:677`）在**创建输出目录之前**先做端点边界校验与验收输入校验：缺 `api_base`/`model_name`、或目标集文件缺失/维度不符，都在零副作用的前提下拒绝（`§2.3 边界校验即防呆`）。
 
