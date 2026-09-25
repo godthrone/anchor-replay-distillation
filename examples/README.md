@@ -72,6 +72,9 @@ Each line of `anchor_bank.sample.jsonl` is one anchor:
 }
 ```
 
+Both model fields name the **deployed** models in a real run. In this sample they are the
+placeholder `your-model-name` — see the normalised-fields table below.
+
 `anchor_meta` carries the sample field `modality` (`text_only` | `image`) and every axis
 value: `language`, `knowledge_domain`, `capability`, `system_prompt_mode`,
 `conversation_type`, `response_style`, `output_format`, `difficulty`, `context_length`,
@@ -139,15 +142,21 @@ produce healthy data?":
 - `images` — the addressing convention, the domains it resolved and any it skipped;
 - `smoke` / `smoke_plan` — the self-declaration of a `--smoke` run.
 
-**Normalised fields.** Five fields that identify the machine or the run were replaced so the
-sample carries no deployment details; everything else is verbatim:
+**Normalised fields.** Eight fields that identify the machine, the endpoint or the deployed
+model were replaced so the sample carries no deployment details; everything else is verbatim.
+The endpoint, the credential and the model name are **placeholders** throughout this directory:
 
 | Field | Sample value | Why |
 |-------|--------------|-----|
 | `config.input_generator.api_base` | `https://your-endpoint.example/v1` | The real endpoint is deployment-specific |
 | `config.target_model.api_base` | `https://your-endpoint.example/v1` | Same |
+| `config.input_generator.model_name` | `your-model-name` | The served model's name is deployment-specific |
+| `config.target_model.model_name` | `your-model-name` | Same |
+| `input_generator_model` (all 8 records) | `your-model-name` | Same, per record |
+| `teacher_id` (all 8 records) | `your-model-name` | Same, per record |
 | `config.output.directory` | `""` | Run location; the empty default means "auto-generate under `outputs/`" |
 | `output_dir` | `outputs/ard_dataset_<timestamp>_smoke` | Run location |
+| `smoke_plan.run_name` | `ard_dataset_<timestamp>_smoke` | The real value was the run name on the machine that ran it |
 | `images.image_dir` | `examples/images` | The real value is an absolute path on the machine that ran it |
 
 `config.*.api_key` already reads `***REDACTED***`: the pipeline redacts credentials before

@@ -108,8 +108,9 @@ class ARDEmptyContentError(RuntimeError):
 
 # ── Reasoning observability (WP-F3) ────────────────────────────────────────
 #
-# Reasoning tokens arrive in ``delta.reasoning`` (measured against vLLM 0.22 +
-# Qwen3.8-27B; ``delta.reasoning_content`` does not exist there).  They are
+# Reasoning tokens arrive in ``delta.reasoning`` (measured against the production
+# serving stack: vLLM 0.22 + the deployed chat model; ``delta.reasoning_content``
+# does not exist there).  They are
 # persisted as the teacher's reasoning trace (``targets[0].output.reasoning``)
 # *and* they are a budget consumer: a run where they ate the whole
 # ``max_tokens`` budget must not look healthy.  The counters below are the
@@ -357,8 +358,8 @@ def encode_image_to_base64(path: str | Path) -> str:
 def _reasoning_text_of(delta: dict[str, Any]) -> str:
     """Return the reasoning fragment carried by one SSE ``delta`` (or ``""``).
 
-    Measured reality on the production endpoint (vLLM 0.22.0 + Qwen3.8-27B):
-    reasoning arrives in ``delta.reasoning`` while ``delta.content`` stays
+    Measured reality on the production endpoint (vLLM 0.22.0 + the deployed chat
+    model): reasoning arrives in ``delta.reasoning`` while ``delta.content`` stays
     ``null`` for the whole thinking phase.  ``reasoning_content`` (the DeepSeek
     spelling) is accepted as a fallback so this parser survives a serving-stack
     change; a stray empty string counts as "absent" and falls through, so a
@@ -443,7 +444,8 @@ def _build_payload(
     ``chat_template_kwargs.enable_thinking`` is **always** emitted, and always
     as a real ``bool`` (``config.enable_thinking`` is two-state by contract —
     see :meth:`ChatAPIConfig.__post_init__`).  Both of the other candidates are
-    measured-bad on vLLM 0.22 + Qwen3.8-27B:
+    measured-bad on the production serving stack (vLLM 0.22 + the deployed chat
+    model):
 
     * ``null`` → thinking stays on *and* the server's reasoning splitter stops
       splitting, so reasoning prose arrives as ``message.content`` and the

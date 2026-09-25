@@ -35,7 +35,7 @@
   "config": {
     "input_generator": {
       "api_base": "https://your-endpoint.example/v1",
-      "model_name": "AI/Qwen3.8-27B",
+      "model_name": "your-model-name",
       "api_key": "***REDACTED***",
       "max_tokens": null,
       "connect_timeout": 10.0,
@@ -47,7 +47,7 @@
     },
     "target_model": {
       "api_base": "https://your-endpoint.example/v1",
-      "model_name": "AI/Qwen3.8-27B",
+      "model_name": "your-model-name",
       "api_key": "***REDACTED***",
       "max_tokens": null,
       "connect_timeout": 10.0,
@@ -110,7 +110,7 @@
   },
   "smoke": true,
   "smoke_plan": {
-    "run_name": "test-qwen_smoke",
+    "run_name": "ard_dataset_<timestamp>_smoke",
     "planned_anchors": 8,
     "full_expected_anchors": 1826,
     "text_blocks": 4,

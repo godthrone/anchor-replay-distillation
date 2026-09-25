@@ -142,7 +142,8 @@ def test_build_payload_enable_thinking_false():
 def test_build_payload_enable_thinking_none_is_rejected():
     """``enable_thinking=None`` is refused; the field is two-state, not tri-state.
 
-    Measurement behind the decision (vLLM 0.22 + Qwen3.8-27B chat template,
+    Measurement behind the decision (vLLM 0.22 + the deployed model's chat
+    template,
     ``chat_template.jinja:46`` — ``{%- if enable_thinking is undefined or
     enable_thinking is true %}``):
 
@@ -206,7 +207,7 @@ def test_build_payload_enable_thinking_default():
 # ── SSE chunk parsing ───────────────────────────────────────────────────────
 #
 # These fixtures reproduce the shape measured on a real vLLM 0.22 server
-# (Qwen3.8-27B): chunks carry the generated text under ``choices[0].delta`` and
+# (the deployed chat model): chunks carry the generated text under ``choices[0].delta`` and
 # the accumulated answer is the concatenation of the ``content`` fragments.
 
 _TEST_CONFIG = ChatAPIConfig(
@@ -234,7 +235,7 @@ def _chunk(
         "id": "chatcmpl-test",
         "object": "chat.completion.chunk",
         "created": 1789264293,
-        "model": "Qwen3.8-27B",
+        "model": "test-model",
         "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
     }
 
@@ -563,7 +564,7 @@ def test_encode_image_to_base64_unsupported_format(tmp_path):
 
 # ── Reasoning handling (WP-F3 regression) ───────────────────────────────────
 #
-# Real-server shape (vLLM 0.22.0 + Qwen3.8-27B): the reasoning field is
+# Real-server shape (vLLM 0.22.0 + the deployed chat model): the reasoning field is
 # ``delta.reasoning`` (NOT ``reasoning_content``), and while the model thinks
 # ``delta.content`` stays ``null``.  The template treats "enable_thinking
 # undefined" as ON, so a production run with ``enable_thinking = true`` streams
