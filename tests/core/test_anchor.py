@@ -254,8 +254,10 @@ def test_config_load_minimal(tmp_path):
     assert isinstance(config, ARDConfig)
     assert config.input_generator.api_base == "https://api.example.com/v1"
     assert config.target_model.model_name == "target-model"
-    # Defaults
-    assert config.generation.target_count == 100
+    # Defaults.  There is no ``target_count`` any more: WP-S2a derives the anchor
+    # count from the ontology's construction rule, so asserting a default count
+    # would assert a number the config no longer owns.
+    assert config.ontology.path == "ontology/anchor_ontology.v4.json"
     # `seed` is unset here → the config layer resolves it to a concrete int
     # drawn from the system random source (2026-09-15: unset = random,
     # explicit int = pinned). It is never left as None downstream.
@@ -407,13 +409,15 @@ def test_config_section_types():
     assert t.temperature == 0.1
 
     g = GenerationConfig()
-    assert g.target_count == 100
+    # The count is derived from the ontology by the v4 construction rule, so the
+    # model has no count field to default (WP-S2a).
+    assert g.max_turns == 1
     # Unset seed is resolved to a concrete int at construction time.
     assert isinstance(g.seed, int)
     assert g.concurrency == 4
 
     o = OntologyConfig()
-    assert o.path == "ontology/anchor_ontology.json"
+    assert o.path == "ontology/anchor_ontology.v4.json"
 
     out = OutputConfig()
     assert out.directory is None
@@ -425,6 +429,6 @@ def test_ard_config_full():
     from ard.config import ARDConfig
 
     c = ARDConfig()
-    assert c.generation.target_count == 100
+    assert c.generation.max_turns == 1
     assert c.output.overwrite is False
-    assert c.ontology.path == "ontology/anchor_ontology.json"
+    assert c.ontology.path == "ontology/anchor_ontology.v4.json"

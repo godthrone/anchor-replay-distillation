@@ -1,23 +1,15 @@
-"""The greedy ``criterion`` as a production *config* option.
+"""The greedy ``criterion`` of the legacy FPS sampler (WP-S2a note).
 
-`core/cloud.py` has supported a selectable greedy rule since the
-``selectable-criterion`` change, but it was only reachable from code:
-``GenerationConfig`` had no such field, so ``[generation]`` in
-``configs/config.toml`` could not ask for it.  These tests pin the config
-surface that closes that gap:
-
-* ``criterion`` has a default of ``"max"`` — the historical rule — so an unset
-  config selects exactly what every previous release selected;
-* ``"sum"`` reaches the FPS call through the whole chain
-  ``GenerationConfig → AnchorGenerationConfig → sample_anchors → _sample_farthest``;
-* an unknown value is refused **at config load** with the legal set in the
-  message (never silently defaulted);
-* the config file that ships with the repo loads with its own values.
+``core/cloud.py`` has supported a selectable greedy rule since the
+``selectable-criterion`` change.  The *config* half of that change was removed in
+WP-S2a together with the rest of the v3/FPS configuration surface (nothing in the
+new v4 rule reads it), so what remains here is the part that still describes live
+code: ``criterion`` reaches the FPS call through the chain
+``AnchorGenerationConfig → sample_anchors → _sample_farthest``, and the two ways
+of asking for the historical rule still cannot drift apart.
 
 The byte-identity evidence for the default path (SHA of the selection before and
-after the change) lives in the work package's ``evidence/`` directory; the last
-test here is the cheap in-repo guard that the two ways of asking for the
-historical rule cannot drift apart.
+after the change) lives in the work package's ``evidence/`` directory.
 """
 
 from __future__ import annotations
@@ -29,13 +21,9 @@ from typing import Any, TypedDict
 
 import pytest
 
-from ard.config import GenerationConfig, load_config
-from ard.core.cloud import CRITERION_MAX, CRITERION_SUM, FPS_CRITERIA
+from ard.core.cloud import CRITERION_MAX, CRITERION_SUM
 from ard.core.sampler import sample_anchors
 from ard.core.types import AnchorGenerationConfig
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-SHIPPED_CONFIG = REPO_ROOT / "configs" / "config.toml"
 
 
 class _DefaultPathKwargs(TypedDict):
@@ -124,90 +112,6 @@ def _toml_value(value: object) -> str:
     if isinstance(value, list):
         return "[" + ", ".join(_toml_value(item) for item in value) + "]"
     return str(value)
-
-
-# ---------------------------------------------------------------------------
-# 1. the config model's contract
-# ---------------------------------------------------------------------------
-
-
-def test_default_criterion_is_the_historical_max_rule() -> None:
-    """An unset field must mean "what every previous release did"."""
-    assert GenerationConfig().criterion == CRITERION_MAX
-
-
-def test_sum_is_accepted_as_the_alternative_rule() -> None:
-    assert GenerationConfig(criterion=CRITERION_SUM).criterion == CRITERION_SUM
-
-
-@pytest.mark.parametrize("bad", ["Mean", "MAX", "", " max", "max ", "total"])
-def test_unknown_criterion_is_refused_with_the_legal_set(bad: str) -> None:
-    """A typo must fail loudly and name the accepted values (§2.1 契约即防呆)."""
-    with pytest.raises(ValueError) as excinfo:
-        GenerationConfig(criterion=bad)
-    message = str(excinfo.value)
-    assert all(value in message for value in FPS_CRITERIA), message
-    assert "criterion" in message
-
-
-# ---------------------------------------------------------------------------
-# 2. the TOML boundary
-# ---------------------------------------------------------------------------
-
-
-def test_shipped_config_loads_and_carries_max(tmp_path: Path) -> None:
-    """``configs/config.toml`` must load and must ship the historical default."""
-    config = load_config(SHIPPED_CONFIG)
-    assert config.generation.criterion == CRITERION_MAX
-
-
-def test_shipped_config_stays_valid_when_criterion_is_set_to_sum() -> None:
-    """The base config carries the key, so an override can flip it to ``sum``.
-
-    ``model_validate`` on the raw parsed file is enough here: it proves the
-    shipped file is a valid base (the override is a deep merge of the same
-    shape, and the field is a plain string).
-    """
-    import tomllib
-
-    from ard.config import ARDConfig
-
-    base = tomllib.loads(SHIPPED_CONFIG.read_text(encoding="utf-8"))
-    assert "criterion" in base["generation"], (
-        "configs/config.toml must declare criterion so an override can set it"
-    )
-    base["generation"]["criterion"] = CRITERION_SUM
-    assert ARDConfig.model_validate(base).generation.criterion == CRITERION_SUM
-
-
-def test_override_file_can_flip_the_criterion(tmp_path: Path) -> None:
-    """A real ``load_config(base, override)`` round-trip reaches ``sum``."""
-    import tomllib
-
-    base = tomllib.loads(SHIPPED_CONFIG.read_text(encoding="utf-8"))
-    base["generation"]["target_count"] = 3
-    base_path = tmp_path / "config.toml"
-    base_path.write_text(_dump_toml(base), encoding="utf-8")
-
-    override_path = tmp_path / "override.toml"
-    override_path.write_text('[generation]\ncriterion = "sum"\n', encoding="utf-8")
-
-    config = load_config(base_path, override_path)
-    assert config.generation.criterion == CRITERION_SUM
-
-
-def test_override_file_with_a_typo_is_refused_at_load(tmp_path: Path) -> None:
-    """The typo must die at the config boundary, not inside the sampler."""
-    import tomllib
-
-    base = tomllib.loads(SHIPPED_CONFIG.read_text(encoding="utf-8"))
-    base_path = tmp_path / "config.toml"
-    base_path.write_text(_dump_toml(base), encoding="utf-8")
-    override_path = tmp_path / "override.toml"
-    override_path.write_text('[generation]\ncriterion = "maximum"\n', encoding="utf-8")
-
-    with pytest.raises(ValueError, match="criterion"):
-        load_config(base_path, override_path)
 
 
 # ---------------------------------------------------------------------------

@@ -56,7 +56,8 @@ def _write_config(
                 "temperature = 0.1",
                 "",
                 "[generation]",
-                "target_count = 1",
+                # No ``target_count``: the anchor count is derived from the
+                # ontology by the v4 construction rule (WP-S2a).
                 "",
                 "[output]",
                 f'directory = "{out.as_posix()}"',

@@ -7,12 +7,12 @@ User requirement under test, verbatim:
 
 Translated into the three behaviours frozen here:
 
-1. an output directory holding fewer records than ``generation.target_count``
-   resumes: only the missing ``target_count - existing`` anchors are asked for,
+1. an output directory holding fewer records than the rule-derived plan
+   resumes: only the missing ``len(plan) - existing`` anchors are asked for,
    they are **appended** to the bank, and the records already on disk survive
    byte-for-byte;
-2. an output directory that already satisfies ``target_count`` generates
-   nothing at all and returns without touching the bank (idempotent re-run);
+2. an output directory that already satisfies the plan generates nothing at all
+   and returns without touching the bank (idempotent re-run);
 3. ``output.overwrite`` is the explicit opt-in that clears the bank (§3.3
    预授权退路) — without it, a second run never destroys the first one's records.
 
@@ -22,18 +22,21 @@ the record *reader* disagreed and every following record was concatenated onto t
 fragment.  Sections 5–7 pin that down at the bank level.
 
 Scope note: the pipeline half is deliberately *not* a second sampler test.  ``run``
-is exercised with the ontology loader and the spec sampler replaced by doubles
-that return ids taken straight from the requested ``target_count``, so what the
-assertions read is the resume arithmetic and the bank on disk — not the FPS
-sampler (covered by ``tests/test_fps_sampler.py``) and not the turn generator
-(covered by ``tests/domain/test_text_anchor_backpressure.py``).  No network call
-is reachable: the generator double never touches the API clients the pipeline
-constructs, and ``api_base`` points at a closed local port.
+is exercised with the spec plan replaced by a small deterministic double (the
+``generate_specs`` seam of ``pipeline.run``), so what the assertions read is the
+resume arithmetic and the bank on disk — not the v4 construction rule (covered by
+``tests/core/test_sampling.py``) and not the turn generator (covered by
+``tests/domain/test_text_anchor_backpressure.py``).  Since WP-S2a the target is
+``len(plan)`` — derived from the ontology — so the double *is* the plan and the
+pipeline owns the ``existing`` offset into it.  No network call is reachable: the
+generator double never touches the API clients the pipeline constructs, and
+``api_base`` points at a closed local port.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -47,9 +50,12 @@ from ard.domain.bank import (
 )
 from ard.domain.text_anchor import AnchorGenerationStats
 
-#: Target used by the "incomplete bank" cases: small enough to read at a glance,
-#: large enough that "2 existing + 3 missing" is not a coincidence of the bank.
-_TARGET_COUNT = 5
+#: Plan size used by the "incomplete bank" cases: small enough to read at a
+#: glance, large enough that "2 existing + 3 missing" is not a coincidence of
+#: the bank.  The production plan is 1,826 entries (WP-S2a contract test), so a
+#: five-entry plan is also the guard that resume never assumes a hard-coded size.
+_PLAN_SIZE = 5
+_TARGET_COUNT = _PLAN_SIZE
 
 
 def _anchor(anchor_id: str, *, answer: str | None = None) -> GeneratedAnchor:
@@ -65,20 +71,25 @@ def _anchor(anchor_id: str, *, answer: str | None = None) -> GeneratedAnchor:
     )
 
 
-def _specs_for(target_count: int, tag: str) -> list[AnchorSpec]:
-    """``target_count`` distinct specs — the pipeline will hand them to the generator."""
-    assert target_count > 0, "the pipeline must not ask for a non-positive batch"
+def _plan() -> list[AnchorSpec]:
+    """A small deterministic plan — the pipeline hands its tail to the generator.
+
+    It stands in for the rule-derived 1,826-coordinate plan; ``_PLAN_SIZE`` is
+    what the resume arithmetic is measured against.  The ids are indexed by
+    *plan position*, so resuming the plan from an offset yields the same ids the
+    original run would have written at those positions.
+    """
     return [
         AnchorSpec(
-            id=f"{tag}-{index}",
+            id=f"resumed-{index}",
             anchor_meta={"language": "English", "knowledge_domain": "math"},
             turns=[TurnSpec(turn_index=0, role="user", is_final=True)],
         )
-        for index in range(target_count)
+        for index in range(_PLAN_SIZE)
     ]
 
 
-def _write_config(path: Path, output_dir: Path, target_count: int, *, overwrite: bool) -> None:
+def _write_config(path: Path, output_dir: Path, *, overwrite: bool) -> None:
     """Minimal valid config; the API endpoints are dummies that are never called."""
     lines = [
         "[input_generator]",
@@ -92,7 +103,8 @@ def _write_config(path: Path, output_dir: Path, target_count: int, *, overwrite:
         'api_key = "unused"',
         "",
         "[generation]",
-        f"target_count = {target_count}",
+        # No ``target_count`` since WP-S2a: the plan size comes from the
+        # construction rule, and the plan double below supplies it here.
         "seed = 7",
         "concurrency = 1",
         "max_turns = 1",
@@ -143,11 +155,14 @@ def _resume_rig(
     monkeypatch: pytest.MonkeyPatch,
     *,
     existing: int,
-    target_count: int = _TARGET_COUNT,
     overwrite: bool = False,
     tag: str = "resumed",
-) -> tuple[Path, Path, _RunSpy]:
-    """Prepare an output dir with *existing* records and return the run rig."""
+) -> tuple[Path, Path, _RunSpy, Callable[[object], list[AnchorSpec]]]:
+    """Prepare an output dir with *existing* records and return the run rig.
+
+    The fourth element is the plan double the caller must hand to ``run``
+    through its ``generate_specs`` seam.
+    """
     from ard import pipeline
 
     output_dir = tmp_path / "out"
@@ -157,17 +172,18 @@ def _resume_rig(
         append_anchor(_anchor(f"existing-{index}"), bank)
 
     config_path = tmp_path / "config.toml"
-    _write_config(config_path, output_dir, target_count, overwrite=overwrite)
+    _write_config(config_path, output_dir, overwrite=overwrite)
 
     spy = _RunSpy(tag)
-    monkeypatch.setattr(pipeline, "load_ontology", lambda path: {"stub": True})
+    # The ontology is never read: the plan double is handed to ``run`` through
+    # its ``generate_specs`` seam, so the expensive v4 load is skipped.
     monkeypatch.setattr(
         pipeline,
-        "sample_anchors",
-        lambda ontology, config, rng: _specs_for(config.target_count, tag),
+        "sample_specs",
+        lambda config: pytest.fail("the plan double must replace the v4 sampler"),
     )
     monkeypatch.setattr(pipeline, "generate_text_anchors", spy)
-    return output_dir, bank, spy
+    return output_dir, bank, spy, (lambda config: _plan())
 
 
 def _records(bank: Path) -> list[dict]:
@@ -280,15 +296,15 @@ def test_an_empty_bank_is_still_a_bank(tmp_path: Path) -> None:
 def test_incomplete_bank_generates_only_the_missing_anchors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """N records on disk + ``target_count=M`` → exactly M-N new records, appended."""
+    """N records on disk + a plan of M → exactly M-N new records, appended."""
     from ard.config import load_config
     from ard.pipeline import run
 
     existing = 2
-    output_dir, bank, spy = _resume_rig(tmp_path, monkeypatch, existing=existing)
+    output_dir, bank, spy, plan = _resume_rig(tmp_path, monkeypatch, existing=existing)
     before = bank.read_text(encoding="utf-8")
 
-    run(load_config(tmp_path / "config.toml"))
+    run(load_config(tmp_path / "config.toml"), generate_specs=plan)
 
     assert spy.requested == [_TARGET_COUNT - existing], (
         "the run must ask for the shortfall, not for the full target again"
@@ -299,7 +315,7 @@ def test_incomplete_bank_generates_only_the_missing_anchors(
         f"existing-{index}" for index in range(existing)
     ], "the pre-existing records must not be reordered or rewritten"
     assert [r["id"] for r in records[existing:]] == [
-        f"resumed-{index}" for index in range(_TARGET_COUNT - existing)
+        f"resumed-{index}" for index in range(existing, _TARGET_COUNT)
     ]
     assert bank.read_text(encoding="utf-8").startswith(before), (
         "resume must append: the bytes of the previous run are a prefix of the new bank"
@@ -313,13 +329,13 @@ def test_resume_does_not_touch_the_clients_before_generating(
     from ard.config import load_config
     from ard.pipeline import run
 
-    _, bank, spy = _resume_rig(tmp_path, monkeypatch, existing=3)
+    _, bank, spy, plan = _resume_rig(tmp_path, monkeypatch, existing=3)
 
     def _forbidden(*args: object, **kwargs: object) -> None:
         pytest.fail("the resume path must not reach the API clients")
 
     monkeypatch.setattr("ard.backends.api_client.ChatAPIClient.chat", _forbidden)
-    run(load_config(tmp_path / "config.toml"))
+    run(load_config(tmp_path / "config.toml"), generate_specs=plan)
     assert spy.requested == [_TARGET_COUNT - 3]
     assert count_existing_anchors(bank) == _TARGET_COUNT
 
@@ -334,10 +350,10 @@ def test_complete_bank_is_left_untouched(
     from ard.config import load_config
     from ard.pipeline import run
 
-    output_dir, bank, spy = _resume_rig(tmp_path, monkeypatch, existing=_TARGET_COUNT)
+    output_dir, bank, spy, plan = _resume_rig(tmp_path, monkeypatch, existing=_TARGET_COUNT)
     before = bank.read_text(encoding="utf-8")
 
-    result_dir = run(load_config(tmp_path / "config.toml"))
+    result_dir = run(load_config(tmp_path / "config.toml"), generate_specs=plan)
 
     assert spy.requested == [], "a satisfied bank must not trigger generation"
     assert bank.read_text(encoding="utf-8") == before
@@ -353,10 +369,10 @@ def test_overfilled_bank_is_left_untouched(
     from ard.config import load_config
     from ard.pipeline import run
 
-    _, bank, spy = _resume_rig(tmp_path, monkeypatch, existing=_TARGET_COUNT + 2)
+    _, bank, spy, plan = _resume_rig(tmp_path, monkeypatch, existing=_TARGET_COUNT + 2)
     before = bank.read_text(encoding="utf-8")
 
-    run(load_config(tmp_path / "config.toml"))
+    run(load_config(tmp_path / "config.toml"), generate_specs=plan)
 
     assert spy.requested == []
     assert bank.read_text(encoding="utf-8") == before
@@ -373,18 +389,22 @@ def test_overwrite_clears_the_bank_and_generates_the_full_target(
     from ard.pipeline import run
 
     existing = 2
-    _, bank, spy = _resume_rig(
+    _, bank, spy, plan = _resume_rig(
         tmp_path, monkeypatch, existing=existing, overwrite=True, tag="fresh"
     )
 
-    run(load_config(tmp_path / "config.toml"))
+    run(load_config(tmp_path / "config.toml"), generate_specs=plan)
 
     assert spy.requested == [_TARGET_COUNT], (
-        "overwrite starts from an empty bank, so the full target is requested"
+        "overwrite starts from an empty bank, so the full plan is requested"
     )
     records = _records(bank)
     assert len(records) == _TARGET_COUNT
-    assert [r["id"] for r in records] == [f"fresh-{index}" for index in range(_TARGET_COUNT)]
+    # The plan double is positional, so clearing the bank regenerates the plan
+    # from its first entry — the ids are a function of the plan, not of the run.
+    assert [r["id"] for r in records] == [
+        f"resumed-{index}" for index in range(_TARGET_COUNT)
+    ]
 
 
 # ── 4. the interrupted-run fragment must not defeat the resume ──────────────
@@ -405,12 +425,12 @@ def test_trailing_fragment_is_ignored_instead_of_crashing_the_resume(
     from ard.pipeline import run
 
     existing = 2
-    _, bank, spy = _resume_rig(tmp_path, monkeypatch, existing=existing)
+    _, bank, spy, plan = _resume_rig(tmp_path, monkeypatch, existing=existing)
     with bank.open("a", encoding="utf-8") as f:
         f.write('{"id": "interrupted", "messages": [{"role": "user"')  # no newline
 
     with caplog.at_level("WARNING"):
-        run(load_config(tmp_path / "config.toml"))
+        run(load_config(tmp_path / "config.toml"), generate_specs=plan)
 
     assert any(
         "unreadable line" in record.getMessage() for record in caplog.records
@@ -423,7 +443,7 @@ def test_trailing_fragment_is_ignored_instead_of_crashing_the_resume(
         f"existing-{index}" for index in range(existing)
     ]
     assert [r["id"] for r in records[existing:]] == [
-        f"resumed-{index}" for index in range(_TARGET_COUNT - existing)
+        f"resumed-{index}" for index in range(existing, _TARGET_COUNT)
     ], "the records appended after the fragment must survive as separate lines"
     assert len(records) == _TARGET_COUNT, (
         "the fragment itself stays on disk and is simply never counted as an anchor"
@@ -447,7 +467,7 @@ def test_failed_resume_grows_the_bank_without_rewriting_it(
     from ard.config import load_config
 
     existing = 2
-    output_dir, bank, spy = _resume_rig(tmp_path, monkeypatch, existing=existing)
+    output_dir, bank, spy, plan = _resume_rig(tmp_path, monkeypatch, existing=existing)
     before = bank.read_text(encoding="utf-8")
 
     # A generator that delivers one anchor no matter how many were requested.
@@ -467,7 +487,7 @@ def test_failed_resume_grows_the_bank_without_rewriting_it(
         return [anchor]
 
     monkeypatch.setattr(pipeline, "generate_text_anchors", _half_delivery)
-    pipeline.run(load_config(tmp_path / "config.toml"))
+    pipeline.run(load_config(tmp_path / "config.toml"), generate_specs=plan)
 
     assert spy.requested == [_TARGET_COUNT - existing]
     assert bank.read_text(encoding="utf-8").startswith(before)

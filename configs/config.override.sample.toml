@@ -53,38 +53,18 @@
 # enable_thinking = false
 
 [generation]
-# Number of anchors to generate
-target_count = 100
+# The anchor count is NOT configurable: the v4 construction rule derives it
+# from the ontology (935 text-only + 891 image-capable = 1,826 anchors).
 # Sampling seed (optional). Omit — the default — and every run draws a fresh
 # seed from the system random source; set an integer to pin this run's sampling
 # order. The seed actually used is recorded in <output_dir>/config.json.
 # seed = 42
 # Number of concurrent API requests (higher = faster, but may hit rate limits)
 concurrency = 4
-# Language filter (empty = use all available from ontology)
-languages = []
-# Task type filter (empty = use all available from ontology)
-task_types = []
 # Maximum conversation turns (1 = single-turn, 2-10 = multi-turn)
 max_turns = 1
-# System prompt is a sampling dimension, not a config switch: the ontology
-# (system_prompt_presence / system_prompt_style) decides whether each anchor
-# carries one and in which style. See docs/architecture.md.
 # Maximum turns with image per anchor (must be <= max_turns)
 max_turns_with_image = 1
-# Path to pre-computed ontology embeddings for farthest-point sampling
-embeddings_path = "ontology/anchor_ontology_embeddings.json"
-# Greedy rule of the within-domain farthest-point selection (geometric pick on
-# the Ontology combination cloud — NOT the pool-build path).
-#   "max" (default) = classic farthest point; reproduces every previous release
-#                     bit for bit (leave this line commented out for "max").
-#   "sum"           = total blankness (greedy facility location); needs the full
-#                     (n, n) distance matrix, so it is refused for clouds above
-#                     FPS_SUM_MATRIX_MAX_BYTES (1 GiB ≈ 11,585 rows).  On the
-#                     current ontology the remainder-fill cloud is ~50k rows, so
-#                     "sum" is refused at run time — see docs/architecture.md §4.7.
-# Any other value is refused at config load — no silent fallback.
-# criterion = "max"
 # Consecutive server-side failures (timeouts / transport errors) that trigger
 # the backpressure cooldown below. Model-output failures (empty content) are
 # counted separately and never trigger a cooldown.
@@ -94,7 +74,7 @@ embeddings_path = "ontology/anchor_ontology_embeddings.json"
 
 [ontology]
 # Path to the ontology JSON file
-path = "ontology/anchor_ontology.json"
+path = "ontology/anchor_ontology.v4.json"
 
 [output]
 # Output directory (empty = auto-generated under outputs/)

@@ -46,40 +46,20 @@ retry_on_timeout = false
 enable_thinking = false
 
 [generation]
-target_count = 100
+# The anchor count is NOT configurable: the v4 construction rule derives it
+# from the ontology (one sample per legal restricted block, one per rotated
+# knowledge/visual leaf). See docs/algorithm.md in the documentation work
+# package; the plan is 935 text-only + 891 image-capable = 1,826 anchors.
 # Sampling seed. Omit (the default) = draw a fresh seed from the system random
 # source on every run; set an integer to pin one run's sampling order and make
 # it reproducible. The seed actually used is recorded in <output_dir>/config.json.
 # seed = 42
 # Number of concurrent API requests (higher = faster, but may hit rate limits)
 concurrency = 4
-# Empty list = use all available values from ontology
-languages = []
-task_types = []
 # Maximum conversation turns (1 = single-turn, 2-10 = multi-turn)
 max_turns = 1
-# System prompt is a sampling dimension, not a config switch: the ontology
-# (system_prompt_presence / system_prompt_style) decides whether each anchor
-# carries one and in which style. See docs/architecture.md.
 # Maximum turns with image per anchor (must be <= max_turns)
 max_turns_with_image = 1
-# Path to pre-computed ontology embeddings for farthest-point sampling
-embeddings_path = "ontology/anchor_ontology_embeddings.json"
-# Greedy rule of the within-domain farthest-point selection (geometric pick on
-# the Ontology combination cloud — NOT the pool-build path).
-#   "max" (default) = classic farthest point: every step takes the row with the
-#                     largest distance to the nearest already-selected row.
-#                     This is the historical behaviour: leaving this line at
-#                     "max" reproduces every previous release bit for bit.
-#   "sum"           = total blankness (greedy facility location): every step
-#                     takes the row that leaves the least *total* remaining
-#                     cosine distance.  Measured better than "max" on the real
-#                     clustered anchor geometry, but needs the full (n, n)
-#                     distance matrix, so it is refused for clouds above
-#                     FPS_SUM_MATRIX_MAX_BYTES (1 GiB ≈ 11,585 rows) instead of
-#                     silently degrading to "max".
-# Any other value is refused at config load — no silent fallback.
-criterion = "max"
 
 # Consecutive timeouts to trigger backpressure cooldown
 backpressure_threshold = 3
@@ -87,7 +67,7 @@ backpressure_threshold = 3
 backpressure_cooldown = 60.0
 
 [ontology]
-path = "ontology/anchor_ontology.json"
+path = "ontology/anchor_ontology.v4.json"
 
 [output]
 # Output directory path. Leave empty to auto-generate: outputs/ard_dataset_<timestamp>

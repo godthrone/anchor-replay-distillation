@@ -855,6 +855,24 @@ def _scripted_generate_text_anchors(**kwargs: object) -> list[GeneratedAnchor]:
     return [anchor]
 
 
+def _three_specs() -> list[AnchorSpec]:
+    """A tiny stand-in plan for ``run``'s ``generate_specs`` seam.
+
+    The anchor count is derived from the ontology since WP-S2a, so a test that
+    needs a three-anchor batch supplies the plan rather than a config field.  The
+    ids are simple and distinct; ``_scripted_generate_text_anchors`` ignores the
+    spec contents and writes its own record.
+    """
+    return [
+        AnchorSpec(
+            id=f"plumbing-{index}",
+            anchor_meta={"language": "English", "knowledge_domain": "geography"},
+            turns=[TurnSpec(turn_index=0, role="user", is_final=True)],
+        )
+        for index in range(3)
+    ]
+
+
 class TestManifestGenerationReport:
     """``pipeline.run()`` must fold the generation counters into ``manifest.json``.
 
@@ -878,7 +896,6 @@ class TestManifestGenerationReport:
                 encoding="utf-8"
             )
         )
-        base["generation"]["target_count"] = 3
         base["generation"]["concurrency"] = 1
         base["output"]["directory"] = str(output_dir)
         # API endpoints are required to construct the clients; no call reaches them.
@@ -892,7 +909,12 @@ class TestManifestGenerationReport:
             "ard.pipeline.generate_text_anchors", _scripted_generate_text_anchors
         )
 
-        result_dir = run(load_config(config_path))
+        # A three-anchor plan, injected through ``run``'s plan seam: the anchor
+        # count is rule-derived since WP-S2a, so a test that wants a small batch
+        # supplies the plan instead of a config field.
+        result_dir = run(
+            load_config(config_path), generate_specs=lambda cfg: _three_specs()
+        )
         manifest = json.loads((result_dir / "manifest.json").read_text(encoding="utf-8"))
 
         assert manifest["total_anchors"] == 1, "the bank holds exactly one record"
@@ -909,7 +931,9 @@ class TestManifestGenerationReport:
         # The pre-existing fields still describe the bank itself.
         assert manifest["domains"] == {"geography": 1}
         assert manifest["output_dir"] == str(output_dir)
-        assert manifest["config"]["generation"]["target_count"] == 3
+        # The snapshot records the sampling inputs; the count itself is derived
+        # from the ontology, so it is no longer a config field to assert on.
+        assert manifest["config"]["generation"]["concurrency"] == 1
 
     def test_clean_run_publishes_no_generation_noise(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -939,8 +963,11 @@ class TestManifestGenerationReport:
                 encoding="utf-8"
             )
         )
-        base["generation"]["target_count"] = 1  # already satisfied → resume path
         base["output"]["directory"] = str(output_dir)
+        # The bank is complete with respect to the injected plan (WP-S2a: the
+        # plan, not a config count, is what "complete" is measured against), so
+        # this is the resume/early-return path.
+        #
         # Endpoints are required by ``run`` before it touches anything (§2.3);
         # the resume path never reaches the clients.
         for section in ("input_generator", "target_model"):
@@ -953,7 +980,7 @@ class TestManifestGenerationReport:
             lambda **kwargs: pytest.fail("no generation must run on the resume path"),
         )
 
-        result_dir = run(load_config(config_path))
+        result_dir = run(load_config(config_path), generate_specs=lambda cfg: [])
         manifest = json.loads((result_dir / "manifest.json").read_text(encoding="utf-8"))
         assert manifest["total_anchors"] == 1
         assert manifest.get("generation") is None, (

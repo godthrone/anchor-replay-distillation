@@ -12,6 +12,7 @@ import random
 import re
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -21,10 +22,10 @@ from ard.backends.api_client import (
     reasoning_stats as api_client_reasoning_stats,
 )
 from ard.config import ARDConfig
-from ard.core.ontology import load_ontology
+from ard.core.ontology import OntologyV4, load_ontology_v4
 from ard.core.quota import allocate_images
-from ard.core.sampler import sample_anchors
-from ard.core.types import AnchorGenerationConfig
+from ard.core.sampling import sample_anchors
+from ard.core.types import AnchorGenerationConfig, AnchorSpec
 from ard.logging import configure_file_logging
 from ard.domain.bank import (
     build_manifest_from_records,
@@ -256,11 +257,46 @@ def _log_target_model_reasoning_stats(
     return delta
 
 
+#: Signature of the plan builder: one :class:`~ard.config.ARDConfig` in, the
+#: run's :class:`~ard.core.types.AnchorSpec` plan out.  Named so the ``run``
+#: argument and its default stay in sync.
+SpecSampler = Callable[[ARDConfig], list[AnchorSpec]]
+
+
+def sample_specs(config: ARDConfig) -> list[AnchorSpec]:
+    """Build the run's full anchor plan from the v4 ontology (the production seam).
+
+    The ontology is loaded here — not before the checkpoint check in
+    :func:`run` — so a run whose bank is already complete never pays for the
+    rule's enumeration.  The count is the plan's length: the v4 construction
+    rule derives it, so no config field hands it in.
+
+    Args:
+        config: Validated ARD configuration.
+
+    Returns:
+        The plan's :class:`~ard.core.types.AnchorSpec` objects, in plan order.
+
+    Raises:
+        OntologySchemaError: If the ontology is not a readable v4 document.
+        SamplingError: If the ontology cannot produce the rule's coordinate set.
+    """
+    ontology: OntologyV4 = load_ontology_v4(config.ontology.path)
+    gen_config = AnchorGenerationConfig(
+        seed=config.generation.resolved_seed,
+        concurrency=config.generation.concurrency,
+        max_turns=config.generation.max_turns,
+        max_turns_with_image=config.generation.max_turns_with_image,
+    )
+    return sample_anchors(ontology, gen_config, random.Random(gen_config.seed))
+
+
 def run(
     config: ARDConfig,
     *,
     image_dir: str | None = None,
     no_convert: bool = False,
+    generate_specs: SpecSampler | None = None,
 ) -> Path:
     """Run the ARD anchor generation pipeline.
 
@@ -273,6 +309,10 @@ def run(
             accepted and images are copied as-is.  The default
             (``False``) enables automatic conversion of RAW / BMP /
             TIFF / GIF / WebP images to JPEG.
+        generate_specs: Optional override for the plan builder, defaulting to
+            :func:`sample_specs`.  Tests inject a small deterministic plan here
+            so the resume arithmetic can be exercised without materialising the
+            1,826-coordinate plan or loading the ontology.
 
     Returns:
         Path to the output directory.
@@ -282,6 +322,7 @@ def run(
             ``model_name``) is unset.  Checked before the output directory is
             created, so a refused config leaves no side effect behind (§2.3).
     """
+    spec_sampler: SpecSampler = generate_specs if generate_specs is not None else sample_specs
     # ── Credential boundary check (§2.3 边界校验即防呆) ─────────────────────
     # Done *before* the output directory exists: a config without an endpoint
     # used to explode later inside ChatAPIConfig, after a half-built output dir
@@ -335,13 +376,38 @@ def run(
     )
     logger.info("Merged config snapshot written to %s", config_json_path)
 
-    # ── Checkpoint / resume ───────────────────────────────────────────────
+    # ── Plan (v4 construction rule) ────────────────────────────────────────
+    # v4 only: the parsing layer refuses a schema it cannot read, so a v3 file
+    # (or a damaged one) stops the run here instead of silently sampling 0
+    # anchors further down (§2.3 边界校验即防呆).  ``sample_specs`` loads it.
+    #
+    # The plan **is** the target: ``len(plan)`` is the rule-derived count, and
+    # the checkpoint/resume path asks for the plan entries not on disk yet.
+    # Slicing the *tail* keeps resume append-only — plan order is deterministic,
+    # so the first N entries are exactly the N anchors a previous run wrote
+    # first.
+    # The consumers below (image allocation, the generator) read the same
+    # ``AnchorGenerationConfig`` the plan builder builds; this one is for the
+    # generator's concurrency and the plan's rng, which must stay the seeded
+    # stream the rule documents.
+    gen_config = AnchorGenerationConfig(
+        seed=config.generation.resolved_seed,
+        concurrency=config.generation.concurrency,
+        max_turns=config.generation.max_turns,
+        max_turns_with_image=config.generation.max_turns_with_image,
+    )
+    rng = random.Random(gen_config.seed)
+    plan = spec_sampler(config)
+    target_count = len(plan)
     existing_count = count_existing_anchors(output_path)
-    target_count = config.generation.target_count
     remaining = target_count - existing_count
 
     if remaining <= 0:
-        logger.info("Already have %d anchors, skipping generation.", existing_count)
+        logger.info(
+            "Already have %d anchors (plan: %d), skipping generation.",
+            existing_count,
+            target_count,
+        )
         all_records = read_anchor_bank(output_path)
         manifest = build_manifest_from_records(all_records, output_dir, config_info)
         # No generation happened, so there are no run counters to report: the
@@ -352,23 +418,13 @@ def run(
         logger.info("  Total anchors: %d", len(all_records))
         return output_dir
 
-    logger.info("Found %d existing anchors, generating %d more...", existing_count, remaining)
-
-    # ── Ontology ──────────────────────────────────────────────────────────
-    ontology = load_ontology(config.ontology.path)
-
-    # ── Generation config (adjusted for remaining) ────────────────────────
-    gen_config = AnchorGenerationConfig(
-        target_count=remaining,
-        seed=config.generation.resolved_seed,
-        concurrency=config.generation.concurrency,
-        languages=config.generation.languages,
-        task_types=config.generation.task_types,
-        max_turns=config.generation.max_turns,
-        max_turns_with_image=config.generation.max_turns_with_image,
-        embeddings_path=config.generation.embeddings_path,
-        criterion=config.generation.criterion,
+    logger.info(
+        "Found %d existing anchors, generating %d more (plan: %d)...",
+        existing_count,
+        remaining,
+        target_count,
     )
+    specs = plan[existing_count:]
 
     # ── API clients ───────────────────────────────────────────────────────
     input_client = ChatAPIClient(
@@ -420,11 +476,8 @@ def run(
     )
 
     # ── Generate anchors (unified flow) ───────────────────────────────────
-    rng = random.Random(gen_config.seed)
-
-    # Step 1: Sample AnchorSpec objects from the ontology
-    specs = sample_anchors(ontology, gen_config, rng)
-
+    # The plan was sampled above; Step 2 only augments it.
+    #
     # Step 2: If image_dir is provided, scan, sample, convert/copy, and allocate images
     if image_dir:
         if no_convert:

@@ -1,199 +1,378 @@
-"""Tests for :mod:`ard.core.coverage` — space-safe coverage measurement.
+"""Tests for :mod:`ard.core.coverage` — the ARD v4 acceptance ruler.
 
-The regression guard is a frozen copy of the historical analysis helper
-(``coverage(U_all, sel)`` from the 0916 / S2 evidence scripts).  It exists only
-here, as the reference the new interface must keep reproducing bit for bit: the
-space-safe API may not change any number, only refuse the meaningless ones.
+The assertions are pinned to hand-computable constructions rather than to
+implementation output: four equidistant unit points on the circle, two opposite
+points in one dimension, coincident points, and a single anchor / single target.
+Every statistic is checked against its closed-form value, the paired bootstrap
+against a manually re-run resampling loop that shares one index draw, and every
+boundary (empty set, dimension mismatch, unnormalised vector, NaN, bad ε / B)
+against its explicit error.
 """
-
-from __future__ import annotations
 
 import numpy as np
 import pytest
+from pydantic import ValidationError
 
-from ard.core.cloud import CloudMismatchError, CloudVectors, SpaceMismatchError, fps
-from ard.core.coverage import CoverageStats, coverage_to, self_coverage
-from ard.core.embeddings import embedding_space_id
+from ard.core.coverage import (
+    DEFAULT_BOOTSTRAP_RESAMPLES,
+    EPSILON_SCALE_FACTORS,
+    CoverageReadout,
+    DimensionMismatchError,
+    DistanceSample,
+    EmptyDistanceSampleError,
+    EmptyVectorSetError,
+    EpsilonSensitivity,
+    InvalidDistancesError,
+    InvalidParameterError,
+    NoiseBand,
+    NonFiniteValuesError,
+    PairedBootstrap,
+    PairingMismatchError,
+    UnnormalizedVectorsError,
+    VectorSet,
+    VectorShapeError,
+    acceptance_readout,
+    distance_quantiles,
+    epsilon_sensitivity,
+    extent,
+    nearest_anchor_distances,
+    noise_band,
+    paired_bootstrap_q95_ci,
+    pairwise_distances,
+    validate_vector_set,
+    within_noise_band,
+)
 
-SPACE = "test-embedder:16"
-OTHER_SPACE = "other-embedder:16"
+# Four unit points at 0° / 90° / 180° / 270°: every distinct pair is at cosine
+# distance exactly 1, so a single anchor at (1, 0) gives d = [0, 1, 2, 1].
+CIRCLE = np.array([[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0]])
+UNIT_X = np.array([[1.0, 0.0]])
+
+
+def _type7(values: np.ndarray, quantile: float) -> float:
+    """Hand-rolled Hyndman–Fan type-7 quantile for the expected values."""
+    ordered = np.sort(np.asarray(values, dtype=np.float64))
+    position = (ordered.size - 1) * quantile / 100.0
+    lower = int(np.floor(position))
+    upper = min(lower + 1, ordered.size - 1)
+    return float(ordered[lower] + (position - lower) * (ordered[upper] - ordered[lower]))
+
+
+def _circle_targets() -> VectorSet:
+    return VectorSet(name="targets", vectors=CIRCLE)
+
+
+def _single_anchor() -> VectorSet:
+    return VectorSet(name="anchors", vectors=UNIT_X)
 
 
 # ---------------------------------------------------------------------------
-# Frozen reference — verbatim from the historical evidence scripts
-# (.local/.../task-language-space-gap/evidence/analyze_embeddings.py:145-154 and
-# .local/.../task-s2-probe/evidence/carrier_probe.py:115-124).  Do not "improve"
-# this: it is the baseline the new numbers are compared against.
+# Readouts on known constructions
 # ---------------------------------------------------------------------------
-def legacy_coverage(U_all: np.ndarray, sel: list[int]) -> dict:  # noqa: N803 — frozen copy
-    d = 1.0 - U_all @ U_all[sel].T
-    nearest = d.min(axis=1)
-    return {
-        "max": float(nearest.max()),
-        "mean": float(nearest.mean()),
-        "median": float(np.median(nearest)),
-        "p90": float(np.percentile(nearest, 90)),
-        "p95": float(np.percentile(nearest, 95)),
-    }
 
 
-def _unit_cloud(
-    n: int,
-    dim: int = 16,
-    *,
-    space_id: str = SPACE,
-    cloud_id: str = "cloud_a",
-    seed: int = 0,
-) -> CloudVectors:
-    vectors = np.random.default_rng(seed).normal(0.0, 1.0, (n, dim))
-    vectors = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
-    return CloudVectors(
-        space_id=space_id,
-        cloud_id=cloud_id,
-        vectors=vectors,
-        item_ids=tuple(f"item-{i}" for i in range(n)),
+def test_nearest_anchor_distances_on_equidistant_circle() -> None:
+    sample = nearest_anchor_distances(_circle_targets(), _single_anchor())
+    assert sample.values.tolist() == pytest.approx([0.0, 1.0, 2.0, 1.0])
+    assert sample.label == "targets"
+    assert sample.unit_id == "targets"
+
+
+def test_distance_quantiles_are_type7() -> None:
+    sample = nearest_anchor_distances(_circle_targets(), _single_anchor())
+    stats = distance_quantiles(sample)
+    distances = np.array([0.0, 1.0, 2.0, 1.0])
+    assert stats.n == 4  # |T| travels with the readouts
+    assert stats.q50 == pytest.approx(_type7(distances, 50.0))
+    assert stats.q50 == pytest.approx(1.0)
+    assert stats.q90 == pytest.approx(_type7(distances, 90.0))
+    assert stats.q90 == pytest.approx(1.7)
+    assert stats.q95 == pytest.approx(_type7(distances, 95.0))
+    assert stats.q95 == pytest.approx(1.85)
+    assert stats.r_max == pytest.approx(2.0)
+
+
+def test_single_anchor_and_single_target_are_defined() -> None:
+    """M=1 and |T|=1: the boundary of the definition, not an error."""
+    targets = VectorSet(name="targets", vectors=np.array([[1.0, 0.0]]))
+    anchors = VectorSet(name="anchors", vectors=np.array([[-1.0, 0.0]]))
+    sample = nearest_anchor_distances(targets, anchors)
+    stats = distance_quantiles(sample)
+    assert sample.values.tolist() == pytest.approx([2.0])
+    assert (stats.n, stats.q50, stats.q90, stats.q95, stats.r_max) == pytest.approx(
+        (1, 2.0, 2.0, 2.0, 2.0)
     )
+    assert extent(sample, 1.999) == 0.0
+
+
+def test_one_dimensional_opposite_points() -> None:
+    """Dimension 1: d = 2 * q / 100 for the two-point sample [0, 2]."""
+    targets = VectorSet(name="targets", vectors=np.array([[1.0], [-1.0]]))
+    anchors = VectorSet(name="anchors", vectors=np.array([[1.0]]))
+    stats = distance_quantiles(nearest_anchor_distances(targets, anchors))
+    assert stats.q50 == pytest.approx(1.0)
+    assert stats.q90 == pytest.approx(1.8)
+    assert stats.q95 == pytest.approx(1.9)
+    assert stats.r_max == pytest.approx(2.0)
+
+
+def test_coincident_points_are_fully_covered() -> None:
+    targets = VectorSet(name="targets", vectors=np.tile([[0.6, 0.8]], (5, 1)))
+    anchors = VectorSet(name="anchors", vectors=np.array([[0.6, 0.8]]))
+    readout = acceptance_readout(targets, anchors, epsilon=0.0)
+    assert readout.quantiles.q95 == 0.0
+    assert readout.quantiles.r_max == 0.0
+    assert readout.extent == 1.0
+
+
+@pytest.mark.parametrize(
+    ("epsilon", "expected"), [(0.0, 0.25), (1.0, 0.75), (1.999, 0.75), (2.0, 1.0)]
+)
+def test_extent_is_the_mean_indicator(epsilon, expected) -> None:
+    sample = nearest_anchor_distances(_circle_targets(), _single_anchor())
+    assert extent(sample, epsilon) == pytest.approx(expected)
+
+
+def test_epsilon_sensitivity_band_scales_the_nominal_epsilon() -> None:
+    sample = nearest_anchor_distances(_circle_targets(), _single_anchor())
+    band = epsilon_sensitivity(sample, 1.0)
+    assert isinstance(band, EpsilonSensitivity)
+    assert EPSILON_SCALE_FACTORS == (0.95, 1.00, 1.05)
+    assert band.extent_at_095 == pytest.approx(0.25)  # d <= 0.95
+    assert band.extent_at_100 == pytest.approx(0.75)  # d <= 1.00
+    assert band.extent_at_105 == pytest.approx(0.75)  # d <= 1.05
+    assert band.extent_at_100 == extent(sample, 1.0)
+
+
+def test_acceptance_readout_composes_every_readout() -> None:
+    readout = acceptance_readout(_circle_targets(), _single_anchor(), epsilon=1.0)
+    assert isinstance(readout, CoverageReadout)
+    assert readout.label == "targets"
+    assert readout.n_anchor == 1
+    assert readout.n_target == 4
+    assert readout.quantiles.q95 == pytest.approx(1.85)
+    assert readout.epsilon_band.epsilon == 1.0
 
 
 # ---------------------------------------------------------------------------
-# Regression: identical numbers to the historical implementation
+# Paired target-point bootstrap
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("seed", [0, 1, 42])
-@pytest.mark.parametrize("n_selected", [1, 3, 10])
-def test_self_coverage_is_bit_identical_to_legacy(seed, n_selected):
-    cloud = _unit_cloud(30)
-    _index, selection = fps(cloud, n=n_selected, seed=seed)
-    new = self_coverage(cloud, selection).as_dict()
-    # The legacy call takes raw positions; here they are the ones fps reported,
-    # so both run the identical arithmetic on the identical rows.
-    legacy_positions = index_of_items(cloud, selection)
-    old = legacy_coverage(cloud.vectors, legacy_positions)
-    for key, old_value in old.items():
-        assert new[key] == old_value, f"{key}: {new[key]!r} != {old_value!r}"
-
-
-def index_of_items(cloud: CloudVectors, selection: CloudVectors) -> list[int]:
-    """Recover the row positions of *selection* inside *cloud* (test helper).
-
-    The public API deliberately makes this unnecessary; the regression test needs
-    the raw positions only to feed the frozen legacy function.
-    """
-    assert cloud.item_ids is not None
-    assert selection.item_ids is not None
-    lookup = {item_id: position for position, item_id in enumerate(cloud.item_ids)}
-    return [lookup[item_id] for item_id in selection.item_ids]
-
-
-@pytest.mark.parametrize("seed", [0, 42])
-def test_self_coverage_matches_legacy_on_ontology_vectors(seed, embeddings_data):
-    """Same check on the shipped 1024-dim embeddings (real data, not synthetic)."""
-    items = embeddings_data["items"]
-    names = sorted(items["knowledge_domains"])
-    vectors = np.array([items["knowledge_domains"][name] for name in names], dtype=np.float64)
-    cloud = CloudVectors(
-        space_id=embedding_space_id(embeddings_data),
-        cloud_id="knowledge_domains",
-        vectors=vectors,
-        item_ids=tuple(names),
+def test_paired_bootstrap_matches_a_manual_paired_resampling_run() -> None:
+    a = np.linspace(0.0, 1.0, 12) ** 1.3
+    b = np.linspace(0.1, 1.4, 12) ** 1.1
+    result = paired_bootstrap_q95_ci(
+        DistanceSample(label="arm-a", values=a, unit_id="targets"),
+        DistanceSample(label="arm-b", values=b, unit_id="targets"),
+        n_resamples=DEFAULT_BOOTSTRAP_RESAMPLES,
+        confidence_level=0.95,
+        seed=7,
     )
-    _index, selection = fps(cloud, n=6, seed=seed)
-    new = self_coverage(cloud, selection).as_dict()
-    old = legacy_coverage(vectors, index_of_items(cloud, selection))
-    assert new == old
+    generator = np.random.default_rng(7)
+    positions = generator.integers(0, a.size, size=(DEFAULT_BOOTSTRAP_RESAMPLES, a.size))
+    differences = np.percentile(a[positions], 95.0, axis=1, method="linear") - np.percentile(
+        b[positions], 95.0, axis=1, method="linear"
+    )
+    assert DEFAULT_BOOTSTRAP_RESAMPLES == 2000
+    assert isinstance(result, PairedBootstrap)
+    assert result.n_resamples == 2000
+    assert result.point_estimate == pytest.approx(_type7(a, 95.0) - _type7(b, 95.0))
+    assert result.ci_low == _type7(differences, 2.5)
+    assert result.ci_high == _type7(differences, 97.5)
+    assert result.ci_low <= result.ci_high
+
+
+def test_paired_bootstrap_of_a_constant_offset_collapses_to_that_offset() -> None:
+    """Pairing is structural: with a constant offset every resample gives it back."""
+    base = np.linspace(0.0, 0.9, 10)
+    result = paired_bootstrap_q95_ci(
+        DistanceSample(label="shifted", values=base + 0.5, unit_id="targets"),
+        DistanceSample(label="base", values=base, unit_id="targets"),
+        n_resamples=500,
+        seed=3,
+    )
+    assert result.point_estimate == pytest.approx(0.5, abs=1e-12)
+    assert result.ci_low == pytest.approx(0.5, abs=1e-12)
+    assert result.ci_high == pytest.approx(0.5, abs=1e-12)
+
+
+def test_paired_bootstrap_is_reproducible_per_seed_and_varies_across_seeds() -> None:
+    a = np.sort((np.arange(40) / 39.0) ** 1.7)
+    b = np.sort((np.arange(40) / 39.0) ** 0.6) * 0.3
+    sample_a = DistanceSample(label="a", values=a, unit_id="t")
+    sample_b = DistanceSample(label="b", values=b, unit_id="t")
+    first = paired_bootstrap_q95_ci(sample_a, sample_b, n_resamples=300, seed=11)
+    same = paired_bootstrap_q95_ci(sample_a, sample_b, n_resamples=300, seed=11)
+    other = paired_bootstrap_q95_ci(sample_a, sample_b, n_resamples=300, seed=12)
+    assert first == same
+    assert (first.ci_low, first.ci_high) != (other.ci_low, other.ci_high)
+    assert first.ci_low <= first.ci_high
+
+
+def test_paired_bootstrap_rejects_samples_of_different_length() -> None:
+    with pytest.raises(PairingMismatchError, match="one entry per shared target point"):
+        paired_bootstrap_q95_ci(
+            DistanceSample(label="a", values=np.array([0.1, 0.2]), unit_id="t"),
+            DistanceSample(label="b", values=np.array([0.1]), unit_id="t"),
+        )
+
+
+def test_paired_bootstrap_rejects_samples_from_different_target_sets() -> None:
+    with pytest.raises(PairingMismatchError, match="same target set"):
+        paired_bootstrap_q95_ci(
+            DistanceSample(label="a", values=np.array([0.1, 0.2]), unit_id="targets-A"),
+            DistanceSample(label="b", values=np.array([0.1, 0.2]), unit_id="targets-B"),
+        )
+
+
+@pytest.mark.parametrize("n_resamples", [0, -1, 1.5, True])
+def test_paired_bootstrap_rejects_bad_resample_count(n_resamples) -> None:
+    sample = DistanceSample(label="a", values=np.array([0.1, 0.2]), unit_id="t")
+    with pytest.raises(InvalidParameterError, match="n_resamples"):
+        paired_bootstrap_q95_ci(sample, sample, n_resamples=n_resamples)
+
+
+@pytest.mark.parametrize("level", [0.0, 1.0, -0.5, 1.5, float("nan")])
+def test_paired_bootstrap_rejects_bad_confidence_level(level) -> None:
+    sample = DistanceSample(label="a", values=np.array([0.1, 0.2]), unit_id="t")
+    with pytest.raises(InvalidParameterError, match="confidence_level"):
+        paired_bootstrap_q95_ci(sample, sample, confidence_level=level)
 
 
 # ---------------------------------------------------------------------------
-# The cross-cloud guard
+# Noise band
 # ---------------------------------------------------------------------------
 
 
-def test_self_coverage_rejects_selection_from_another_cloud():
-    """coverage(U_real, fps(U_labels, k)) — the historical defect — must raise."""
-    labels = _unit_cloud(12, cloud_id="label_names", seed=1)
-    texts = _unit_cloud(20, cloud_id="real_texts", seed=2)
-    _index, label_selection = fps(labels, n=4, seed=42)
-    with pytest.raises(CloudMismatchError, match="label_names"):
-        self_coverage(texts, label_selection)
+def test_pairwise_distances_on_a_known_triangle() -> None:
+    """Three unit points at 0° / 90° / 180°: pairs are 1, 2, 1."""
+    repeats = VectorSet(name="cell-7", vectors=np.array([[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0]]))
+    sample = pairwise_distances(repeats)
+    assert sample.values.tolist() == pytest.approx([1.0, 2.0, 1.0])
+    assert sample.label == "cell-7:pairs"
+    assert sample.unit_id == "cell-7"
 
 
-def test_self_coverage_rejects_selection_from_another_space():
-    here = _unit_cloud(12, cloud_id="real_texts", space_id=SPACE)
-    there = _unit_cloud(12, cloud_id="real_texts", space_id=OTHER_SPACE)
-    _index, foreign_selection = fps(there, n=3, seed=42)
-    with pytest.raises(SpaceMismatchError, match="different embedding spaces"):
-        self_coverage(here, foreign_selection)
+def test_pairwise_distances_need_at_least_two_repeats() -> None:
+    with pytest.raises(EmptyVectorSetError, match="at least two rows"):
+        pairwise_distances(VectorSet(name="cell-7", vectors=np.array([[1.0, 0.0]])))
 
 
-# ---------------------------------------------------------------------------
-# Cross-cloud measurement (the intended, explicit case)
-# ---------------------------------------------------------------------------
+def test_noise_band_edges_are_q50_and_max() -> None:
+    band = noise_band(DistanceSample(label="cell-7", values=np.array([0.1, 0.2, 0.3, 0.4])))
+    assert isinstance(band, NoiseBand)
+    assert band.n_pairs == 4
+    assert band.lower == pytest.approx(0.25)  # type-7 q50
+    assert band.upper == pytest.approx(0.4)
 
 
-def test_coverage_to_allows_different_clouds_in_one_space():
-    labels = _unit_cloud(12, cloud_id="label_names", seed=1)
-    texts = _unit_cloud(20, cloud_id="real_texts", seed=2)
-    _index, label_selection = fps(labels, n=4, seed=42)
-    stats = coverage_to(texts, label_selection)
-    # Independently recompute the vector-level definition.
-    nearest = (1.0 - texts.vectors @ label_selection.vectors.T).min(axis=1)
-    assert stats.n_target == 20
-    assert stats.n_selected == 4
-    assert stats.max == float(nearest.max())
-    assert stats.mean == float(nearest.mean())
-    assert stats.p90 == float(np.percentile(nearest, 90))
-    assert stats.same_cloud is False
-    assert stats.target_cloud_id == "real_texts"
-    assert stats.selected_cloud_id == "label_names"
+def test_within_noise_band_is_inclusive_at_both_edges() -> None:
+    band = noise_band(DistanceSample(label="cell", values=np.array([0.1, 0.2, 0.3, 0.4])))
+    assert within_noise_band(0.25, band) is True
+    assert within_noise_band(0.4, band) is True
+    assert within_noise_band(0.2, band) is False
+    assert within_noise_band(0.9, band) is False
 
 
-def test_coverage_to_rejects_different_spaces():
-    a = _unit_cloud(10, cloud_id="real_texts", space_id=SPACE)
-    b = _unit_cloud(10, cloud_id="label_names", space_id=OTHER_SPACE)
-    with pytest.raises(SpaceMismatchError, match="not comparable"):
-        coverage_to(a, b)
-
-
-def test_coverage_to_rejects_self_contradictory_space_identity():
-    wide = _unit_cloud(10, dim=16, cloud_id="real_texts")
-    narrow = _unit_cloud(10, dim=8, cloud_id="label_names")
-    with pytest.raises(SpaceMismatchError, match="dimensions"):
-        coverage_to(wide, narrow)
+def test_within_noise_band_rejects_non_finite_value() -> None:
+    band = noise_band(DistanceSample(label="cell", values=np.array([0.1, 0.2])))
+    with pytest.raises(NonFiniteValuesError, match="finite"):
+        within_noise_band(float("nan"), band)
 
 
 # ---------------------------------------------------------------------------
-# Invariants (review report §⑥, suggestion 4)
+# Boundaries (§2.3): every invalid input raises, none passes silently
 # ---------------------------------------------------------------------------
 
 
-def test_same_cloud_selection_gives_identical_self_and_cross_coverage():
-    cloud = _unit_cloud(25)
-    index, selection = fps(cloud, n=5, seed=42)
-    same = self_coverage(cloud, selection)
-    cross = coverage_to(cloud, cloud.select(index))
-    assert same == cross
+def test_empty_vector_set_is_rejected() -> None:
+    with pytest.raises(EmptyVectorSetError, match="no rows"):
+        VectorSet(name="targets", vectors=np.zeros((0, 2)))
 
 
-def test_cross_cloud_coverage_differs_from_self_coverage():
-    labels = _unit_cloud(12, cloud_id="label_names", seed=1)
-    texts = _unit_cloud(20, cloud_id="real_texts", seed=2)
-    index, label_selection = fps(labels, n=4, seed=42)
-    cross = coverage_to(texts, label_selection)
-    # The historical bug computed self-coverage of the *first rows of the target*
-    # instead: a different measurement, and a different number.
-    wrong = coverage_to(texts, texts.select(texts.index_of(list(index.positions))))
-    assert cross.max != wrong.max
+def test_one_dimensional_input_is_rejected() -> None:
+    # Deliberately the wrong runtime shape: that is exactly the boundary under test.
+    with pytest.raises(VectorShapeError, match="2-D|matrix"):
+        VectorSet(name="targets", vectors=[1.0, 0.0])  # type: ignore[arg-type]
 
 
-def test_stats_record_their_provenance():
-    cloud = _unit_cloud(9, cloud_id="cloud_a")
-    _index, selection = fps(cloud, n=3, seed=0)
-    stats = self_coverage(cloud, selection)
-    assert isinstance(stats, CoverageStats)
-    assert stats.target_space_id == SPACE
-    assert stats.selected_space_id == SPACE
-    assert stats.target_cloud_id == "cloud_a"
-    assert stats.selected_cloud_id == "cloud_a"
-    assert stats.same_cloud is True
-    assert set(stats.as_dict()) == {"max", "mean", "median", "p90", "p95"}
+def test_zero_column_input_is_rejected() -> None:
+    with pytest.raises(VectorShapeError, match="got shape"):
+        VectorSet(name="targets", vectors=np.zeros((2, 0)))
+
+
+def test_non_numeric_input_is_rejected() -> None:
+    with pytest.raises(VectorShapeError, match="numeric"):
+        VectorSet(name="targets", vectors=[["a", "b"]])  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("norm", [2.0, 0.5, 0.0])
+def test_unnormalized_vectors_are_rejected(norm) -> None:
+    with pytest.raises(UnnormalizedVectorsError, match="L2 norm"):
+        VectorSet(name="targets", vectors=np.array([[norm, 0.0]]))
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_non_finite_vectors_are_rejected(bad) -> None:
+    with pytest.raises(NonFiniteValuesError, match="NaN or infinity"):
+        VectorSet(name="targets", vectors=np.array([[1.0, 0.0], [bad, 0.0]]))
+
+
+def test_dimension_mismatch_is_rejected() -> None:
+    targets = VectorSet(name="targets", vectors=np.array([[1.0, 0.0]]))
+    anchors = VectorSet(name="anchors", vectors=np.array([[1.0, 0.0, 0.0]]))
+    with pytest.raises(DimensionMismatchError, match="dimension"):
+        nearest_anchor_distances(targets, anchors)
+
+
+def test_validate_vector_set_catches_an_unchecked_construction() -> None:
+    forged = VectorSet.model_construct(name="targets", vectors=np.zeros((2, 2)))
+    with pytest.raises(UnnormalizedVectorsError):
+        validate_vector_set(forged)
+
+
+def test_empty_distance_sample_is_rejected() -> None:
+    with pytest.raises(EmptyDistanceSampleError, match="empty"):
+        DistanceSample(label="d", values=[])  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("values", "error"),
+    [
+        ([0.1, float("nan")], NonFiniteValuesError),
+        ([0.1, -0.5], InvalidDistancesError),
+        ([0.1, 2.5], InvalidDistancesError),
+    ],
+)
+def test_invalid_distance_samples_are_rejected(values, error) -> None:
+    with pytest.raises(error):
+        DistanceSample(label="d", values=values)  # type: ignore[arg-type]
+
+
+def test_distance_sample_rejects_non_one_dimensional_values() -> None:
+    with pytest.raises(VectorShapeError, match="1-D"):
+        DistanceSample(label="d", values=[[0.1, 0.2]])  # type: ignore[arg-type]
+
+
+def test_distance_sample_coerces_numeric_sequences_to_float64() -> None:
+    # The list is the subject of the test: the model must accept array-like input.
+    sample = DistanceSample(label="d", values=[0, 1, 2])  # type: ignore[arg-type]
+    assert sample.values.dtype == np.float64
+    assert sample.unit_id is None
+
+
+@pytest.mark.parametrize("epsilon", [-0.5, float("nan"), float("inf")])
+def test_extent_rejects_bad_epsilon(epsilon) -> None:
+    sample = nearest_anchor_distances(_circle_targets(), _single_anchor())
+    with pytest.raises(InvalidParameterError, match="epsilon"):
+        extent(sample, epsilon)
+    with pytest.raises(InvalidParameterError, match="epsilon"):
+        epsilon_sensitivity(sample, epsilon)
+
+
+def test_models_forbid_unknown_fields() -> None:
+    with pytest.raises(ValidationError):
+        VectorSet(name="targets", vectors=UNIT_X, space_id="extra")  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        DistanceSample(label="d", values=np.array([0.1]), confidence=0.9)  # type: ignore[call-arg]

@@ -1,0 +1,1619 @@
+{
+  "ontology_id": "ard-anchor-ontology",
+  "version": "4.0.0",
+  "supersedes": "ontology/anchor_ontology.json (left untouched; this file is a parallel v4 artifact)",
+  "scope_note": "Coordinates only. No prompt wording, no sampling/weighting/experiment policy.",
+  "axis_order": [
+    "language",
+    "knowledge_domain",
+    "capability",
+    "system_prompt_mode",
+    "conversation_type",
+    "response_style",
+    "output_format",
+    "difficulty",
+    "context_length",
+    "input_condition",
+    "answer_mode",
+    "visual_domain"
+  ],
+  "axis_count": {
+    "universal": 11,
+    "conditional": 1,
+    "total": 12
+  },
+  "reading_rules": {
+    "axis_value_set": "flat axes use `values`; hierarchical axes use every leaf at the deepest level of the tree named by `tree_ref`; grouped axes use the concatenation of each group's `values`.",
+    "wildcard": "In constraint rules, \"*\" means every value of that side's axis.",
+    "axis_vs_sample_field": "`modality` is a sample field (text_only | image), not an ontology axis; it only switches the conditional axis on and off."
+  },
+  "axes": {
+    "language": {
+      "layer": "content",
+      "cardinality": "single",
+      "applies_to": "all_samples",
+      "values": [
+        "English",
+        "简体中文",
+        "Español",
+        "日本語"
+      ],
+      "semantics": "Language of the assistant's output (answer / target text). Source language is NOT a coordinate; see constraint R6."
+    },
+    "knowledge_domain": {
+      "layer": "content",
+      "cardinality": "single",
+      "applies_to": "all_samples",
+      "value_model": "hierarchical",
+      "levels": [
+        "domain",
+        "subdomain",
+        "leaf"
+      ],
+      "leaf_is_value": true,
+      "tree_ref": "knowledge_domain_tree",
+      "counts": {
+        "domain": 18,
+        "subdomain": 36,
+        "leaf": 209
+      }
+    },
+    "capability": {
+      "layer": "content",
+      "cardinality": "single",
+      "applies_to": "all_samples",
+      "value_model": "grouped",
+      "groups": {
+        "knowledge_response": {
+          "values": [
+            "qa",
+            "explanation",
+            "comparison",
+            "critique"
+          ]
+        },
+        "reasoning": {
+          "values": [
+            "reasoning",
+            "math_solving",
+            "planning",
+            "decision_analysis"
+          ]
+        },
+        "coding_and_data": {
+          "values": [
+            "coding",
+            "debugging",
+            "extraction",
+            "data_analysis"
+          ]
+        },
+        "language_work": {
+          "values": [
+            "summarization",
+            "rewriting",
+            "translation",
+            "creative_writing"
+          ]
+        },
+        "agentic_behavior": {
+          "values": [
+            "tool_use",
+            "ask_clarification",
+            "uncertainty_handling",
+            "structured_response"
+          ]
+        }
+      },
+      "counts": {
+        "group": 5,
+        "leaf": 20
+      }
+    },
+    "system_prompt_mode": {
+      "layer": "form",
+      "cardinality": "single",
+      "applies_to": "all_samples",
+      "values": [
+        "none",
+        "minimal_persona",
+        "detailed_persona",
+        "task_constraint",
+        "domain_style"
+      ],
+      "value_definitions": {
+        "none": "No system prompt is present.",
+        "minimal_persona": "A single-clause role identity only; no format, length or domain constraints.",
+        "detailed_persona": "Role identity plus background or experience and behavioural tendencies; no format or length constraints.",
+        "task_constraint": "Hard output constraints: format, language, length, and must-do / must-not-do rules.",
+        "domain_style": "A professional style setting that matches this sample's knowledge domain and capability."
+      },
+      "note": "Presence and style are one axis: `none` is the absence case of the same coordinate."
+    },
+    "conversation_type": {
+      "layer": "form",
+      "cardinality": "single",
+      "applies_to": "all_samples",
+      "values": [
+        "single_turn",
+        "clarification",
+        "troubleshooting",
+        "iterative_revision",
+        "constraint_update",
+        "tool_assisted",
+        "source_review"
+      ],
+      "value_attributes": {
+        "single_turn": {
+          "turns": 1
+        },
+        "clarification": {
+          "turns": 2
+        },
+        "troubleshooting": {
+          "turns": 3
+        },
+        "iterative_revision": {
+          "turns": 3
+        },
+        "constraint_update": {
+          "turns": 4
+        },
+        "tool_assisted": {
+          "turns": "multi"
+        },
+        "source_review": {
+          "turns": "multi"
+        }
+      },
+      "note": "Turn count is an attribute, never part of the value name."
+    },
+    "response_style": {
+      "layer": "instruction",
+      "cardinality": "single",
+      "applies_to": "all_samples",
+      "values": [
+        "concise",
+        "step-by-step",
+        "professional",
+        "plain language",
+        "teaching",
+        "formal",
+        "casual"
+      ]
+    },
+    "output_format": {
+      "layer": "instruction",
+      "cardinality": "single",
+      "applies_to": "all_samples",
+      "values": [
+        "paragraph",
+        "bullets",
+        "table",
+        "JSON",
+        "code block",
+        "markdown report"
+      ]
+    },
+    "difficulty": {
+      "layer": "instruction",
+      "cardinality": "single",
+      "applies_to": "all_samples",
+      "values": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ]
+    },
+    "context_length": {
+      "layer": "instruction",
+      "cardinality": "single",
+      "applies_to": "all_samples",
+      "values": [
+        "short",
+        "medium",
+        "long_context"
+      ]
+    },
+    "input_condition": {
+      "layer": "instruction",
+      "cardinality": "single",
+      "applies_to": "all_samples",
+      "values": [
+        "clean",
+        "irrelevant_details",
+        "missing_info",
+        "conflicting_constraints",
+        "ambiguous",
+        "edge_case"
+      ],
+      "note": "Degraded-input axis: absorbs `ambiguous` and `edge_case` from the old difficulty axis."
+    },
+    "answer_mode": {
+      "layer": "instruction",
+      "cardinality": "single",
+      "applies_to": "all_samples",
+      "values": [
+        "direct_answer",
+        "explain_then_answer",
+        "ask_before_answering",
+        "structured_analysis"
+      ]
+    },
+    "visual_domain": {
+      "layer": "modality",
+      "cardinality": "single",
+      "applies_to": {
+        "requires_modality": "image"
+      },
+      "absent_when": {
+        "modality": "text_only"
+      },
+      "value_model": "grouped",
+      "groups": {
+        "object_recognition": {
+          "definition": "Identifying objects, people and scenes present in an image.",
+          "values": [
+            "everyday_objects",
+            "animals",
+            "plants",
+            "vehicles",
+            "buildings",
+            "food",
+            "clothing"
+          ]
+        },
+        "spatial_reasoning": {
+          "definition": "Understanding spatial relations, position, depth and direction in an image.",
+          "values": [
+            "relative_position",
+            "depth_estimation",
+            "occlusion",
+            "distance_judgment"
+          ]
+        },
+        "scene_understanding": {
+          "definition": "Understanding the overall scene, activity and atmosphere of an image.",
+          "values": [
+            "indoor_scenes",
+            "outdoor_scenes",
+            "urban_scenes",
+            "natural_landscapes",
+            "crowd_scenes"
+          ]
+        },
+        "text_reading": {
+          "definition": "Reading text in an image: printed text, handwriting, signs, screenshots, documents.",
+          "values": [
+            "printed_text",
+            "handwriting",
+            "signs",
+            "screenshots",
+            "documents"
+          ]
+        }
+      },
+      "counts": {
+        "group": 4,
+        "leaf": 21
+      },
+      "note": "Conditional axis: present iff the sample carries an image (see constraint R5)."
+    }
+  },
+  "knowledge_domain_tree": {
+    "science_exploration": {
+      "frontier_questions": [
+        "origin of the universe",
+        "origin of life",
+        "limits of scientific measurement",
+        "dark matter hypotheses",
+        "deep ocean unknowns",
+        "planetary habitability",
+        "complex systems emergence",
+        "consciousness research"
+      ],
+      "research_practice": [
+        "hypothesis formation",
+        "experiment design",
+        "evidence interpretation",
+        "replication challenges",
+        "field observation",
+        "scientific controversy mapping"
+      ]
+    },
+    "art_aesthetics": {
+      "art_forms": [
+        "painting interpretation",
+        "music structure",
+        "film language",
+        "architecture experience",
+        "dance notation",
+        "theater staging",
+        "installation art"
+      ],
+      "aesthetic_questions": [
+        "taste formation",
+        "beauty and ugliness",
+        "symbolism in art",
+        "avant-garde movements",
+        "craft versus concept",
+        "audience reception"
+      ]
+    },
+    "philosophy_worldviews": {
+      "classic_questions": [
+        "free will",
+        "personal identity",
+        "meaning of life",
+        "mind and body",
+        "knowledge and skepticism",
+        "ethics and consequences",
+        "time and change"
+      ],
+      "comparative_worldviews": [
+        "stoicism",
+        "existentialism",
+        "pragmatism",
+        "daoist thought",
+        "buddhist philosophy",
+        "indigenous worldviews"
+      ]
+    },
+    "religion_myth_folklore": {
+      "comparative_religion": [
+        "ritual practice",
+        "sacred texts",
+        "pilgrimage traditions",
+        "monastic life",
+        "religious symbolism",
+        "festival calendars"
+      ],
+      "myth_and_folklore": [
+        "creation myths",
+        "hero journeys",
+        "trickster figures",
+        "local legends",
+        "oral storytelling",
+        "monster folklore"
+      ]
+    },
+    "esoterica_belief_systems": {
+      "cultural_practices": [
+        "astrology as cultural practice",
+        "divination traditions",
+        "alchemy history",
+        "feng shui concepts",
+        "dream interpretation traditions",
+        "numerology culture"
+      ],
+      "belief_analysis": [
+        "symbolic interpretation",
+        "syncretic belief systems",
+        "mysticism in literature",
+        "urban occult subcultures",
+        "extraordinary claim analysis",
+        "ritual object meanings"
+      ]
+    },
+    "society_events": {
+      "social_dynamics": [
+        "public opinion shifts",
+        "rumor spread",
+        "crowd behavior",
+        "institutional trust",
+        "generational change",
+        "migration narratives",
+        "community resilience"
+      ],
+      "events_and_memory": [
+        "disaster memory",
+        "public ceremonies",
+        "sports and identity",
+        "protest repertoires",
+        "media framing",
+        "collective mourning"
+      ]
+    },
+    "history_civilization": {
+      "civilizational_patterns": [
+        "urbanization",
+        "trade networks",
+        "empire administration",
+        "technological diffusion",
+        "agricultural transitions",
+        "writing systems",
+        "maritime exchange"
+      ],
+      "historical_reasoning": [
+        "source criticism",
+        "counterfactual history",
+        "periodization",
+        "historical causality",
+        "memory and monuments",
+        "archival interpretation"
+      ]
+    },
+    "culture_anthropology": {
+      "cultural_practice": [
+        "food taboos",
+        "gift exchange",
+        "kinship systems",
+        "coming-of-age rituals",
+        "naming customs",
+        "hospitality norms",
+        "body language"
+      ],
+      "cross_cultural_interpretation": [
+        "translation of customs",
+        "cultural misunderstanding",
+        "subculture signals",
+        "diaspora identity",
+        "tourism encounters",
+        "workplace culture"
+      ]
+    },
+    "human_oddities": {
+      "unusual_cases": [
+        "strange historical anecdotes",
+        "unusual inventions",
+        "rare hobbies",
+        "unexpected statistics",
+        "odd legal cases",
+        "bizarre coincidences",
+        "curious museum objects"
+      ],
+      "everyday_absurdity": [
+        "awkward social situations",
+        "misleading labels",
+        "counterintuitive habits",
+        "strange customer requests",
+        "unexpected failure modes",
+        "funny naming collisions"
+      ]
+    },
+    "future_speculation": {
+      "long_term_scenarios": [
+        "future cities",
+        "space settlement",
+        "climate adaptation",
+        "AI and labor",
+        "post-scarcity imaginaries",
+        "bioengineering futures",
+        "education in 2050"
+      ],
+      "scenario_methods": [
+        "trend extrapolation",
+        "wild cards",
+        "backcasting",
+        "risk narratives",
+        "technology adoption curves",
+        "second-order effects"
+      ]
+    },
+    "software_engineering": {
+      "programming": [
+        "Python debugging",
+        "JavaScript async code",
+        "SQL query design",
+        "Rust ownership and lifetimes",
+        "regular expressions",
+        "API client design"
+      ],
+      "software_design": [
+        "architecture tradeoffs",
+        "testing strategy",
+        "code review",
+        "refactoring plan",
+        "dependency management"
+      ]
+    },
+    "data_ai_ml": {
+      "data_work": [
+        "spreadsheet analysis",
+        "SQL aggregation",
+        "data cleaning",
+        "schema mapping",
+        "dashboard metric definition"
+      ],
+      "machine_learning": [
+        "model evaluation",
+        "training data quality",
+        "classification error analysis",
+        "embedding search",
+        "prompt evaluation"
+      ]
+    },
+    "math_logic": {
+      "logic": [
+        "constraint solving",
+        "multi-step comparison",
+        "counterexample analysis",
+        "deductive reasoning",
+        "causal reasoning"
+      ],
+      "math": [
+        "percentage calculation",
+        "unit conversion",
+        "probability",
+        "algebra",
+        "statistical inference"
+      ]
+    },
+    "finance_economics": {
+      "personal_finance": [
+        "budget comparison",
+        "loan term explanation",
+        "household tradeoffs",
+        "insurance concepts"
+      ],
+      "economic_life": [
+        "invoice reconciliation",
+        "revenue variance",
+        "cost benefit analysis",
+        "inflation experience",
+        "market narratives"
+      ]
+    },
+    "law_policy_institutions": {
+      "legal_systems": [
+        "contract clause explanation",
+        "privacy policy summary",
+        "employment policy question",
+        "court procedure overview"
+      ],
+      "public_institutions": [
+        "data retention policy",
+        "access control policy",
+        "regulatory checklist",
+        "institutional accountability",
+        "public service design"
+      ]
+    },
+    "medicine_health": {
+      "health_information": [
+        "symptom terminology",
+        "medication label interpretation",
+        "appointment preparation",
+        "wellness education"
+      ],
+      "health_systems": [
+        "patient instruction rewrite",
+        "medical terminology explanation",
+        "clinical workflow",
+        "public health communication",
+        "caregiver coordination"
+      ]
+    },
+    "language_writing_translation": {
+      "writing": [
+        "technical explanation",
+        "concise summary",
+        "rewrite for clarity",
+        "professional email",
+        "creative writing",
+        "tone adaptation"
+      ],
+      "cross_lingual": [
+        "English to Chinese translation",
+        "Chinese to English translation",
+        "Spanish terminology",
+        "Japanese terminology",
+        "translation with cultural context"
+      ]
+    },
+    "agent_tool_use": {
+      "tools": [
+        "calendar scheduling",
+        "database lookup",
+        "log search",
+        "file search",
+        "spreadsheet update",
+        "API tool selection"
+      ],
+      "structured_output": [
+        "JSON argument construction",
+        "field validation",
+        "error recovery",
+        "tool result interpretation",
+        "schema-constrained extraction"
+      ]
+    }
+  },
+  "constraints": [
+    {
+      "id": "R1",
+      "type": "allowed_pairs",
+      "from": {
+        "axis": "system_prompt_mode"
+      },
+      "to": {
+        "axis": "capability"
+      },
+      "rules": [
+        {
+          "from_value": "none",
+          "to_values": [
+            "*"
+          ]
+        },
+        {
+          "from_value": "minimal_persona",
+          "to_values": [
+            "qa",
+            "explanation",
+            "ask_clarification"
+          ]
+        },
+        {
+          "from_value": "detailed_persona",
+          "to_values": [
+            "explanation",
+            "critique",
+            "reasoning",
+            "creative_writing",
+            "comparison",
+            "decision_analysis",
+            "uncertainty_handling"
+          ]
+        },
+        {
+          "from_value": "task_constraint",
+          "to_values": [
+            "structured_response",
+            "extraction",
+            "summarization",
+            "comparison",
+            "rewriting",
+            "translation",
+            "tool_use"
+          ]
+        },
+        {
+          "from_value": "domain_style",
+          "to_values": [
+            "coding",
+            "debugging",
+            "data_analysis",
+            "math_solving",
+            "planning",
+            "decision_analysis",
+            "translation"
+          ]
+        }
+      ],
+      "coverage": {
+        "axis": "capability",
+        "require": "all_values_covered_by_non_wildcard_rules"
+      },
+      "rationale": "Each capability must be reachable by at least one non-`none` system-prompt mode. The 4 legacy mappings covered 13/20; the 7 additions (comparison, decision_analysis, rewriting, translation, tool_use, ask_clarification, uncertainty_handling) complete 20/20. `none` is universal: omitting the system prompt is never capability-specific."
+    },
+    {
+      "id": "R2",
+      "type": "allowed_pairs",
+      "from": {
+        "axis": "capability"
+      },
+      "to": {
+        "axis": "conversation_type"
+      },
+      "rules": [
+        {
+          "from_value": "qa",
+          "to_values": [
+            "single_turn",
+            "clarification"
+          ]
+        },
+        {
+          "from_value": "explanation",
+          "to_values": [
+            "single_turn",
+            "iterative_revision"
+          ]
+        },
+        {
+          "from_value": "comparison",
+          "to_values": [
+            "single_turn",
+            "source_review"
+          ]
+        },
+        {
+          "from_value": "critique",
+          "to_values": [
+            "single_turn",
+            "source_review",
+            "iterative_revision"
+          ]
+        },
+        {
+          "from_value": "reasoning",
+          "to_values": [
+            "single_turn",
+            "iterative_revision"
+          ]
+        },
+        {
+          "from_value": "math_solving",
+          "to_values": [
+            "single_turn",
+            "clarification"
+          ]
+        },
+        {
+          "from_value": "planning",
+          "to_values": [
+            "single_turn",
+            "iterative_revision",
+            "constraint_update"
+          ]
+        },
+        {
+          "from_value": "decision_analysis",
+          "to_values": [
+            "single_turn",
+            "clarification",
+            "source_review"
+          ]
+        },
+        {
+          "from_value": "coding",
+          "to_values": [
+            "single_turn",
+            "iterative_revision"
+          ]
+        },
+        {
+          "from_value": "debugging",
+          "to_values": [
+            "single_turn",
+            "troubleshooting",
+            "iterative_revision"
+          ]
+        },
+        {
+          "from_value": "extraction",
+          "to_values": [
+            "single_turn",
+            "source_review",
+            "constraint_update"
+          ]
+        },
+        {
+          "from_value": "data_analysis",
+          "to_values": [
+            "single_turn",
+            "troubleshooting",
+            "tool_assisted"
+          ]
+        },
+        {
+          "from_value": "summarization",
+          "to_values": [
+            "single_turn",
+            "source_review",
+            "constraint_update"
+          ]
+        },
+        {
+          "from_value": "rewriting",
+          "to_values": [
+            "single_turn",
+            "iterative_revision",
+            "constraint_update"
+          ]
+        },
+        {
+          "from_value": "translation",
+          "to_values": [
+            "single_turn",
+            "iterative_revision",
+            "constraint_update"
+          ]
+        },
+        {
+          "from_value": "creative_writing",
+          "to_values": [
+            "single_turn",
+            "iterative_revision"
+          ]
+        },
+        {
+          "from_value": "tool_use",
+          "to_values": [
+            "single_turn",
+            "tool_assisted",
+            "troubleshooting"
+          ]
+        },
+        {
+          "from_value": "ask_clarification",
+          "to_values": [
+            "single_turn",
+            "clarification"
+          ]
+        },
+        {
+          "from_value": "uncertainty_handling",
+          "to_values": [
+            "single_turn",
+            "clarification"
+          ]
+        },
+        {
+          "from_value": "structured_response",
+          "to_values": [
+            "single_turn",
+            "constraint_update",
+            "tool_assisted"
+          ]
+        }
+      ],
+      "rationale": "Turns are only earned by capabilities that need them: tool_use->tool_assisted, ask_clarification/uncertainty_handling->clarification, debugging->troubleshooting, rewriting/translation/creative_writing/planning->iterative_revision, planning/extraction/summarization/rewriting/translation/structured_response->constraint_update, summarization/extraction/critique/comparison/decision_analysis->source_review. single_turn is listed for every capability as the default."
+    },
+    {
+      "id": "R3",
+      "type": "allowed_pairs",
+      "from": {
+        "axis": "capability"
+      },
+      "to": {
+        "axis": "output_format"
+      },
+      "rules": [
+        {
+          "from_value": "qa",
+          "to_values": [
+            "paragraph",
+            "bullets"
+          ]
+        },
+        {
+          "from_value": "explanation",
+          "to_values": [
+            "paragraph",
+            "bullets",
+            "markdown report"
+          ]
+        },
+        {
+          "from_value": "comparison",
+          "to_values": [
+            "table",
+            "bullets",
+            "paragraph"
+          ]
+        },
+        {
+          "from_value": "critique",
+          "to_values": [
+            "paragraph",
+            "bullets"
+          ]
+        },
+        {
+          "from_value": "reasoning",
+          "to_values": [
+            "paragraph",
+            "markdown report"
+          ]
+        },
+        {
+          "from_value": "math_solving",
+          "to_values": [
+            "paragraph",
+            "markdown report"
+          ]
+        },
+        {
+          "from_value": "planning",
+          "to_values": [
+            "bullets",
+            "table",
+            "markdown report"
+          ]
+        },
+        {
+          "from_value": "decision_analysis",
+          "to_values": [
+            "table",
+            "bullets",
+            "markdown report"
+          ]
+        },
+        {
+          "from_value": "coding",
+          "to_values": [
+            "code block",
+            "markdown report"
+          ]
+        },
+        {
+          "from_value": "debugging",
+          "to_values": [
+            "code block",
+            "paragraph"
+          ]
+        },
+        {
+          "from_value": "extraction",
+          "to_values": [
+            "JSON",
+            "table"
+          ]
+        },
+        {
+          "from_value": "data_analysis",
+          "to_values": [
+            "table",
+            "markdown report",
+            "JSON"
+          ]
+        },
+        {
+          "from_value": "summarization",
+          "to_values": [
+            "paragraph",
+            "bullets"
+          ]
+        },
+        {
+          "from_value": "rewriting",
+          "to_values": [
+            "paragraph",
+            "bullets"
+          ]
+        },
+        {
+          "from_value": "translation",
+          "to_values": [
+            "paragraph",
+            "bullets"
+          ]
+        },
+        {
+          "from_value": "creative_writing",
+          "to_values": [
+            "paragraph"
+          ]
+        },
+        {
+          "from_value": "tool_use",
+          "to_values": [
+            "JSON"
+          ]
+        },
+        {
+          "from_value": "ask_clarification",
+          "to_values": [
+            "paragraph",
+            "bullets"
+          ]
+        },
+        {
+          "from_value": "uncertainty_handling",
+          "to_values": [
+            "paragraph"
+          ]
+        },
+        {
+          "from_value": "structured_response",
+          "to_values": [
+            "JSON",
+            "table"
+          ]
+        }
+      ],
+      "rationale": "Output format must be renderable by the capability: coding->code block, extraction/tool_use/structured_response->JSON, comparison/planning/decision_analysis/data_analysis->table, summarization/rewriting->paragraph or bullets."
+    },
+    {
+      "id": "R4a",
+      "type": "allowed_pairs",
+      "from": {
+        "axis": "capability"
+      },
+      "to": {
+        "axis": "answer_mode"
+      },
+      "rules": [
+        {
+          "from_value": "qa",
+          "to_values": [
+            "direct_answer",
+            "explain_then_answer"
+          ]
+        },
+        {
+          "from_value": "explanation",
+          "to_values": [
+            "explain_then_answer"
+          ]
+        },
+        {
+          "from_value": "comparison",
+          "to_values": [
+            "structured_analysis"
+          ]
+        },
+        {
+          "from_value": "critique",
+          "to_values": [
+            "structured_analysis",
+            "explain_then_answer"
+          ]
+        },
+        {
+          "from_value": "reasoning",
+          "to_values": [
+            "structured_analysis",
+            "explain_then_answer"
+          ]
+        },
+        {
+          "from_value": "math_solving",
+          "to_values": [
+            "explain_then_answer",
+            "direct_answer"
+          ]
+        },
+        {
+          "from_value": "planning",
+          "to_values": [
+            "structured_analysis"
+          ]
+        },
+        {
+          "from_value": "decision_analysis",
+          "to_values": [
+            "structured_analysis"
+          ]
+        },
+        {
+          "from_value": "coding",
+          "to_values": [
+            "direct_answer",
+            "explain_then_answer"
+          ]
+        },
+        {
+          "from_value": "debugging",
+          "to_values": [
+            "structured_analysis",
+            "explain_then_answer"
+          ]
+        },
+        {
+          "from_value": "extraction",
+          "to_values": [
+            "direct_answer"
+          ]
+        },
+        {
+          "from_value": "data_analysis",
+          "to_values": [
+            "structured_analysis"
+          ]
+        },
+        {
+          "from_value": "summarization",
+          "to_values": [
+            "direct_answer"
+          ]
+        },
+        {
+          "from_value": "rewriting",
+          "to_values": [
+            "direct_answer"
+          ]
+        },
+        {
+          "from_value": "translation",
+          "to_values": [
+            "direct_answer"
+          ]
+        },
+        {
+          "from_value": "creative_writing",
+          "to_values": [
+            "direct_answer"
+          ]
+        },
+        {
+          "from_value": "tool_use",
+          "to_values": [
+            "direct_answer"
+          ]
+        },
+        {
+          "from_value": "ask_clarification",
+          "to_values": [
+            "ask_before_answering"
+          ]
+        },
+        {
+          "from_value": "uncertainty_handling",
+          "to_values": [
+            "explain_then_answer",
+            "ask_before_answering"
+          ]
+        },
+        {
+          "from_value": "structured_response",
+          "to_values": [
+            "structured_analysis",
+            "direct_answer"
+          ]
+        }
+      ],
+      "rationale": "Capability palette for answer_mode. Combined with R4b by plain intersection it yields the effective behaviour: `ask_before_answering` is admitted only when capability is ask_clarification or uncertainty_handling AND input_condition is clean, missing_info, conflicting_constraints or ambiguous. Consequently missing_info and conflicting_constraints are reachable only on those two capabilities, and ask_clarification has no legal answer_mode on input_condition=irrelevant_details (see reachability.zero_solution_pairs). Analytical capabilities (comparison, reasoning, planning, decision_analysis, data_analysis, debugging) use structured_analysis. An assignment is legal iff it satisfies every constraint; there is no priority or scoping mechanism."
+    },
+    {
+      "id": "R4b",
+      "type": "allowed_pairs",
+      "from": {
+        "axis": "input_condition"
+      },
+      "to": {
+        "axis": "answer_mode"
+      },
+      "rules": [
+        {
+          "from_value": "clean",
+          "to_values": [
+            "direct_answer",
+            "explain_then_answer",
+            "structured_analysis",
+            "ask_before_answering"
+          ]
+        },
+        {
+          "from_value": "irrelevant_details",
+          "to_values": [
+            "direct_answer",
+            "structured_analysis",
+            "explain_then_answer"
+          ]
+        },
+        {
+          "from_value": "missing_info",
+          "to_values": [
+            "ask_before_answering"
+          ]
+        },
+        {
+          "from_value": "conflicting_constraints",
+          "to_values": [
+            "ask_before_answering"
+          ]
+        },
+        {
+          "from_value": "ambiguous",
+          "to_values": [
+            "ask_before_answering",
+            "explain_then_answer"
+          ]
+        },
+        {
+          "from_value": "edge_case",
+          "to_values": [
+            "structured_analysis",
+            "explain_then_answer"
+          ]
+        }
+      ],
+      "rationale": "Input-condition rule set for answer_mode, combined with R4a by plain intersection. Effective behaviour: `ask_before_answering` is admitted only when capability is ask_clarification or uncertainty_handling AND input_condition is clean, missing_info, conflicting_constraints or ambiguous. missing_info and conflicting_constraints admit only ask_before_answering, so they are reachable only on {ask_clarification, uncertainty_handling}; the other 18 capabilities have no legal combination on them (see reachability.zero_solution_pairs). clean additionally admits ask_before_answering so that ask_clarification / uncertainty_handling can ask on clean input. irrelevant_details admits explain_then_answer alongside direct_answer and structured_analysis, so explanation and uncertainty_handling become reachable there; ask_clarification remains unreachable on irrelevant_details. ambiguous admits ask or explain; edge_case admits structured_analysis or explain. There is no capability-side exception mechanism: this rule set and R4a are combined by plain intersection.",
+      "relaxations_vs_previous_round": [
+        {
+          "from_value": "clean",
+          "added": "ask_before_answering",
+          "reason": "clean input may still warrant a clarifying question from ask_clarification / uncertainty_handling"
+        },
+        {
+          "from_value": "irrelevant_details",
+          "added": "explain_then_answer",
+          "reason": "ignoring irrelevant details does not forbid explaining"
+        }
+      ]
+    },
+    {
+      "id": "R5",
+      "type": "modality_gate",
+      "sample_field": {
+        "name": "modality",
+        "values": [
+          "text_only",
+          "image"
+        ]
+      },
+      "gated_axis": "visual_domain",
+      "rule": "legal iff (modality == image and visual_domain is assigned a value) or (modality == text_only and visual_domain is absent)",
+      "capability_image_policy": {
+        "must_support_image": [
+          "qa",
+          "explanation",
+          "comparison",
+          "extraction",
+          "summarization",
+          "structured_response"
+        ],
+        "may_support_image": [
+          "critique",
+          "reasoning",
+          "math_solving",
+          "planning",
+          "decision_analysis",
+          "coding",
+          "debugging",
+          "data_analysis",
+          "translation",
+          "rewriting",
+          "creative_writing",
+          "uncertainty_handling"
+        ],
+        "text_only": [
+          "tool_use",
+          "ask_clarification"
+        ]
+      },
+      "rationale": "visual_domain is a modality-conditional axis, not a 12th universal axis. must_support_image = capabilities whose core task is image content (recognition, OCR, chart/diagram reading, summarisation, structured extraction). may_support_image = capabilities that work on images but do not require them. text_only = capabilities whose payload is pure text/tool arguments. Policy is a capability-side declaration: it says what a sample is allowed to pair with, not which samples must exist."
+    },
+    {
+      "id": "R6",
+      "type": "semantics_declaration",
+      "axis": "language",
+      "meaning": "output_language",
+      "applies_to_capabilities": "*",
+      "special_capabilities": {
+        "translation": "language names the TARGET language of the translation.",
+        "rewriting": "language names the language the rewritten text is expected in.",
+        "cross_lingual_note": "For every other capability, language names the language of the answer."
+      },
+      "source_language_policy": {
+        "carrier": "The source text lives in the prompt/context payload; the ontology does not record a source-language coordinate.",
+        "invariant": "target_language == axis_value(language) for translation and rewriting.",
+        "required_prompt_metadata": [
+          "source_language",
+          "target_language"
+        ],
+        "prompt_pairing": "A translation/rewriting prompt states the source language and is written in the target language named by the `language` axis."
+      },
+      "rejected_alternative": "Making `language` dual-valued (source+target) breaks the single-value cardinality of all 11 universal axes and inflates the combination space with an axis that is only meaningful for 2 of 20 capabilities.",
+      "cost": [
+        "The source language is not a coordinate: the ontology cannot distinguish two samples that differ only in source language.",
+        "Declaration and checking are layered: the correctness of a declared source language is only checkable where the wording lives, never in the ontology.",
+        "Cross-lingual samples must carry the (source_language, target_language) metadata pair, because the ontology stores only the target side."
+      ],
+      "rationale": "One coordinate, one meaning: `language` is always the output language. Source language is input payload, not a design coordinate."
+    },
+    {
+      "id": "R7",
+      "type": "orthogonality",
+      "axes": [
+        "knowledge_domain",
+        "language",
+        "response_style",
+        "difficulty",
+        "context_length"
+      ],
+      "rule": "These axes are mutually free and impose no restriction on, and receive no restriction from, any other axis.",
+      "exceptions": [],
+      "rationale": "Domain, output language, response style, difficulty and input length are independent content/instruction dimensions: every value combines with every value of every other axis. Declaring this explicitly prevents the implicit-convention defect that R1-R6 fix and makes the 209 knowledge-domain leaves fully covered without enumerating 209 x N pairs."
+    }
+  ],
+  "sample_fields": {
+    "modality": {
+      "values": [
+        "text_only",
+        "image"
+      ],
+      "role": "selects whether the conditional axis visual_domain applies (constraint R5)."
+    }
+  },
+  "wording_policy": {
+    "ontology_holds": "coordinates_only",
+    "banned_in_ontology": [
+      "imperative prompt text",
+      "prompt templates",
+      "localised prompt descriptions"
+    ],
+    "prompt_wording_location_recommendation": {
+      "target": "configs/prompts/system_prompt/<system_prompt_mode>.md",
+      "shape": "one file per system_prompt_mode value, keyed by the axis value, holding the generator-facing wording",
+      "status": "recommendation only; no such file was created in this round (ontology-only round)"
+    },
+    "rationale": "The ontology declares the coordinate; wording is a separate, localisable, iterable artifact. Keeping the two in one file is what made the old ontology carry prompt text."
+  },
+  "derived_counts": {
+    "definitions": {
+      "free_axis_product": "product of the 5 orthogonal axes declared by R7 (language x knowledge_domain x response_style x difficulty x context_length)",
+      "raw_restricted_block": "unconstrained product of the 6 restricted axes (capability x system_prompt_mode x conversation_type x output_format x input_condition x answer_mode)",
+      "legal_restricted_block": "restricted-block combinations that satisfy every constraint, over all 20 capabilities",
+      "legal_restricted_block_image_capable": "same as legal_restricted_block but restricted to the 18 image-capable capabilities of R5",
+      "legal_samples_text": "free_axis_product x legal_restricted_block",
+      "legal_samples_image": "free_axis_product x legal_restricted_block_image_capable x |visual_domain|",
+      "legal_samples_total": "legal_samples_text + legal_samples_image",
+      "raw_combination_space_11_axes": "unconstrained product of the 11 universal axes (coordinate space, not a combination count)",
+      "raw_combination_space_with_visual": "raw_combination_space_11_axes x |visual_domain| (coordinate space, not a combination count)",
+      "universal_axis_leaf_total": "sum of the value counts of the 11 universal axes",
+      "total_with_visual_axis": "universal_axis_leaf_total + |visual_domain|"
+    },
+    "free_axis_product": 52668,
+    "raw_restricted_block": 100800,
+    "legal_restricted_block": 935,
+    "legal_restricted_block_image_capable": 891,
+    "legal_samples_text": 49244580,
+    "legal_samples_image": 985470948,
+    "legal_samples_total": 1034715528,
+    "raw_combination_space_11_axes": 5308934400,
+    "raw_combination_space_with_visual": 111487622400,
+    "universal_axis_leaf_total": 274,
+    "total_with_visual_axis": 295
+  },
+  "reachability": {
+    "note": "Computed facts from exhaustive enumeration of the 6 restricted axes. Counts and lists only. The two headline numbers are the same quantities as derived_counts.raw_restricted_block / derived_counts.legal_restricted_block.",
+    "raw_restricted_block": 100800,
+    "legal_restricted_block": 935,
+    "zero_solution_pairs": {
+      "count": 55,
+      "pairs": [
+        [
+          "ask_clarification",
+          "edge_case"
+        ],
+        [
+          "ask_clarification",
+          "irrelevant_details"
+        ],
+        [
+          "coding",
+          "conflicting_constraints"
+        ],
+        [
+          "coding",
+          "missing_info"
+        ],
+        [
+          "comparison",
+          "ambiguous"
+        ],
+        [
+          "comparison",
+          "conflicting_constraints"
+        ],
+        [
+          "comparison",
+          "missing_info"
+        ],
+        [
+          "creative_writing",
+          "ambiguous"
+        ],
+        [
+          "creative_writing",
+          "conflicting_constraints"
+        ],
+        [
+          "creative_writing",
+          "edge_case"
+        ],
+        [
+          "creative_writing",
+          "missing_info"
+        ],
+        [
+          "critique",
+          "conflicting_constraints"
+        ],
+        [
+          "critique",
+          "missing_info"
+        ],
+        [
+          "data_analysis",
+          "ambiguous"
+        ],
+        [
+          "data_analysis",
+          "conflicting_constraints"
+        ],
+        [
+          "data_analysis",
+          "missing_info"
+        ],
+        [
+          "debugging",
+          "conflicting_constraints"
+        ],
+        [
+          "debugging",
+          "missing_info"
+        ],
+        [
+          "decision_analysis",
+          "ambiguous"
+        ],
+        [
+          "decision_analysis",
+          "conflicting_constraints"
+        ],
+        [
+          "decision_analysis",
+          "missing_info"
+        ],
+        [
+          "explanation",
+          "conflicting_constraints"
+        ],
+        [
+          "explanation",
+          "missing_info"
+        ],
+        [
+          "extraction",
+          "ambiguous"
+        ],
+        [
+          "extraction",
+          "conflicting_constraints"
+        ],
+        [
+          "extraction",
+          "edge_case"
+        ],
+        [
+          "extraction",
+          "missing_info"
+        ],
+        [
+          "math_solving",
+          "conflicting_constraints"
+        ],
+        [
+          "math_solving",
+          "missing_info"
+        ],
+        [
+          "planning",
+          "ambiguous"
+        ],
+        [
+          "planning",
+          "conflicting_constraints"
+        ],
+        [
+          "planning",
+          "missing_info"
+        ],
+        [
+          "qa",
+          "conflicting_constraints"
+        ],
+        [
+          "qa",
+          "missing_info"
+        ],
+        [
+          "reasoning",
+          "conflicting_constraints"
+        ],
+        [
+          "reasoning",
+          "missing_info"
+        ],
+        [
+          "rewriting",
+          "ambiguous"
+        ],
+        [
+          "rewriting",
+          "conflicting_constraints"
+        ],
+        [
+          "rewriting",
+          "edge_case"
+        ],
+        [
+          "rewriting",
+          "missing_info"
+        ],
+        [
+          "structured_response",
+          "ambiguous"
+        ],
+        [
+          "structured_response",
+          "conflicting_constraints"
+        ],
+        [
+          "structured_response",
+          "missing_info"
+        ],
+        [
+          "summarization",
+          "ambiguous"
+        ],
+        [
+          "summarization",
+          "conflicting_constraints"
+        ],
+        [
+          "summarization",
+          "edge_case"
+        ],
+        [
+          "summarization",
+          "missing_info"
+        ],
+        [
+          "tool_use",
+          "ambiguous"
+        ],
+        [
+          "tool_use",
+          "conflicting_constraints"
+        ],
+        [
+          "tool_use",
+          "edge_case"
+        ],
+        [
+          "tool_use",
+          "missing_info"
+        ],
+        [
+          "translation",
+          "ambiguous"
+        ],
+        [
+          "translation",
+          "conflicting_constraints"
+        ],
+        [
+          "translation",
+          "edge_case"
+        ],
+        [
+          "translation",
+          "missing_info"
+        ]
+      ],
+      "note": "a (capability, input_condition) value pair with no legal combination of the 6 restricted axes"
+    },
+    "per_capability_legal_counts": {
+      "qa": 48,
+      "explanation": 72,
+      "comparison": 54,
+      "critique": 84,
+      "reasoning": 56,
+      "math_solving": 48,
+      "planning": 54,
+      "decision_analysis": 81,
+      "coding": 48,
+      "debugging": 84,
+      "extraction": 24,
+      "data_analysis": 54,
+      "summarization": 24,
+      "rewriting": 24,
+      "translation": 36,
+      "creative_writing": 8,
+      "tool_use": 12,
+      "ask_clarification": 32,
+      "uncertainty_handling": 32,
+      "structured_response": 60
+    },
+    "per_input_condition_legal_counts": {
+      "clean": 315,
+      "irrelevant_details": 303,
+      "missing_info": 12,
+      "conflicting_constraints": 12,
+      "ambiguous": 90,
+      "edge_case": 203
+    },
+    "per_answer_mode_legal_counts": {
+      "direct_answer": 200,
+      "explain_then_answer": 312,
+      "ask_before_answering": 48,
+      "structured_analysis": 375
+    }
+  }
+}

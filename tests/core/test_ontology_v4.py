@@ -1,0 +1,242 @@
+# tests/core/test_ontology_v4.py — v4 ontology parser contract tests.
+# Responsibility: verify the v4 parser accepts the real ontology and rejects
+# schema violations (missing / extra / mistyped fields, absent and malformed
+# files) with a message naming the field, the expectation and the received value.
+
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from ard.core.ontology import (
+    OntologySchemaError,
+    OntologyV4,
+    load_ontology,
+    load_ontology_v4,
+)
+
+ONTOLOGY_V4_PATH = Path("ontology/anchor_ontology.v4.json")
+ONTOLOGY_V3_PATH = Path("ontology/anchor_ontology.json")
+
+
+def _raw_v4() -> dict[str, Any]:
+    """Return a fresh, mutable copy of the real v4 ontology payload."""
+    payload: dict[str, Any] = json.loads(ONTOLOGY_V4_PATH.read_text(encoding="utf-8"))
+    return payload
+
+
+# ── Happy path ──────────────────────────────────────────────────────────────
+
+
+def test_load_v4_parses_real_ontology() -> None:
+    """The shipped v4 file parses into the typed model."""
+    ontology = load_ontology_v4(ONTOLOGY_V4_PATH)
+    assert ontology.ontology_id == "ard-anchor-ontology"
+    assert ontology.version == "4.0.0"
+    assert len(ontology.axis_names()) == 12
+    assert ontology.axis_count.universal == 11
+    assert ontology.axis_count.conditional == 1
+    assert ontology.axis_count.total == 12
+    assert len(ontology.constraints) == 8
+
+
+@pytest.mark.parametrize(
+    ("axis", "expected"),
+    [
+        ("language", 4),
+        ("knowledge_domain", 209),
+        ("capability", 20),
+        ("system_prompt_mode", 5),
+        ("conversation_type", 7),
+        ("response_style", 7),
+        ("output_format", 6),
+        ("difficulty", 3),
+        ("context_length", 3),
+        ("input_condition", 6),
+        ("answer_mode", 4),
+        ("visual_domain", 21),
+    ],
+)
+def test_axis_value_cardinalities(axis: str, expected: int) -> None:
+    """Every axis resolves to its declared number of coordinate values."""
+    ontology = load_ontology_v4(ONTOLOGY_V4_PATH)
+    assert len(ontology.axis_values(axis)) == expected
+
+
+def test_knowledge_domain_tree_shape() -> None:
+    """The knowledge-domain tree is 18 domains / 36 subdomains / 209 unique leaves."""
+    ontology = load_ontology_v4(ONTOLOGY_V4_PATH)
+    tree = ontology.knowledge_domain_tree.root
+    assert len(tree) == 18
+    subdomains = [name for subs in tree.values() for name in subs.root]
+    leaves = [leaf for subs in tree.values() for group in subs.root.values() for leaf in group]
+    assert len(subdomains) == 36
+    assert len(leaves) == 209
+    assert len(set(leaves)) == 209
+
+
+def test_constraint_ids_and_types() -> None:
+    """All eight constraints are present with the expected discriminated types."""
+    ontology = load_ontology_v4(ONTOLOGY_V4_PATH)
+    expected_ids = ["R1", "R2", "R3", "R4a", "R4b", "R5", "R6", "R7"]
+    assert [c.id for c in ontology.constraints] == expected_ids
+    assert [c.id for c in ontology.allowed_pairs_constraints()] == [
+        "R1",
+        "R2",
+        "R3",
+        "R4a",
+        "R4b",
+    ]
+    assert ontology.modality_gate().gated_axis == "visual_domain"
+
+
+def test_axis_values_unknown_axis_raises() -> None:
+    """Asking for an axis that does not exist is an error, not an empty tuple."""
+    ontology = load_ontology_v4(ONTOLOGY_V4_PATH)
+    with pytest.raises(KeyError):
+        ontology.axis_values("no_such_axis")
+
+
+def test_extra_keys_are_forbidden() -> None:
+    """extra="forbid" is on: any undeclared key is a schema error."""
+    with pytest.raises(ValueError, match="extra_forbidden|Extra inputs"):
+        OntologyV4.model_validate({"version": "4.0.0", "undeclared": 1})
+
+
+# ── Schema rejection ────────────────────────────────────────────────────────
+
+
+def test_missing_top_level_field_is_rejected(tmp_path: Path) -> None:
+    """A missing top-level field is reported with its name."""
+    payload = _raw_v4()
+    del payload["version"]
+    path = tmp_path / "missing_version.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(OntologySchemaError) as excinfo:
+        load_ontology_v4(path)
+
+    message = str(excinfo.value)
+    assert "version" in message
+    assert "expected" in message
+    assert "<nothing>" in message
+
+
+def test_missing_nested_field_is_rejected(tmp_path: Path) -> None:
+    """A missing nested field is reported with its dotted path."""
+    payload = _raw_v4()
+    del payload["axes"]["capability"]["counts"]
+    path = tmp_path / "missing_nested.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(OntologySchemaError) as excinfo:
+        load_ontology_v4(path)
+
+    assert "axes.capability.counts" in str(excinfo.value)
+
+
+def test_extra_field_is_rejected(tmp_path: Path) -> None:
+    """An undeclared field is rejected and named."""
+    payload = _raw_v4()
+    payload["capability"] = ["qa"]
+    path = tmp_path / "extra_field.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(OntologySchemaError) as excinfo:
+        load_ontology_v4(path)
+
+    message = str(excinfo.value)
+    assert "capability" in message
+    assert "received" in message
+
+
+def test_type_error_is_rejected(tmp_path: Path) -> None:
+    """A wrongly typed field is rejected, naming field, expectation and value."""
+    payload = _raw_v4()
+    payload["axis_count"]["total"] = "twelve"
+    path = tmp_path / "type_error.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(OntologySchemaError) as excinfo:
+        load_ontology_v4(path)
+
+    message = str(excinfo.value)
+    assert "axis_count.total" in message
+    assert "expected int" in message
+    assert "'twelve'" in message
+
+
+def test_flat_axis_values_must_be_a_list(tmp_path: Path) -> None:
+    """A scalar where a list is expected is rejected."""
+    payload = _raw_v4()
+    payload["axes"]["language"]["values"] = "English"
+    path = tmp_path / "scalar_values.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(OntologySchemaError) as excinfo:
+        load_ontology_v4(path)
+
+    message = str(excinfo.value)
+    assert "axes.language.values" in message
+    assert "expected list" in message
+
+
+def test_constraint_extra_field_is_rejected(tmp_path: Path) -> None:
+    """An undeclared key inside a constraint is rejected (nested extra=forbid)."""
+    payload = _raw_v4()
+    payload["constraints"][0]["unexpected_rule"] = "x"
+    path = tmp_path / "constraint_extra.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(OntologySchemaError) as excinfo:
+        load_ontology_v4(path)
+
+    message = str(excinfo.value)
+    assert "constraints.0" in message
+    assert "unexpected_rule" in message
+    assert "received" in message
+
+
+def test_missing_file_raises_file_not_found() -> None:
+    """A missing ontology file is a FileNotFoundError, not an empty result."""
+    with pytest.raises(FileNotFoundError) as excinfo:
+        load_ontology_v4("ontology/does_not_exist.v4.json")
+    assert "ontology" in str(excinfo.value)
+
+
+def test_malformed_json_is_rejected(tmp_path: Path) -> None:
+    """Malformed JSON is rejected loudly rather than degrading silently."""
+    path = tmp_path / "broken.json"
+    path.write_text('{"version": "4.0.0",}', encoding="utf-8")
+    with pytest.raises(OntologySchemaError) as excinfo:
+        load_ontology_v4(path)
+    assert "expected valid JSON" in str(excinfo.value)
+
+
+def test_non_object_json_is_rejected(tmp_path: Path) -> None:
+    """A JSON array is not an ontology object."""
+    path = tmp_path / "array.json"
+    path.write_text("[1, 2, 3]", encoding="utf-8")
+    with pytest.raises(OntologySchemaError) as excinfo:
+        load_ontology_v4(path)
+    assert "expected object" in str(excinfo.value)
+
+
+def test_v3_file_is_rejected_by_v4_loader() -> None:
+    """The real defect: feeding v3 to the v4 path errors instead of yielding 0."""
+    with pytest.raises(OntologySchemaError) as excinfo:
+        load_ontology_v4(ONTOLOGY_V3_PATH)
+    assert "languages" in str(excinfo.value)
+
+
+# ── Migration compatibility ─────────────────────────────────────────────────
+
+
+def test_legacy_loader_keeps_raw_dict_semantics() -> None:
+    """The transitional loader still returns the raw v3 dict unchanged."""
+    legacy = load_ontology(ONTOLOGY_V3_PATH)
+    assert isinstance(legacy, dict)
+    assert "languages" in legacy
+    assert "knowledge_domains" in legacy
+    assert "capabilities" in legacy
