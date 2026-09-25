@@ -21,6 +21,9 @@ uv run mypy src/ard/
 
 # Linting
 uv run ruff check src/ tests/
+
+# Formatting (check only — an unformatted file fails the gate)
+uv run ruff format --check src/ tests/
 ```
 
 ## Branch and Review Workflow
