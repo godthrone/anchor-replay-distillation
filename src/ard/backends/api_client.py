@@ -40,9 +40,11 @@ from collections.abc import Generator
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeAlias
+from typing import Any
 
 import httpx
+
+from ard.core.types import ChatMessageList
 
 logger = logging.getLogger(__name__)
 
@@ -62,22 +64,12 @@ _READER_JOIN_TIMEOUT = 0.5
 
 
 # ── Shared types ────────────────────────────────────────────────────────────
-
-ChatMessage: TypeAlias = dict[str, Any]
-"""One OpenAI-compatible chat message: a ``role`` plus its ``content``.
-
-The content is either a plain string or, for multimodal turns, a list of typed
-parts (``{"type": "text", "text": ...}`` / ``{"type": "image_url", ...}``).
-It stays a dict on purpose: this is the provider's **wire format**, serialised
-verbatim by :func:`_build_payload` and parsed straight out of the response, so
-the shape is owned by the endpoint rather than by this project.  §12.1's ban on
-anonymous nested types is satisfied by naming the shape; wrapping it in a
-pydantic model would add a translation layer whose only possible behaviour is
-to drift from the format it mirrors.
-"""
-
-ChatMessageList: TypeAlias = list[ChatMessage]
-"""A conversation: the messages of one request, in turn order."""
+#
+# :data:`~ard.core.types.ChatMessage` / :data:`~ard.core.types.ChatMessageList`
+# are the request/response shapes and are imported above from the core layer,
+# which owns them because the generated anchor carries them out of this module
+# (§1.4 single source of truth).  They are re-exported here so the wire format
+# stays discoverable from the client that speaks it.
 
 
 # ── Exception types ─────────────────────────────────────────────────────────

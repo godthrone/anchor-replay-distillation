@@ -5,9 +5,10 @@ All types are plain dataclasses with slots=True. No external dependencies.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, TypeAlias
 
 
 class DataSource(StrEnum):
@@ -144,3 +145,77 @@ class AnchorGenerationConfig:
 
     seed: int = 42
     concurrency: int = 4
+
+
+# ── Shared type aliases ─────────────────────────────────────────────────────
+#
+# §12.1 rule 4 forbids anonymous nested container types: a shape written inline
+# at every signature has no name to state what it means, and changing it means
+# editing every caller.  These aliases name the shapes that cross the
+# core / domain / backends / pipeline boundaries — one name per shape, so there
+# is a single source of truth for it (§1.4).  They live in the core layer
+# because core imports nothing from the rest of the project (§1.3 层次边界), so
+# every layer can import them without a cycle.  Each definition is a runtime
+# ``types.GenericAlias``, i.e. exactly the expression it replaces, with no
+# runtime cost and no behaviour change.
+
+JsonObject: TypeAlias = dict[str, Any]
+"""One decoded JSON object: a bank record, a manifest fragment, a plan entry."""
+
+JsonObjectList: TypeAlias = list[JsonObject]
+"""Decoded JSON objects in file or plan order."""
+
+JsonObjectSequence: TypeAlias = Sequence[Mapping[str, Any]]
+"""A read-only run of decoded JSON objects, in file or plan order.
+
+The element type is ``Mapping``, not ``JsonObject``: every consumer only reads,
+so callers may hand over real ``dict``s *or* mapping-like doubles.
+"""
+
+ChatContentPart: TypeAlias = dict[str, Any]
+"""One typed part of a multimodal chat content list.
+
+``{"type": "text", "text": ...}`` or ``{"type": "image_url", "image_url": ...}``
+— the endpoint owns this shape, so it is named rather than modelled.
+"""
+
+ChatContentParts: TypeAlias = list[ChatContentPart]
+"""A message's content when it is a list of parts instead of a plain string."""
+
+ChatMessage: TypeAlias = dict[str, Any]
+"""One OpenAI-compatible chat message: a ``role`` plus its ``content``.
+
+The content is either a plain string or, for multimodal turns, a
+:data:`ChatContentParts` list.  It stays a dict on purpose: this is the
+provider's **wire format**, serialised verbatim into the request payload and
+parsed straight out of the response, so the shape is owned by the endpoint
+rather than by this project.  §12.1's ban on anonymous nested types is
+satisfied by naming the shape; wrapping it in a pydantic model would add a
+translation layer whose only possible behaviour is to drift from the format it
+mirrors.
+"""
+
+ChatMessageList: TypeAlias = list[ChatMessage]
+"""A conversation: the messages of one request, in turn order."""
+
+StringList: TypeAlias = list[str]
+"""A list of strings: anchor ids, names, legal values."""
+
+StringTuple: TypeAlias = tuple[str, ...]
+"""An ordered, hashable run of strings — one axis's values."""
+
+StringPair: TypeAlias = tuple[str, str]
+"""Two strings whose order carries the meaning (``axis -> value``)."""
+
+StringPairs: TypeAlias = tuple[StringPair, ...]
+"""An ordered, hashable run of :data:`StringPair`.
+
+This is how a coordinate is identified: its ``(axis, value)`` pairs, sorted, so
+two coordinates built in a different order still compare equal.
+"""
+
+AxisValuesByAxis: TypeAlias = dict[str, StringTuple]
+"""For each axis name, the values that axis may take."""
+
+AnchorSpecList: TypeAlias = list[AnchorSpec]
+"""The anchors of one plan — or of one plan subgroup — in plan order."""
