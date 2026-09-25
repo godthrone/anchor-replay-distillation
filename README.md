@@ -83,8 +83,11 @@ uv run python -m ard --config configs/config.toml --smoke --image-dir examples/i
 ```
 
 **What `--smoke` means.** It materialises the *same* construction rule at a reduced scale —
-8 of the 1,826 anchors (4 text blocks + 4 image blocks, evenly spaced over the enumeration,
-first and last included) — so a fresh checkout can see a complete artifact in minutes. The
+8 restricted blocks (4 text blocks + 4 image blocks, evenly spaced over the enumeration, first
+and last included). Those blocks are a subset of the blocks the full plan enumerates (8/8
+block-level coverage), but their coordinates are re-rotated at smoke scale, so the 8 anchors
+are **not** rows of the 1,826-anchor plan (only 1/8 coincide coordinate-wise). Its point is
+that a fresh checkout can see a complete artifact in minutes. The
 artifact is deliberately incomplete and says so in three independent places: the run
 directory name gets the `_smoke` suffix, the log carries a WARNING naming the scale, and
 `manifest.json` sets `smoke: true` plus a `smoke_plan` block. `--smoke` is a CLI run-boundary
