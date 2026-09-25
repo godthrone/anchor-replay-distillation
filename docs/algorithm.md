@@ -2,6 +2,7 @@
 
 > 职责：说明 ARD 一轮锚点计划的**目标集口径**、**构造规则**（坐标如何被选出）、**轮数口径**、**坐标与措辞的边界**，
 > 以及本体指纹沿革。纯计算实现见 `src/ard/core/sampling.py` / `constraints.py` / `ontology.py`；判据与读数定义见 `docs/measurement.md`。
+> 基线：本页所有 `文件:行` 以提交 `a0f3221` 的树为准（并行开发期，代码行号可能随提交漂移；按符号名可定位）。
 
 ## 1. 目标集口径
 
@@ -145,7 +146,7 @@ flowchart TD
 | `output_format` | 受限块合法性判定（决定有哪些合法块） | `src/ard/core/constraints.py:34`、`:53`、`:226`、`:233`；`src/ard/core/sampling.py:340` |
 | `input_condition` | 受限块合法性判定 | `src/ard/core/constraints.py:35`、`:54`、`:227`、`:234`、`:242-250`；`src/ard/core/sampling.py:343` |
 | `answer_mode` | 受限块合法性判定 | `src/ard/core/constraints.py:36`、`:55`、`:228`、`:235`；`src/ard/core/sampling.py:344` |
-| `visual_domain` | **决定影像态图片目录** `<image_dir>/<visual_domain>/`；进 manifest 分组标签 | `src/ard/domain/image_store.py:120-206`；调用点 `src/ard/pipeline.py:766-806`；分组标签 `src/ard/domain/bank.py:440` |
+| `visual_domain` | **决定影像态图片目录** `<image_dir>/<visual_domain>/`；进 manifest 分组标签 | `src/ard/domain/image_store.py:120-206`；调用点 `src/ard/pipeline.py:764-808`；分组标签 `src/ard/domain/bank.py:440` |
 
 **边界声明（如实记录，不补措辞）**：上述 7 个"仅坐标"轴（6 个受限轴 + `visual_domain`）的取值**不改变 prompt 的文本措辞**；
 `visual_domain` 经图片目录影响**输入图像的内容**（属于内容而非措辞），其余 6 个受限轴只作为**约束求解的输入**

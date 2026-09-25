@@ -3,6 +3,7 @@
 > 职责：定义 ARD 的验收尺子——距离、分位、覆盖读数、ε 敏感带、配对 bootstrap、噪声带、空间声明要求与退化行为，
 > 并写明该尺子的**可分辨性边界**。纯计算实现见 `src/ard/core/coverage.py`；读数组装见 `src/ard/core/acceptance.py`
 > 与 `src/ard/backends/coverage_wiring.py`；产物见 `results/coverage.json` / `coverage.md`。
+> 基线：本页所有 `文件:行` 以提交 `a0f3221` 的树为准（并行开发期，代码行号可能随提交漂移；按符号名可定位）。
 
 ## 1. 距离与分位
 
@@ -85,15 +86,15 @@ flowchart TD
     W --> R
 ```
 
-退化行为（都**显式**、绝不静默，`src/ard/pipeline.py:468-600`）：
+退化行为（都**显式**、绝不静默，`src/ard/pipeline.py:470-600`）：
 
 | 情形 | 行为 |
 |---|---|
-| `coverage.target_set_path` 未配置 | 只产出**结构读数**（计划计数 vs 构造规则，零模型调用），并写 WARNING：`metric readout not measured …`（`src/ard/pipeline.py:489-491`）；manifest 指针 `metric_readout: false`、`q95: null` |
+| `coverage.target_set_path` 未配置 | 只产出**结构读数**（计划计数 vs 构造规则，零模型调用），并写 WARNING：`metric readout not measured …`（`src/ard/pipeline.py:491-493`）；manifest 指针 `metric_readout: false`、`q95: null` |
 | `[coverage.embedding]` 未配置 | 同上：没有可用嵌入器即不做指标读数，不猜 |
-| 目标集缺失/不可解析/计数或维度与配置矛盾 | 在**创建输出目录之前**拒绝整个运行（`src/ard/pipeline.py:468-510`，`CoverageWiringError`），不产生半成品产物 |
-| 嵌入调用失败 | 结构性读数**先已落盘**（`src/ard/pipeline.py:581-588`），失败照常抛出，但不会抹掉零成本的结构报告 |
-| 无同格重复生成数据 | 噪声带写 `unavailable` 并附原因（`src/ard/core/acceptance.py:48-51`；`src/ard/pipeline.py:595-596` 把原因并入 warnings） |
+| 目标集缺失/不可解析/计数或维度与配置矛盾 | 在**创建输出目录之前**拒绝整个运行（`src/ard/pipeline.py:470-512`，`CoverageWiringError`），不产生半成品产物 |
+| 嵌入调用失败 | 结构性读数**先已落盘**（`src/ard/pipeline.py:583-590`），失败照常抛出，但不会抹掉零成本的结构报告 |
+| 无同格重复生成数据 | 噪声带写 `unavailable` 并附原因（`src/ard/core/acceptance.py:48-51`；`src/ard/pipeline.py:597-598` 把原因并入 warnings） |
 
 ## 7. 已知边界：指标层的分辨力上限
 
