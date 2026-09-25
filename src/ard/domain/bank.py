@@ -51,10 +51,12 @@ from ard.domain.append_outcome import AppendOutcome
 
 logger = logging.getLogger(__name__)
 
-# Output-schema version of every record persisted through this module (v3.0.0).
+# Output-schema version of every record persisted through this module.
 # Single source of truth (§1.4): the anchor format's version is written here,
-# once, as a top-level ``schema_version`` field on each record.
-SCHEMA_VERSION = "3.0.0"
+# once, as a top-level ``schema_version`` field on each record.  The v4 format
+# is the 11-axis (text) / 12-axis (image) coordinate set with the
+# restricted-block sampling semantics; no other module writes this literal.
+SCHEMA_VERSION = "4.0.0"
 
 
 # Ids already present per bank file.  The value is ``(fingerprint, ids)`` where
@@ -295,13 +297,14 @@ def count_unique_anchor_ids(path: Path | str) -> int:
 def anchor_to_dict(anchor: GeneratedAnchor) -> dict[str, Any]:
     """Convert a :class:`GeneratedAnchor` to a dict in the unified JSONL format.
 
-    Output format (aligned with graspo + OPD v3.0.0 additions):
+    Output format (graspo-compatible; the extra top-level fields below are the
+    field-level lineage of the OPD v3.0.0 additions):
     ```json
     {
       "id": "anchor_<sha256_hex16>",
       "source": "ard",
       "data_source": "ard_text",
-      "schema_version": "3.0.0",
+      "schema_version": SCHEMA_VERSION,
       "messages": [...],
       "targets": [{
         "id": "primary",

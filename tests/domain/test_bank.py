@@ -79,7 +79,7 @@ def test_anchor_to_dict_reasoning_never_merged_into_content():
     assert output["reasoning"] == reasoning, "the reasoning must not absorb the answer"
 
 
-def test_anchor_to_dict_persists_new_v3_fields():
+def test_anchor_to_dict_persists_top_level_fields():
     """``data_source`` / ``schema_version`` / ``input_generator_model`` land
     as top-level fields on the serialized record."""
     a = _make_anchor(
@@ -91,7 +91,7 @@ def test_anchor_to_dict_persists_new_v3_fields():
     )
     d = anchor_to_dict(a)
     assert d["data_source"] == "ard_multi"
-    assert d["schema_version"] == "3.0.0"
+    assert d["schema_version"] == "4.0.0"
     assert d["input_generator_model"] == "input-model"
     assert d["teacher_id"] == "target"  # untouched sibling key
 
@@ -106,17 +106,17 @@ def test_anchor_to_dict_defaults_data_source_to_ard_text():
     """A text-only anchor defaults to the ``ard_text`` routing key."""
     d = anchor_to_dict(_make_anchor("d"))
     assert d["data_source"] == "ard_text"
-    assert d["schema_version"] == "3.0.0"
+    assert d["schema_version"] == "4.0.0"
 
 
-def test_persisted_record_carries_new_v3_fields(tmp_path):
+def test_persisted_record_carries_top_level_fields(tmp_path):
     """Every record written through the real persistence path carries the new
     top-level fields, readable back from disk."""
     path = tmp_path / "bank.jsonl"
     append_anchor(_make_anchor("e", input_generator_model="pin-model"), path)
     records = read_anchor_bank(path)
     assert records[0]["data_source"] == "ard_text"
-    assert records[0]["schema_version"] == "3.0.0"
+    assert records[0]["schema_version"] == "4.0.0"
     assert records[0]["input_generator_model"] == "pin-model"
 
 
