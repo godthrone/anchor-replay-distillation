@@ -10,15 +10,15 @@ from typing import Any
 
 import pytest
 
+from ard.backends.ontology_loader import load_ontology_v4
 from ard.core.constraints import (
     FREE_AXES,
     RESTRICTED_AXES,
     ConstraintEvaluationError,
     ConstraintEvaluator,
     RestrictedBlock,
-    load_constraint_evaluator,
 )
-from ard.core.ontology import OntologyV4, load_ontology_v4
+from ard.core.ontology import OntologyV4
 
 ONTOLOGY_V4_PATH = Path("ontology/anchor_ontology.v4.json")
 
@@ -304,7 +304,7 @@ def test_incomplete_from_axis_coverage_fails_loudly(tmp_path: Path) -> None:
         ConstraintEvaluator(load_ontology_v4(path))
 
 
-def test_loader_helper_builds_evaluator() -> None:
-    """The convenience loader returns a working evaluator."""
-    evaluator = load_constraint_evaluator(ONTOLOGY_V4_PATH)
+def test_loader_builds_evaluator() -> None:
+    """The facility loader plus the pure evaluator reproduce the block count."""
+    evaluator = ConstraintEvaluator(load_ontology_v4(ONTOLOGY_V4_PATH))
     assert len(evaluator.enumerate_legal_blocks()) == 935

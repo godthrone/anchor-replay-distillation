@@ -6,6 +6,11 @@ contract (the directory the ontology declares, one non-empty file per axis
 value, no silent fallback), and the generation prompt handed to the input
 generator, which must stay byte-identical to the wording that used to be
 hardcoded (WP-S6c).
+
+Reading the wording files is facility work (§1.3), so
+``build_system_prompt_prompt`` comes from :mod:`ard.backends.prompt_loader`; the
+pure contract it feeds (path arithmetic, template validation, rendering) stays
+in :mod:`ard.core.system_prompt` and is tested directly as well.
 """
 
 from __future__ import annotations
@@ -15,14 +20,17 @@ from pathlib import Path
 
 import pytest
 
+from ard.backends.prompt_loader import build_system_prompt_prompt
 from ard.core.ontology import FlatAxisWithDefinitions, OntologyV4
 from ard.core.system_prompt import (
     SYSTEM_PROMPT_NONE,
     SYSTEM_PROMPT_TEMPLATE_DIR,
     SYSTEM_PROMPT_TEMPLATE_FIELDS,
     SystemPromptTemplateError,
-    build_system_prompt_prompt,
+    render_system_prompt_prompt,
+    require_present_mode,
     system_prompt_template_path,
+    validate_system_prompt_template,
 )
 
 # ── Vocabulary: the v4 axis is the single source ────────────────────────────
@@ -193,3 +201,41 @@ def test_generation_prompt_refuses_the_absence_case() -> None:
     with pytest.raises(SystemPromptTemplateError) as excinfo:
         build_system_prompt_prompt({}, SYSTEM_PROMPT_NONE)
     assert "absence case" in str(excinfo.value)
+
+
+# ── The pure half: validation and rendering of already-read text ────────────
+
+
+def test_required_present_mode_rejects_only_the_absence_case() -> None:
+    """The single statement of the absence-case rule accepts every style."""
+    require_present_mode("task_constraint")
+    with pytest.raises(SystemPromptTemplateError, match="absence case"):
+        require_present_mode(SYSTEM_PROMPT_NONE)
+
+
+def test_validate_strips_and_returns_the_body() -> None:
+    """Valid wording text is returned stripped, ready for the renderer."""
+    body = validate_system_prompt_template("\n  Be terse in {language}.  \n", "w.md")
+    assert body == "Be terse in {language}."
+
+
+def test_validate_rejects_empty_and_unknown_placeholders() -> None:
+    """Empty wording and a placeholder outside the declared set are hard errors."""
+    with pytest.raises(SystemPromptTemplateError, match="is empty"):
+        validate_system_prompt_template("   \n", "w.md")
+    with pytest.raises(SystemPromptTemplateError, match="tone"):
+        validate_system_prompt_template("Be {tone}.", "w.md")
+
+
+def test_render_fills_placeholders_from_metadata() -> None:
+    """Rendering is pure: same template plus same metadata, same string."""
+    rendered = render_system_prompt_prompt(
+        {"language": "German"}, "custom_style", "Be terse in {language}."
+    )
+    assert rendered == "Be terse in German."
+
+
+def test_render_refuses_the_absence_case() -> None:
+    """The pure renderer states the absence case too — no wording exists for it."""
+    with pytest.raises(SystemPromptTemplateError, match="absence case"):
+        render_system_prompt_prompt({}, SYSTEM_PROMPT_NONE, "unused {language}")

@@ -14,9 +14,10 @@ import json
 
 import pytest
 
+from ard.backends.ontology_loader import load_ontology_v4
 from ard.config import load_config
 from ard.core.constraints import ConstraintEvaluator, LegalBlockCounts, RestrictedBlock
-from ard.core.ontology import OntologyV4, load_ontology_v4
+from ard.core.ontology import OntologyV4
 from ard.core.sampling import (
     EXPECTED_IMAGE_BLOCKS,
     EXPECTED_KNOWLEDGE_DOMAINS,

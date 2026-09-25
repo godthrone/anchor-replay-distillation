@@ -1,15 +1,18 @@
 """Ontology parsing for ARD anchor generation (v4 schema).
 
-Responsibility: parse and validate ``ontology/anchor_ontology.v4.json`` (12 axes,
-knowledge-domain tree, constraint declarations) into pydantic models and expose
-typed access to axis value sets.  A file that does not match the v4 schema raises
-:class:`OntologySchemaError` naming the offending field, the expectation and the
-received value — it never degrades into an empty result set.
+Responsibility: validate an **already-decoded** ``anchor_ontology.v4.json``
+payload (12 axes, knowledge-domain tree, constraint declarations) into pydantic
+models and expose typed access to axis value sets.  A payload that does not
+match the v4 schema raises :class:`OntologySchemaError` naming the offending
+field, the expectation and the received value — it never degrades into an empty
+result set.
 
-The single loader is :func:`load_ontology_v4`.
+This module is pure computation (§1.3): it never opens a file.  Reading the JSON
+document off disk is the facility half, in
+:func:`ard.backends.ontology_loader.load_ontology_v4`, which decodes the bytes
+and hands the result to the single schema gate :func:`parse_ontology_v4` below.
 """
 
-import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -485,30 +488,22 @@ def _format_validation_error(error: ValidationError) -> list[str]:
     return [_format_problem(item) for item in error.errors()]
 
 
-def load_ontology_v4(path: str | Path) -> OntologyV4:
-    """Load and validate an ontology v4 file.
+def parse_ontology_v4(raw: object, source: str | Path = "<inline>") -> OntologyV4:
+    """Validate an already-decoded ontology v4 payload.
 
     Args:
-        path: Path to ``anchor_ontology.v4.json``.
+        raw: The decoded JSON document (the ``json.loads`` result of a file).
+        source: Label used in error messages only — normally the path the payload
+            came from, so a schema problem names where to look.  Nothing is read
+            from the filesystem here.
 
     Returns:
         The validated :class:`OntologyV4` model.
 
     Raises:
-        FileNotFoundError: If the file does not exist.
-        OntologySchemaError: If the file is not JSON, is not a JSON object, or
-            does not match the v4 schema (missing / extra / wrongly typed field).
+        OntologySchemaError: If *raw* is not a JSON object, or does not match the
+            v4 schema (missing / extra / wrongly typed field).
     """
-    source = Path(path)
-    if not source.is_file():
-        raise FileNotFoundError(f"ontology file not found: {source}")
-    try:
-        raw = json.loads(source.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise OntologySchemaError(
-            source,
-            [f"<json>:{exc.lineno}:{exc.colno}: expected valid JSON (received: {exc.msg})"],
-        ) from exc
     if not isinstance(raw, dict):
         raise OntologySchemaError(
             source,

@@ -47,10 +47,8 @@ from ard.backends.api_client import (
     ChatAPIClient,
     ChatAPIStats,
 )
-from ard.core.system_prompt import (
-    SYSTEM_PROMPT_NONE,
-    build_system_prompt_prompt,
-)
+from ard.backends.prompt_loader import build_system_prompt_prompt
+from ard.core.system_prompt import SYSTEM_PROMPT_NONE
 from ard.core.types import (
     AnchorSpec,
     ChatContentParts,

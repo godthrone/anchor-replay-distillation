@@ -3,18 +3,17 @@
 Responsibility: evaluate the v4 ``constraints`` (allowed-pairs rules R1/R2/R3/
 R4a/R4b and the R5 modality gate) over the six restricted axes, and answer
 "how many legal restricted blocks exist and what are their six-axis
-coordinates".  Pure computation: the only I/O is reading the ontology through
-:mod:`ard.core.ontology`.
+coordinates".  Pure computation over an already-parsed
+:class:`~ard.core.ontology.OntologyV4`: no filesystem, network or subprocess
+access (§1.3).  Reading the ontology file is
+:func:`ard.backends.ontology_loader.load_ontology_v4`.
 """
-
-from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
 from ard.core.ontology import (
     AllowedPairsConstraint,
     OntologyV4,
-    load_ontology_v4,
 )
 from ard.core.types import AxisValuesByAxis, StringPairs
 
@@ -263,11 +262,6 @@ class ConstraintEvaluator:
             ),
             free_axis_product=self.free_axis_product(),
         )
-
-
-def load_constraint_evaluator(path: str | Path) -> ConstraintEvaluator:
-    """Load an ontology v4 file and build its constraint evaluator."""
-    return ConstraintEvaluator(load_ontology_v4(path))
 
 
 def enumerate_legal_blocks(

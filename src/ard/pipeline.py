@@ -27,9 +27,10 @@ from ard.backends.api_client import (
     reasoning_stats as api_client_reasoning_stats,
 )
 from ard.backends.coverage_wiring import TargetSet, build_metric_readout, load_target_set
+from ard.backends.ontology_loader import load_ontology_v4
 from ard.config import ARDConfig, ConfigError, CoverageEmbedding
 from ard.core import acceptance
-from ard.core.ontology import OntologyV4, load_ontology_v4
+from ard.core.ontology import OntologyV4
 from ard.core.quota import allocate_images
 from ard.core.sampling import (
     EXPECTED_TOTAL,

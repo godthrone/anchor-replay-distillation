@@ -2,6 +2,10 @@
 # Responsibility: verify the v4 parser accepts the real ontology and rejects
 # schema violations (missing / extra / mistyped fields, absent and malformed
 # files) with a message naming the field, the expectation and the received value.
+#
+# The file-reading loader is facility work (§1.3) and lives in
+# ``ard.backends.ontology_loader``; the pure schema gate it feeds is
+# ``ard.core.ontology.parse_ontology_v4``.  Both halves are exercised here.
 
 import json
 from pathlib import Path
@@ -9,10 +13,11 @@ from typing import Any
 
 import pytest
 
+from ard.backends.ontology_loader import load_ontology_v4
 from ard.core.ontology import (
     OntologySchemaError,
     OntologyV4,
-    load_ontology_v4,
+    parse_ontology_v4,
 )
 
 ONTOLOGY_V4_PATH = Path("ontology/anchor_ontology.v4.json")
@@ -113,6 +118,28 @@ def test_extra_keys_are_forbidden() -> None:
     """extra="forbid" is on: any undeclared key is a schema error."""
     with pytest.raises(ValueError, match="extra_forbidden|Extra inputs"):
         OntologyV4.model_validate({"version": "4.0.0", "undeclared": 1})
+
+
+# ── The pure schema gate: already-decoded payloads, no file involved ─────────
+
+
+def test_pure_parser_rejects_a_non_object_payload() -> None:
+    """``parse_ontology_v4`` rejects a decoded non-object without touching disk."""
+    with pytest.raises(OntologySchemaError) as excinfo:
+        parse_ontology_v4([1, 2, 3], "inline-payload")
+    assert "expected object" in str(excinfo.value)
+    assert "inline-payload" in str(excinfo.value)
+
+
+def test_pure_parser_names_the_source_and_the_field() -> None:
+    """A schema mismatch names the source label and the offending field."""
+    payload = _raw_v4()
+    del payload["version"]
+    with pytest.raises(OntologySchemaError) as excinfo:
+        parse_ontology_v4(payload, "memory-payload")
+    message = str(excinfo.value)
+    assert "memory-payload" in message
+    assert "version" in message
 
 
 # ── Schema rejection ────────────────────────────────────────────────────────
