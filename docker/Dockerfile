@@ -19,7 +19,14 @@ ARG VERSION=0.0.0
 
 # Layer 1: dependencies
 COPY uv.lock pyproject.toml .python-version README.md LICENSE ./
-RUN --mount=type=cache,target=/root/.cache/uv pip install uv && uv sync --no-install-project --frozen --no-dev
+# uv is the only package manager (§14.2) and the tool that resolves `uv.lock`,
+# so its version is pinned: 0.11.7 generated the lock in this repository and is
+# the version the development environment runs (`uv --version`).  A floating
+# `uv` would let a future release of the resolver decide what `--frozen` means
+# for this lock.  Pinning it is not possible via `uv.lock`, which records the
+# resolution rather than the resolver.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    pip install uv==0.11.7 && uv sync --no-install-project --frozen --no-dev
 
 # Layer 2: source code
 COPY src ./src
