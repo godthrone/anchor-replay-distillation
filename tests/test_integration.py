@@ -925,7 +925,7 @@ class TestManifestGenerationReport:
         assert counters["duplicate_ids"] == 1
         assert counters["backpressure_events"] == 1
         # Zero-valued counters are omitted rather than published as 0, so a
-        # clean aspect of the run adds no noise (see docs/architecture.md §8.2).
+        # clean aspect of the run adds no noise (see docs/architecture.md).
         assert "rejected_invalid_shape" not in counters
         assert counters["abandoned_by_reason"] == {"timeout": 2}
         # The pre-existing fields still describe the bank itself.
