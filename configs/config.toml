@@ -76,6 +76,22 @@ directory = ""
 # anchor data, generation proceeds normally.
 overwrite = false
 
+[images]
+# How an image-modality anchor's picture is found: one subdirectory per
+# visual_domain under the directory passed to --image-dir, i.e.
+#   <image_dir>/<visual_domain>/<image file>
+# (e.g. <image_dir>/animals/sample_01.jpg). Files directly in <image_dir> are
+# NOT used: an image drawn from a flat pool cannot be guaranteed to match the
+# visual_domain coordinate it is attached to, which would mislabel the anchor.
+#
+# A required visual_domain whose subdirectory is missing or holds no supported
+# image is refused by default (the error lists the missing domains, their
+# expected paths and the number of affected anchors). Set the switch below to
+# skip those anchors instead — the artifact then differs from the construction
+# rule, so each skipped anchor is logged as a WARNING and the skipped count and
+# visual domains are declared in manifest.json.
+skip_missing_images = false
+
 [coverage]
 # Acceptance readout of a run, written to <output_dir>/results/coverage.json and
 # coverage.md after generation and before the manifest.

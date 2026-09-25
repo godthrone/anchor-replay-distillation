@@ -22,12 +22,18 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from ard.core.types import AnchorSpec, TurnSpec
 from ard.domain.image_store import (
+    VISUAL_DOMAIN_LAYOUT,
     convert_and_copy_images,
     convert_image,
     copy_images_to_output,
+    domain_directory,
+    list_domain_images,
+    resolve_domain_images,
     sample_images,
     scan_images,
+    select_domain_image,
 )
 
 
@@ -254,3 +260,121 @@ def test_convert_and_copy_images_resume_reuses_skips_force_retranscodes(
     assert (out / "images" / "src_1.jpg").is_file()
     with Image.open(out / "images" / "src_1.jpg") as im:
         assert im.format == "JPEG"
+
+
+# ── per-visual_domain addressing ───────────────────────────────────────────────
+
+
+def _image_spec(anchor_id: str, visual_domain: str | None) -> AnchorSpec:
+    """One minimally valid spec; ``None`` means a text-only coordinate."""
+    meta: dict[str, str] = {"language": "English"}
+    if visual_domain is not None:
+        meta["modality"] = "image"
+        meta["visual_domain"] = visual_domain
+    else:
+        meta["modality"] = "text_only"
+    return AnchorSpec(
+        id=anchor_id,
+        anchor_meta=meta,
+        turns=[TurnSpec(turn_index=0, role="user", is_final=True)],
+    )
+
+
+def test_the_layout_constant_names_the_convention() -> None:
+    assert VISUAL_DOMAIN_LAYOUT == "<image_dir>/<visual_domain>/<image file>"
+
+
+def test_domain_directory_is_the_subdirectory_named_by_the_leaf(tmp_path: Path) -> None:
+    assert domain_directory(tmp_path, "animals") == tmp_path / "animals"
+
+
+def test_list_domain_images_is_sorted_and_ignores_unrelated_files(tmp_path: Path) -> None:
+    domain = tmp_path / "animals"
+    domain.mkdir()
+    _make_png(domain / "b.png")
+    _make_png(domain / "a.png")
+    (domain / "notes.txt").write_text("not an image", encoding="utf-8")
+    nested = domain / "more"
+    nested.mkdir()
+    _make_png(nested / "c.png")
+
+    found = list_domain_images(tmp_path, "animals")
+
+    assert [p.name for p in found] == ["a.png", "b.png"]
+    assert not any("c.png" in p.name for p in found), "nested files are not this domain's"
+
+
+def test_list_domain_images_empty_or_missing_is_empty(tmp_path: Path) -> None:
+    (tmp_path / "plants").mkdir()
+    (tmp_path / "plants" / "readme.md").write_text("x", encoding="utf-8")
+
+    assert list_domain_images(tmp_path, "plants") == []
+    assert list_domain_images(tmp_path, "does_not_exist") == []
+
+
+def test_select_domain_image_is_reproducible_and_seed_dependent(tmp_path: Path) -> None:
+    candidates = []
+    domain = tmp_path / "vehicles"
+    domain.mkdir()
+    for index in range(6):
+        candidates.append(_make_png(domain / f"img_{index}.png", color=index * 10))
+
+    same = select_domain_image(candidates, "vehicles", 42)
+    assert select_domain_image(candidates, "vehicles", 42) == same
+    assert same in candidates
+    picks = {select_domain_image(candidates, "vehicles", seed) for seed in range(32)}
+    assert len(picks) > 1, "the seed must actually steer the pick"
+
+
+def test_select_domain_image_refuses_an_empty_candidate_list(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="no candidate image"):
+        select_domain_image([], "animals", 42)
+
+
+def test_resolve_domain_images_maps_each_leaf_to_its_own_directory(tmp_path: Path) -> None:
+    for domain in ("animals", "plants"):
+        directory = tmp_path / domain
+        directory.mkdir()
+        _make_png(directory / "only.png", color=40)
+
+    specs = [_image_spec("a1", "animals"), _image_spec("t1", None), _image_spec("p1", "plants")]
+
+    resolution = resolve_domain_images(tmp_path, specs, seed=7)
+
+    assert set(resolution.missing) == set()
+    assert resolution.selected["animals"] == tmp_path / "animals" / "only.png"
+    assert resolution.selected["plants"] == tmp_path / "plants" / "only.png"
+
+
+def test_resolve_domain_images_reports_the_affected_anchor_ids(tmp_path: Path) -> None:
+    (tmp_path / "animals").mkdir()
+    _make_png(tmp_path / "animals" / "a.png")
+    specs = [
+        _image_spec("a1", "animals"),
+        _image_spec("v1", "vehicles"),
+        _image_spec("v2", "vehicles"),
+    ]
+
+    resolution = resolve_domain_images(tmp_path, specs, seed=7)
+
+    assert set(resolution.selected) == {"animals"}
+    assert resolution.missing == {"vehicles": ["v1", "v2"]}
+
+
+def test_convert_and_copy_images_places_files_under_the_subdir(tmp_path: Path) -> None:
+    src = _make_png(tmp_path / "src.png")
+    out = tmp_path / "out"
+
+    rel = convert_and_copy_images([src], out, subdir="animals", force=True)
+
+    assert rel == ["images/animals/src.png"]
+    assert (out / "images" / "animals" / "src.png").is_file()
+
+
+def test_copy_images_to_output_places_files_under_the_subdir(tmp_path: Path) -> None:
+    _make_png(tmp_path / "photo.png")
+
+    rel = copy_images_to_output([tmp_path / "photo.png"], tmp_path / "out", subdir="plants")
+
+    assert rel == ["images/plants/photo.png"]
+    assert (tmp_path / "out" / "images" / "plants" / "photo.png").is_file()

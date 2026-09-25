@@ -251,6 +251,28 @@ class OutputConfig(BaseModel):
     overwrite: bool = False
 
 
+class ImageConfig(BaseModel):
+    """``[images]`` — how a run behaves when a visual domain has no image.
+
+    Image-modality anchors resolve their picture under
+    ``<image_dir>/<visual_domain>/`` (see :mod:`ard.domain.image_store`).  A
+    required domain with no usable image is refused **by default**: silently
+    generating those anchors without an image would break the coordinate/content
+    match the addressing exists to guarantee.
+
+    This switch is the §3.3 预授权退路 for that refusal.  It is a config field
+    (not a CLI flag) because turning it on changes the artifact: the skipped
+    anchors are missing from the bank.  When it is true the run logs one
+    WARNING per skipped anchor and declares the count and the affected visual
+    domains in ``manifest.json`` — it is never silent.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    skip_missing_images: bool = False
+    """Skip anchors whose ``visual_domain`` has no image (default: refuse)."""
+
+
 class CoverageEmbeddingConfig(BaseModel):
     """``[coverage.embedding]`` — how to embed the acceptance readout's texts.
 
@@ -395,6 +417,7 @@ class ARDConfig(BaseModel):
     generation: GenerationConfig = Field(default_factory=GenerationConfig)
     ontology: OntologyConfig = Field(default_factory=OntologyConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
+    images: ImageConfig = Field(default_factory=ImageConfig)
     coverage: CoverageConfig = Field(default_factory=CoverageConfig)
 
 

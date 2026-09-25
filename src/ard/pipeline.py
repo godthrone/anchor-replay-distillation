@@ -47,10 +47,13 @@ from ard.domain.bank import (
 )
 from ard.domain.image_store import (
     CONVERTABLE_EXTENSIONS,
+    SUPPORTED_EXTENSIONS,
+    VISUAL_DOMAIN_LAYOUT,
+    DomainImageResolution,
     convert_and_copy_images,
     copy_images_to_output,
-    sample_images,
-    scan_images,
+    domain_directory,
+    resolve_domain_images,
 )
 from ard.domain.text_anchor import AnchorGenerationStats, generate_text_anchors
 from ard.logging import configure_file_logging
@@ -325,6 +328,102 @@ def _declare_smoke(manifest: dict[str, Any], *, plan_size: int, output_dir: Path
     }
 
 
+def _missing_image_message(
+    image_root: Path,
+    resolution: DomainImageResolution,
+    planned: int,
+    extensions: set[str],
+) -> str:
+    """The refusal message for a plan whose visual domains have no images.
+
+    Names **every** missing domain, its expected directory and how many anchors
+    it affects (§2.3: a boundary rejection must be actionable, not a traceback
+    from somewhere inside the copy loop), plus the sample count the refusal
+    applies to — one call, one fix.
+    """
+    missing = resolution.missing
+    affected = sum(len(anchor_ids) for anchor_ids in missing.values())
+    required = len(resolution.selected) + len(missing)
+    listed = "\n".join(
+        f"  - {domain}: expected {domain_directory(image_root, domain)} "
+        f"(affects {len(missing[domain])} anchor(s))"
+        for domain in sorted(missing)
+    )
+    allowed = ", ".join(sorted(extensions))
+    return (
+        f"image directory {image_root} has no usable image for {len(missing)} of the "
+        f"{required} visual_domain(s) this plan requires.\n"
+        f"Expected layout: {VISUAL_DOMAIN_LAYOUT} — one subdirectory per visual_domain "
+        f"holding at least one image ({allowed}); files directly in {image_root} "
+        f"are not used.\n"
+        f"{listed}\n"
+        f"Total affected anchors: {affected} of {planned} planned sample(s) (each is "
+        f"labelled with the missing visual_domain and cannot be given an image from "
+        f"another domain).\n"
+        f"Provide the missing image(s), or set [images] skip_missing_images = true to "
+        f"skip those {affected} anchor(s) — each is then logged as a WARNING and the "
+        f"skipped count and domains are declared in manifest.json."
+    )
+
+
+def _declare_images(
+    manifest: dict[str, Any],
+    *,
+    image_dir: str,
+    config: ARDConfig,
+    resolution: DomainImageResolution | None,
+    skipped: dict[str, list[str]],
+) -> None:
+    """Declare the run's image addressing and any skipped anchors (§3.2/§3.3).
+
+    A dataset with anchors missing is a different artifact from the one the
+    construction rule describes, so the difference is machine-readable: the
+    skipped count and the affected ``visual_domain`` values travel with the
+    manifest, where a consumer reads them without parsing logs.
+    """
+    manifest["images"] = {
+        "image_dir": str(Path(image_dir).resolve()),
+        "addressing": VISUAL_DOMAIN_LAYOUT,
+        "skip_missing_images": config.images.skip_missing_images,
+        "resolved_visual_domains": sorted(resolution.selected) if resolution else [],
+        "skipped_anchor_count": sum(len(anchor_ids) for anchor_ids in skipped.values()),
+        "skipped_visual_domains": sorted(skipped),
+    }
+
+
+def _assign_images_by_domain(
+    specs: list[AnchorSpec],
+    rel_by_domain: dict[str, str],
+    output_dir: Path,
+    rng: random.Random,
+) -> None:
+    """Give every image-modality spec the image of its own ``visual_domain``.
+
+    One domain = one group; :func:`ard.core.quota.allocate_images` is reused per
+    group so the turn-filling rule (earliest eligible ``user`` turn, at most
+    :data:`IMAGES_PER_ANCHOR` images) keeps a single implementation.  Text-only
+    specs are stamped ``has_image=False`` and never receive an image: their
+    coordinate names no visual domain, so an image would be the same
+    coordinate/content mismatch the addressing exists to prevent.
+    """
+    groups: dict[str, list[AnchorSpec]] = {}
+    for spec in specs:
+        domain = spec.anchor_meta.get("visual_domain")
+        if isinstance(domain, str) and domain in rel_by_domain:
+            groups.setdefault(domain, []).append(spec)
+        else:
+            spec.anchor_meta["has_image"] = False
+            spec.anchor_meta["image_count"] = 0
+    for domain, group in groups.items():
+        allocate_images(group, [rel_by_domain[domain]], IMAGES_PER_ANCHOR, rng)
+
+    # Resolve image paths relative to output_dir for base64 encoding.
+    for spec in specs:
+        for turn in spec.turns:
+            if turn.image_path:
+                turn.image_path = str(output_dir / turn.image_path)
+
+
 def sample_specs(config: ARDConfig, *, scale: PlanScale | None = None) -> list[AnchorSpec]:
     """Build the run's anchor plan from the v4 ontology (the production seam).
 
@@ -527,8 +626,15 @@ def run(
 
     Args:
         config: Validated ARD configuration.
-        image_dir: Optional path to image directory. If provided, multimodal
-            anchors are generated alongside text anchors.
+        image_dir: Optional path to image directory. If provided, image-modality
+            anchors resolve their picture under ``<image_dir>/<visual_domain>/``
+            (see :mod:`ard.domain.image_store`): the image is addressed by the
+            anchor's own coordinate instead of being sampled from a flat pool.
+            A required ``visual_domain`` whose directory is missing or holds no
+            supported image is refused — naming the missing domains, their
+            expected paths and the affected anchor count — unless
+            ``[images] skip_missing_images`` is true (then those anchors are
+            skipped, WARNING-logged and declared in ``manifest.json``).
         no_convert: If ``True``, skip image format conversion — only
             :data:`ard.domain.image_store.SUPPORTED_EXTENSIONS` are
             accepted and images are copied as-is.  The default
@@ -554,10 +660,12 @@ def run(
 
     Raises:
         ConfigError: If a required LLM endpoint field (``api_base`` /
-            ``model_name``) is unset, or the acceptance phase is configured
-            without a usable embedder.  Both are checked before the output
-            directory is created, so a refused config leaves no side effect
-            behind (§2.3).
+            ``model_name``) is unset, if the acceptance phase is configured
+            without a usable embedder, or if an image-modality anchor's
+            ``visual_domain`` has no image under ``--image-dir`` while
+            ``[images] skip_missing_images`` is false.  All are checked before
+            the output directory is created, so a refused run leaves no side
+            effect behind (§2.3).
         CoverageWiringError: If ``coverage.target_set_path`` names a file that
             is missing, unreadable, unparsable, empty, or whose declared count
             / dimension contradicts the file or the config — also before any
@@ -602,35 +710,7 @@ def run(
     # the run paid for every anchor costs the run (§2.3).
     coverage_inputs = _prepare_coverage(config)
 
-    # ── Output directory ──────────────────────────────────────────────────
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    output_dir = _resolve_run_directory(config, timestamp=timestamp, smoke=smoke)
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # ── File logging (must happen after output_dir exists) ──────────────
-    configure_file_logging(output_dir)
-
-    output_path = output_dir / "anchor_bank.jsonl"
-
-    # ── Overwrite / checkpoint-resume ──────────────────────────────────────
-    if output_path.exists() and config.output.overwrite:
-        output_path.unlink()
-        logger.info("Overwrite mode: cleared existing anchor bank at %s", output_path)
-
-    # Backup merged config to output directory for reproducibility.
-    # Credentials are masked first (§2.3 — the output directory is a boundary
-    # users share); the same redacted dict feeds the manifest's `config`
-    # section below, so both sinks are covered by this single definition.
-    config_info = _redact_secrets(config.model_dump(mode="json"))
-    config_json_path = output_dir / "config.json"
-    config_json_path.write_text(
-        json.dumps(config_info, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    logger.info("Merged config snapshot written to %s", config_json_path)
-
-    # ── Plan (v4 construction rule) ────────────────────────────────────────
+    # ── Plan (v4 construction rule) — built before any side effect ──────────
     # v4 only: the parsing layer refuses a schema it cannot read, so a v3 file
     # (or a damaged one) stops the run here instead of silently sampling 0
     # anchors further down (§2.3 边界校验即防呆).  ``sample_specs`` loads it.
@@ -640,6 +720,11 @@ def run(
     # Slicing the *tail* keeps resume append-only — plan order is deterministic,
     # so the first N entries are exactly the N anchors a previous run wrote
     # first.
+    #
+    # It is built *before* the output directory exists so the image-addressing
+    # check below runs on it and can still refuse before any side effect: a run
+    # that cannot put a matching image under an image-modality anchor must fail
+    # without leaving an empty output directory (or a config snapshot) behind.
     # The consumers below (image allocation, the generator) read the same
     # ``AnchorGenerationConfig`` the plan builder builds; this one is for the
     # generator's concurrency and the image-allocation rng.
@@ -662,24 +747,142 @@ def run(
             SMOKE_TEXT_BLOCKS,
             SMOKE_IMAGE_BLOCKS,
         )
-    existing_count = count_existing_anchors(output_path)
+
+    # ── Output paths (still no side effect) + resume arithmetic ────────────
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    output_dir = _resolve_run_directory(config, timestamp=timestamp, smoke=smoke)
+    output_path = output_dir / "anchor_bank.jsonl"
+
+    # Overwrite is *decided* here but performed only after every boundary check
+    # has passed: an unusable image directory must not destroy the previous
+    # bank.  Opting into overwrite means "replaceable by a run that succeeds",
+    # not "delete first and find out later" (§3.3 预授权退路).
+    overwrite_existing = config.output.overwrite and output_path.exists()
+    existing_count = 0 if overwrite_existing else count_existing_anchors(output_path)
     remaining = target_count - existing_count
 
-    if remaining <= 0:
-        logger.info(
-            "Already have %d anchors (plan: %d), skipping generation.",
-            existing_count,
-            target_count,
+    # ── Image addressing boundary check (§2.3, before the output dir) ──────
+    # Every image-modality anchor resolves its picture under
+    # ``<image_dir>/<visual_domain>/``.  A required domain with no usable image
+    # is refused here — naming the missing domains, their expected paths and how
+    # many anchors they affect — unless the user explicitly opted into skipping
+    # those anchors ([images] skip_missing_images = true, §3.3 预授权退路).
+    # Only the anchors still to be generated are checked: a completed bank needs
+    # no image lookup at all.
+    pending_specs = plan[existing_count:]
+    image_extensions = SUPPORTED_EXTENSIONS if no_convert else CONVERTABLE_EXTENSIONS
+    image_resolution: DomainImageResolution | None = None
+    skipped_domains: dict[str, list[str]] = {}
+    if image_dir is not None and pending_specs:
+        image_root = Path(image_dir)
+        image_specs = sum(
+            1 for spec in pending_specs if isinstance(spec.anchor_meta.get("visual_domain"), str)
         )
+        if image_specs and not image_root.is_dir():
+            raise ConfigError(
+                f"image directory not found: {image_root} — it is required for the "
+                f"{image_specs} image-modality anchor(s) this run would generate. "
+                f"Point --image-dir at an existing directory laid out as "
+                f"{VISUAL_DOMAIN_LAYOUT}."
+            )
+        image_resolution = resolve_domain_images(
+            image_root,
+            pending_specs,
+            seed=gen_config.seed,
+            extensions=image_extensions,
+        )
+        if image_resolution.missing and not config.images.skip_missing_images:
+            raise ConfigError(
+                _missing_image_message(
+                    image_root,
+                    image_resolution,
+                    len(pending_specs),
+                    image_extensions,
+                )
+            )
+        skipped_domains = image_resolution.missing
+        if skipped_domains:
+            available = set(image_resolution.selected)
+            pending_specs = [
+                spec
+                for spec in pending_specs
+                if not isinstance(spec.anchor_meta.get("visual_domain"), str)
+                or spec.anchor_meta["visual_domain"] in available
+            ]
+
+    # The plan this run actually owns: skipped anchors are removed, so both the
+    # resume arithmetic and the acceptance structure readout stay consistent
+    # with what is on disk instead of claiming a rule-conformant plan.
+    specs = pending_specs
+    effective_plan = plan[:existing_count] + specs
+
+    # ── Output directory (first side effect) ───────────────────────────────
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── File logging (must happen after output_dir exists) ──────────────
+    configure_file_logging(output_dir)
+
+    # ── Overwrite / checkpoint-resume ──────────────────────────────────────
+    if overwrite_existing:
+        output_path.unlink()
+        logger.info("Overwrite mode: cleared existing anchor bank at %s", output_path)
+
+    # Backup merged config to output directory for reproducibility.
+    # Credentials are masked first (§2.3 — the output directory is a boundary
+    # users share); the same redacted dict feeds the manifest's `config`
+    # section below, so both sinks are covered by this single definition.
+    config_info = _redact_secrets(config.model_dump(mode="json"))
+    config_json_path = output_dir / "config.json"
+    config_json_path.write_text(
+        json.dumps(config_info, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    logger.info("Merged config snapshot written to %s", config_json_path)
+
+    # Skipping is a §3.2 透明退化: one WARNING per dropped anchor (which domain,
+    # which sample) — declared again, in aggregate, in manifest.json below.
+    if image_dir is not None:
+        for domain in sorted(skipped_domains):
+            expected = domain_directory(image_dir, domain)
+            for anchor_id in skipped_domains[domain]:
+                logger.warning(
+                    "Skipping anchor %s: visual_domain %r has no usable image under %s "
+                    "([images] skip_missing_images = true).",
+                    anchor_id,
+                    domain,
+                    expected,
+                )
+
+    if not specs:
+        if remaining > 0:
+            logger.warning(
+                "Every remaining anchor (%d) was skipped because its visual_domain "
+                "has no image; nothing to generate.",
+                remaining,
+            )
+        else:
+            logger.info(
+                "Already have %d anchors (plan: %d), skipping generation.",
+                existing_count,
+                target_count,
+            )
         all_records = read_anchor_bank(output_path)
         manifest = build_manifest_from_records(all_records, output_dir, config_info)
         if smoke:
             _declare_smoke(manifest, plan_size=target_count, output_dir=output_dir)
+        if image_dir is not None:
+            _declare_images(
+                manifest,
+                image_dir=image_dir,
+                config=config,
+                resolution=image_resolution,
+                skipped=skipped_domains,
+            )
         # No generation happened, so there are no run counters to report: the
         # previous run's manifest is left as it is rather than overwritten with
         # a clean-looking one (§3.2 — a missing field must not read as "healthy").
         acceptance_pointer = _run_acceptance(
-            config, coverage_inputs, plan, all_records, output_path
+            config, coverage_inputs, effective_plan, all_records, output_path
         )
         if acceptance_pointer is not None:
             manifest["acceptance"] = acceptance_pointer
@@ -691,10 +894,9 @@ def run(
     logger.info(
         "Found %d existing anchors, generating %d more (plan: %d)...",
         existing_count,
-        remaining,
+        len(specs),
         target_count,
     )
-    specs = plan[existing_count:]
 
     # ── API clients ───────────────────────────────────────────────────────
     input_client = ChatAPIClient(
@@ -746,46 +948,28 @@ def run(
     )
 
     # ── Generate anchors (unified flow) ───────────────────────────────────
-    # The plan was sampled above; Step 2 only augments it.
+    # The plan was sampled and the images were resolved above.
     #
-    # Step 2: If image_dir is provided, scan, sample, convert/copy, and allocate images
-    if image_dir:
-        if no_convert:
-            images = scan_images(image_dir, recursive=True)
-            if images:
-                sampled = sample_images(images, 100, seed=gen_config.seed)
-                rel_paths = copy_images_to_output(sampled, output_dir)
-                specs = allocate_images(
-                    specs, rel_paths, IMAGES_PER_ANCHOR, rng
-                )
-                # Resolve image paths relative to output_dir for base64 encoding
-                for spec in specs:
-                    for turn in spec.turns:
-                        if turn.image_path:
-                            turn.image_path = str(output_dir / turn.image_path)
+    # Step 2: place the selected image of every required visual_domain into the
+    # output tree and assign it to the anchors that carry that coordinate.  The
+    # files were already validated (existence, missing-domain refusal) before
+    # the output directory existed; this step only copies bytes.
+    if image_dir is not None and image_resolution is not None and specs:
+        rel_by_domain: dict[str, str] = {}
+        for domain, source in image_resolution.selected.items():
+            if no_convert:
+                placed = copy_images_to_output([source], output_dir, subdir=domain)
             else:
-                logger.warning(
-                    "No images found in %s. All anchors will be pure text.",
-                    image_dir,
+                placed = convert_and_copy_images([source], output_dir, subdir=domain)
+            if not placed:
+                raise ConfigError(
+                    f"image {source} for visual_domain {domain!r} could not be "
+                    f"converted/copied into {output_dir / 'images' / domain}. "
+                    f"Replace it with a readable image, or remove the domain's "
+                    f"directory to be told it is missing."
                 )
-        else:
-            images = scan_images(image_dir, recursive=True, extensions=CONVERTABLE_EXTENSIONS)
-            if images:
-                sampled = sample_images(images, 100, seed=gen_config.seed)
-                rel_paths = convert_and_copy_images(sampled, output_dir)
-                specs = allocate_images(
-                    specs, rel_paths, IMAGES_PER_ANCHOR, rng
-                )
-                # Resolve image paths relative to output_dir for base64 encoding
-                for spec in specs:
-                    for turn in spec.turns:
-                        if turn.image_path:
-                            turn.image_path = str(output_dir / turn.image_path)
-            else:
-                logger.warning(
-                    "No images found in %s. All anchors will be pure text.",
-                    image_dir,
-                )
+            rel_by_domain[domain] = placed[0]
+        _assign_images_by_domain(specs, rel_by_domain, output_dir, rng)
 
     # Step 3: Generate all anchors via the unified generator
     #
@@ -824,11 +1008,21 @@ def run(
         stats=generation_stats.to_manifest_dict(),
         failures=reasoning_delta,
     )
-    acceptance_pointer = _run_acceptance(config, coverage_inputs, plan, all_records, output_path)
+    acceptance_pointer = _run_acceptance(
+        config, coverage_inputs, effective_plan, all_records, output_path
+    )
     if acceptance_pointer is not None:
         manifest["acceptance"] = acceptance_pointer
     if smoke:
         _declare_smoke(manifest, plan_size=target_count, output_dir=output_dir)
+    if image_dir is not None:
+        _declare_images(
+            manifest,
+            image_dir=image_dir,
+            config=config,
+            resolution=image_resolution,
+            skipped=skipped_domains,
+        )
     write_manifest(manifest, output_dir / "manifest.json")
 
     total = len(all_records)

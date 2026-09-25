@@ -80,6 +80,13 @@ directory = ""
 # Whether to overwrite existing output directory
 overwrite = false
 
+[images]
+# Image addressing convention: <image_dir>/<visual_domain>/<image file>, where
+# <image_dir> comes from --image-dir. A missing/empty domain directory is
+# refused by default; set this to true to skip those anchors (logged as a
+# WARNING and declared in manifest.json), never silently.
+# skip_missing_images = false
+
 [coverage]
 # Whether to run the acceptance phase (structure readout + optional metric
 # readout). Default: true.
