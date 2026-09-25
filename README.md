@@ -182,7 +182,7 @@ what landed in `outputs/<run>/images`, so the project's engineering rule that **
 describes one artifact** puts that decision in the config: a run archived as `config.toml` must
 reproduce the image bytes as well as the anchors. The flag is deliberately **not** kept as a
 compatibility alias — a CLI flag and a config field for the same decision would be two sources
-of truth. Passing `--no-convert` before is the same as setting `convert = false` now.
+of truth. The behaviour the old flag asked for is `convert = false` today.
 
 The archive is itself a valid `--config`: `python -m ard --config outputs/<run>/config.toml
 --override config.override.toml` re-runs the same configuration with your credentials supplied

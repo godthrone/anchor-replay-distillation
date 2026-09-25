@@ -161,7 +161,7 @@ uv run python -m ard --config configs/config.toml --smoke --image-dir examples/i
 新增 `[images] convert`，并删除 `--no-convert` CLI 参数。该参数决定 `outputs/<run>/images`
 里落盘的内容，按项目"一份 config 描述一份产物"的工程规则，这个决定必须放进 config：留档的
 `config.toml` 必须能同时复现图片字节与锚点。旧参数**不保留**为兼容别名——同一决策同时存在 CLI
-参数与 config 字段就是双真相源。过去加 `--no-convert` 等价于现在设 `convert = false`。
+参数与 config 字段就是双真相源。旧参数想要的行为今天写作 `convert = false`。
 
 留档文件本身就是合法的 `--config`：`python -m ard --config outputs/<run>/config.toml
 --override config.override.toml` 即可用同一份配置重跑，凭证由覆写文件提供。
