@@ -19,7 +19,8 @@ class ConfigError(ValueError):
 
     Raised where the value is *first* consumed — config validation or the start
     of a run — and never after a side effect has been performed, so an unusable
-    config cannot leave a half-built output directory behind (§2.3 边界校验即防呆).
+    config cannot leave a half-built output directory behind (§2.3 boundary
+    validation).
     Subclasses :class:`ValueError` because that is what a caller supplying a bad
     config value would expect; the CLI catches it explicitly to print the
     message instead of a traceback.
@@ -33,7 +34,7 @@ class LLMEndpoint(BaseModel):
     the pipeline cannot run without.  Downstream code therefore sees plain
     ``str`` instead of ``str | None``: "this might be unset" is refused once, at
     the boundary, rather than re-checked (or silently assumed away) at every
-    use site (§2.1 契约即防呆).
+    use site (§2.1 contract as fail-safe).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -182,8 +183,8 @@ class GenerationConfig(BaseModel):
     # system random source; an explicit int pins that run's sampling order.
     seed: int | None = None
     concurrency: int = 4
-    backpressure_threshold: int = 3  # 连续超时触发冷却的阈值
-    backpressure_cooldown: float = 60.0  # 冷却暂停秒数
+    backpressure_threshold: int = 3  # consecutive timeouts that trigger the cooldown
+    backpressure_cooldown: float = 60.0  # cooldown pause, in seconds
 
     @model_validator(mode="after")
     def _resolve_seed(self) -> GenerationConfig:
@@ -248,7 +249,7 @@ class ImageConfig(BaseModel):
     generating those anchors without an image would break the coordinate/content
     match the addressing exists to guarantee.
 
-    This switch is the §3.3 预授权退路 for that refusal.  It is a config field
+    This switch is the §3.3 pre-authorised fallback for that refusal.  It is a config field
     (not a CLI flag) because turning it on changes the artifact: the skipped
     anchors are missing from the bank.  When it is true the run logs one
     WARNING per skipped anchor and declares the count and the affected visual
@@ -314,7 +315,7 @@ class CoverageEmbedding(BaseModel):
     :meth:`CoverageConfig.resolved_embedding` builds this after checking the
     fields the metric readout cannot run without, so the wiring layer sees plain
     ``str`` / ``int`` instead of re-testing ``None`` at the client call site
-    (§2.1 契约即防呆).
+    (§2.1 contract as fail-safe).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -358,7 +359,7 @@ class CoverageConfig(BaseModel):
         Raises:
             ConfigError: If a target set is configured but ``api_base`` /
                 ``model`` / ``dimension`` is unset, or ``normalize`` is false.
-                Raised at config load (§7.2 加载即校验), before the pipeline
+                Raised at config load (§7.2 validate on load), before the pipeline
                 creates its output directory.
         """
         if not self.enabled or self.target_set_path is None:
@@ -512,7 +513,7 @@ def load_config(
     # 4. Validate
     try:
         config = ARDConfig.model_validate(merged_dict)
-        # §7.2 加载即校验: a configured acceptance metric readout without a usable
+        # §7.2 validate on load: a configured acceptance metric readout without a usable
         # embedder is refused here — at load, not in the middle of a run whose
         # anchors have already been generated.
         config.coverage.resolved_embedding()

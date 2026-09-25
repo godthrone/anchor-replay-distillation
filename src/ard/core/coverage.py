@@ -5,7 +5,7 @@ same space as L2-normalised vectors, distance = ``1 - cos``) into the ARD v4
 acceptance readouts listed below.  Pure computation: numpy + pydantic only — no
 file, network, model, endpoint or other ``ard`` module is touched.
 
-The 口径 is fixed by the project and is not re-derived here.  With
+The measurement definition is fixed by the project and is not re-derived here.  With
 ``d(x) = min_{a in A} 1 - cos(x, a)`` over every target point ``x in T``:
 
 * ``q95``  = ``percentile(d, 95)``, Hyndman–Fan **type-7** (numpy ``linear``).
@@ -29,13 +29,13 @@ from typing import Final, Literal
 import numpy as np
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-#: Hyndman–Fan type-7 quantile, the project-wide 分位 definition.
+#: Hyndman–Fan type-7 quantile, the project-wide quantile definition.
 PERCENTILE_METHOD: Final[Literal["linear"]] = "linear"
 #: Quantile levels reported for the nearest-anchor distance sample.
 QUANTILE_LEVELS: tuple[float, float, float] = (50.0, 90.0, 95.0)
 #: ε sensitivity band scale factors applied to the nominal ε.
 EPSILON_SCALE_FACTORS: tuple[float, float, float] = (0.95, 1.00, 1.05)
-#: Default number of paired bootstrap resamples (口径: B = 2000).
+#: Default number of paired bootstrap resamples (definition: B = 2000).
 DEFAULT_BOOTSTRAP_RESAMPLES = 2000
 #: Default bootstrap confidence level.
 DEFAULT_CONFIDENCE_LEVEL = 0.95
@@ -488,7 +488,7 @@ def paired_bootstrap_q95_ci(
     Args:
         arm_a: per-target nearest-anchor distances of the minuend arm.
         arm_b: per-target nearest-anchor distances of the subtrahend arm.
-        n_resamples: bootstrap resamples ``B`` (口径 default 2000), ``>= 1``.
+        n_resamples: bootstrap resamples ``B`` (definition default 2000), ``>= 1``.
         confidence_level: interval coverage in ``(0, 1)``.
         seed: seed of ``numpy.random.default_rng``; same seed and same numpy
             version reproduce the same CI.
