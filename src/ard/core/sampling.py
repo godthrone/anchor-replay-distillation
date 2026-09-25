@@ -16,6 +16,15 @@ Two rules are absolute here:
   coordinate is accepted, and a mismatch raises :class:`SamplingError` instead
   of silently emitting a shorter (or longer) plan (§2.3 边界校验即防呆).
 
+Turn counts come from the ontology and from nothing else
+(``conversation_type.value_attributes.turns``): there is no configuration knob
+for them.  The ontology leaves exactly one value open — ``tool_assisted`` and
+``source_review`` declare ``turns: "multi"`` with no numeric bound — so
+:data:`MULTI_TURN_DEFAULT` fixes that one number, at the largest count the
+ontology itself states (``constraint_update = 4``).  That is an **ontology gap,
+not a design choice**: the constant is the single place to change, and
+:func:`_spec_turns` refuses to run if the ontology ever declares something larger.
+
 Pure computation: the only I/O is reading the ontology through
 :mod:`ard.core.ontology`.
 """
