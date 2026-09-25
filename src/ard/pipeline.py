@@ -1071,6 +1071,7 @@ def run(
 
     # ── Build manifest from ALL anchors (existing + new) ──────────────────
     all_records = read_anchor_bank(output_path)
+    _prune_abandoned_images(specs, output_dir, all_records)
     manifest = build_manifest_from_records(all_records, output_dir, config_info)
     # Publish the run's failures next to the anchors that survived, so a short
     # bank can never be mistaken for a healthy one (§3.2).
@@ -1105,3 +1106,74 @@ def run(
         total - existing_count,
     )
     return output_dir
+
+
+def _prune_abandoned_images(
+    specs: list[AnchorSpec],
+    output_dir: Path,
+    records: JsonObjectList,
+) -> int:
+    """Delete the pictures of anchors that were ultimately abandoned.
+
+    The copy of a run's images happens *before* generation
+    (:func:`_assign_images_by_domain`), one file per ``visual_domain`` shared by
+    every anchor of that domain.  An anchor that is then abandoned — generation
+    failed, retries exhausted — leaves its picture in ``<output_dir>/images/``
+    with nothing in ``anchor_bank.jsonl`` pointing at it, so the artifact's
+    image count would no longer match its anchor count.  Reconcile the two here.
+
+    A file is removed only when **no** surviving record references it: a picture
+    shared by a domain's other anchors is therefore never touched.  Only files
+    this run placed are considered, because the map is built from the specs'
+    own ``image_path`` — and every one of those was stamped with *output_dir*.
+
+    A failed unlink is a WARNING, never a run failure (§3.2 透明退路: announce
+    the degradation, do not crash the run over housekeeping).
+
+    Args:
+        specs: The run's pending specs, after image assignment.
+        output_dir: The run directory; the specs' image paths are relative to it.
+        records: The anchors actually present in the bank after generation.
+
+    Returns:
+        How many files were removed.
+    """
+    usage: dict[str, set[str]] = {}
+    for spec in specs:
+        for turn in spec.turns:
+            if not turn.image_path:
+                continue
+            try:
+                rel = Path(turn.image_path).relative_to(output_dir).as_posix()
+            except ValueError:  # pragma: no cover - not addressed inside this run
+                continue
+            usage.setdefault(rel, set()).add(spec.id)
+    if not usage:
+        return 0
+
+    kept = {record["id"] for record in records if isinstance(record.get("id"), str)}
+    removed = 0
+    for rel, owners in sorted(usage.items()):
+        if owners & kept:
+            continue  # a surviving anchor of the same domain still uses this file
+        try:
+            (output_dir / rel).unlink()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            logger.warning(
+                "Could not remove image %s of abandoned anchor(s) %s: %s. "
+                "It is no longer referenced; delete it by hand if the run "
+                "directory must match anchor_bank.jsonl.",
+                rel,
+                ", ".join(sorted(owners)),
+                exc,
+            )
+            continue
+        removed += 1
+        logger.info(
+            "Removed image %s: every anchor that referenced it was abandoned (%s).",
+            rel,
+            ", ".join(sorted(owners)),
+        )
+    return removed

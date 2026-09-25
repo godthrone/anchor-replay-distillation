@@ -354,3 +354,103 @@ def test_resuming_a_skip_run_stays_declared_and_writes_no_new_record(
         "Every remaining anchor (1) was skipped" in record.getMessage() for record in caplog.records
     )
     assert _manifest(output_dir)["images"]["skipped_visual_domains"] == ["vehicles"]
+
+
+# ── 4. an abandoned anchor leaves no picture behind ─────────────────────────
+
+
+class _AbandoningGeneratorSpy(_GeneratorSpy):
+    """Writes every spec except *abandoned*, then declares those dropped.
+
+    This is the shape a real failed run produces: the abandoned anchors never
+    reach ``anchor_bank.jsonl``, but their pictures were already copied into
+    ``output/images/`` before generation started.
+    """
+
+    def __init__(self, abandoned: set[str]) -> None:
+        super().__init__()
+        self.abandoned = set(abandoned)
+        self.seen_plan: StringList = []
+
+    def __call__(self, **kwargs: object) -> list[GeneratedAnchor]:
+        specs = kwargs["specs"]
+        stats = kwargs["stats"]
+        assert isinstance(specs, list)
+        assert isinstance(stats, AnchorGenerationStats)
+        self.seen_plan = [spec.id for spec in specs if isinstance(spec, AnchorSpec)]
+        kept = [
+            spec for spec in specs if isinstance(spec, AnchorSpec) and spec.id not in self.abandoned
+        ]
+        written = super().__call__(**{**kwargs, "specs": kept})
+        stats.abandoned_total = len(self.abandoned)
+        stats.abandoned_by_reason = {"transport_error": len(self.abandoned)}
+        return written
+
+
+def test_an_abandoned_anchor_has_its_image_removed_but_shared_files_survive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A dropped anchor leaves no picture; a picture shared by survivors stays."""
+    from ard import pipeline
+    from ard.pipeline import run
+
+    images = _image_dir(tmp_path, {"animals": 1, "plants": 1})
+    # The one `animals` picture is shared by a1 and a2; `plants` has a single
+    # anchor and that anchor is the one the run abandons.
+    specs = [_spec("a1", "animals"), _spec("a2", "animals"), _spec("p1", "plants")]
+    output_dir, _spy, plan = _rig(tmp_path, monkeypatch, specs)
+    spy = _AbandoningGeneratorSpy({"p1"})
+    monkeypatch.setattr(pipeline, "generate_text_anchors", spy)
+
+    with caplog.at_level("INFO"):
+        run(load_config(tmp_path / "config.toml"), image_dir=str(images), generate_specs=plan)
+
+    assert spy.seen_plan == ["a1", "a2", "p1"]
+
+    survivors = sorted(p.relative_to(output_dir).as_posix() for p in output_dir.rglob("*.png"))
+    assert survivors == ["images/animals/img_0.png"], (
+        "only the picture still referenced by a surviving anchor may remain, "
+        f"and it must not be the abandoned one's: {survivors}"
+    )
+    assert not list((output_dir / "images" / "plants").glob("*")), (
+        "the abandoned anchor's picture must be removed from the artifact"
+    )
+    assert "Removed image images/plants/img_0.png" in caplog.text
+
+    written = {
+        json.loads(line)["id"]
+        for line in (output_dir / "anchor_bank.jsonl").read_text(encoding="utf-8").splitlines()
+    }
+    assert written == {"a1", "a2"}, "the artifact itself is unaffected by the cleanup"
+
+
+def test_a_failed_image_cleanup_is_a_warning_not_a_run_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Housekeeping must never take the run down (§3.2: announce, do not crash)."""
+    from ard import pipeline
+    from ard.pipeline import run
+
+    images = _image_dir(tmp_path, {"animals": 1, "plants": 1})
+    specs = [_spec("a1", "animals"), _spec("p1", "plants")]
+    output_dir, _spy, plan = _rig(tmp_path, monkeypatch, specs)
+    monkeypatch.setattr(pipeline, "generate_text_anchors", _AbandoningGeneratorSpy({"p1"}))
+
+    real_unlink = Path.unlink
+
+    def _refuse_plants(self: Path, missing_ok: bool = False) -> None:
+        if "plants" in self.as_posix():
+            raise OSError("simulated read-only artifact")
+        real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", _refuse_plants)
+
+    with caplog.at_level("WARNING"):
+        returned = run(
+            load_config(tmp_path / "config.toml"), image_dir=str(images), generate_specs=plan
+        )
+
+    assert returned == output_dir, "a failed unlink must not fail the run"
+    assert (output_dir / "images" / "plants" / "img_0.png").exists()
+    assert "Could not remove image images/plants/img_0.png" in caplog.text
+    assert (output_dir / "anchor_bank.jsonl").exists()

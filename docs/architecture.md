@@ -130,7 +130,7 @@ outputs/<run_name>/            # 默认 ard_dataset_<YYYYmmdd_HHMMSS>；--smoke 
 
 - 输出目录：`src/ard/pipeline.py:821`（`_resolve_run_directory` 的调用处）；`--smoke` 会在目录名后加 `_smoke` 并在 manifest 里声明 `smoke: true`。
 - 两个落盘点：`src/ard/pipeline.py:822` 写 `anchor_bank.jsonl`，`src/ard/pipeline.py:909` 写脱敏 `config.toml`。
-- `manifest.json` 由 `bank.build_manifest_from_records` 组装（库构成：`total_anchors`/`domains`/`languages`/`capabilities`/`system_prompt_modes`/`data_sources`/`output_dir`，`src/ard/domain/bank.py:510-543`），再挂上运行健康与 `acceptance` 指针；`src/ard/pipeline.py:1097` 落盘。
+- `manifest.json` 由 `bank.build_manifest_from_records` 组装（库构成：`total_anchors`/`domains`/`languages`/`capabilities`/`system_prompt_modes`/`data_sources`/`output_dir`，`src/ard/domain/bank.py:510-543`），再挂上运行健康与 `acceptance` 指针；`src/ard/pipeline.py:1098` 落盘。
 - `results/coverage.{json,md}` 是**验收读数**，不是训练数据：结构读数（计划计数 vs 构造规则，零模型调用）恒产出；指标读数（`q95` 等）只在配置了 `coverage.target_set_path` 与 `[coverage.embedding]` 时产出，否则显式 WARNING。字段与口径见 `docs/measurement.md`。
 
 ## 5. 配置分层
@@ -175,6 +175,7 @@ flowchart TD
 - **选择确定可复现**：候选先按文件名排序，再以 `sha256(f"{seed}:{visual_domain}")` 摘要作种子选一张（`src/ard/domain/image_store.py:167`，`select_domain_image`）——同一 `(候选集, 域, seed)` 在任何平台得到同一张图；选中的图由 `pipeline._assign_images_by_domain` 分配到锚点（`src/ard/pipeline.py:466`，调用点 `:1043`）。
 - **缺图默认报错**：所需域缺目录或缺合法图片时，`pipeline.run` 在**创建输出目录之前**拒绝整个运行（校验块 `src/ard/pipeline.py:832-882`，`raise ConfigError` 在 `:853`（缺目录）与 `:866`（缺域），而第一个副作用 `output_dir.mkdir` 在 `:891`）；只有显式开启 `[images] skip_missing_images = true`（`configs/config.toml:93`）才跳过，且逐条 WARNING 并在 `manifest.json` 里申报跳过数与域——绝不静默。
 - **文本态永不附图**：没有 `visual_domain` 的坐标不携带图片，避免"坐标说文本态、消息里却有图"的错配。
+- **丢弃锚点不留图**：图片在生成**之前**复制，因此一条锚点最终被丢弃（生成失败/重试耗尽）时，它的图片会被 `pipeline._prune_abandoned_images`（`src/ard/pipeline.py:1111`）从 `output/images/` 删除，使产物目录与 `anchor_bank.jsonl` 的引用数一致；同一张图被同域其它**已写出**锚点共享时**不删**（按"是否还有存活记录引用该文件"判定，而非按锚点数），删除失败只记 WARNING、不影响本轮运行。
 
 ## 7. 证据基准
 
