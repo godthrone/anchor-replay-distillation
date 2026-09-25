@@ -7,10 +7,17 @@ generator has to cover both "no system prompt" and several styles of one.
 The vocabulary lives in the v4 ontology, on a single axis
 (``system_prompt_mode``) whose five values already merge presence and style:
 ``none`` is the absence case of the same coordinate, the other four name how a
-system prompt is written.  That axis is the single source of truth (§1.4) —
-this module never restates the value list, it reads it from the ontology and
-owns only the *prompt text* that turns a present mode into an instruction for
-the input generator.
+system prompt is written.  That axis is the single source of truth for *which
+modes exist* (§1.4).
+
+The **wording** that turns a present mode into an instruction for the input
+generator is not code: it lives as data, one file per mode, in the directory
+the ontology declares for it (``wording_policy`` — see
+:data:`SYSTEM_PROMPT_TEMPLATE_DIR`).  This module owns only the contract: where
+the files are, how a template is read, and how failures are reported.  A
+missing, empty or malformed file is a hard error naming the path; there is
+deliberately no built-in fallback string, which would restore a second source of
+truth (§1.4, §2.3).
 
 ``anchor_meta["system_prompt_mode"]`` is the chosen coordinate value, and is
 the single value downstream routes and counts on: :data:`SYSTEM_PROMPT_NONE`
@@ -19,15 +26,19 @@ when the anchor has no system message, otherwise the style name.
 
 from __future__ import annotations
 
+import re
+import string
+from pathlib import Path
 from typing import Any
 
-from ard.core.ontology import OntologyV4
-
 __all__ = [
-    "SYSTEM_PROMPT_GENERATION_INSTRUCTIONS",
     "SYSTEM_PROMPT_NONE",
+    "SYSTEM_PROMPT_TEMPLATE_DIR",
+    "SYSTEM_PROMPT_TEMPLATE_FIELDS",
+    "SYSTEM_PROMPT_TEMPLATE_SUFFIX",
+    "SystemPromptTemplateError",
     "build_system_prompt_prompt",
-    "get_system_prompt_values",
+    "system_prompt_template_path",
 ]
 
 #: The ``system_prompt_mode`` value that means "this anchor has no system
@@ -35,94 +46,172 @@ __all__ = [
 #: presence dimension (v4 merged the two).
 SYSTEM_PROMPT_NONE = "none"
 
-#: How the input generator is asked to write each style.  The mode gives the
-#: **style specification**; the concrete text is generated at run time from
-#: this instruction plus the anchor's own ``knowledge_domain`` /
-#: ``capability``, so the system prompt echoes the conversation it belongs to
-#: instead of being a fixed sentence reused everywhere.
-#:
-#: Keyed by exactly the non-:data:`SYSTEM_PROMPT_NONE` values of the ontology's
-#: ``system_prompt_mode`` axis.  The contract test holds the two together, so a
-#: mode added to the ontology without an instruction fails loudly (§1.4).
-SYSTEM_PROMPT_GENERATION_INSTRUCTIONS: dict[str, str] = {
-    "minimal_persona": (
-        "Write ONE short sentence (a single clause) that only gives the "
-        "assistant a role identity, and nothing else. Do not mention output "
-        "format, length or domain expertise."
-    ),
-    "detailed_persona": (
-        "Write a detailed persona: the assistant's role, its background or "
-        "experience, and how it behaves. Use two to four sentences. Do not "
-        "impose output-format or length constraints."
-    ),
-    "task_constraint": (
-        "Write a task-constraint system prompt: state output-format, "
-        "language, length and must-do / must-not-do rules. Use two to four "
-        "sentences and keep the wording imperative."
-    ),
-    "domain_style": (
-        "Write a domain-style system prompt that fits the assistant's "
-        "professional field and working style for this specific task. Use two "
-        "to four sentences. Do not repeat domain names mechanically."
-    ),
+#: The wording directory, stated **once** in the runtime.  It is the location
+#: the v4 ontology declares in
+#: ``wording_policy.prompt_wording_location_recommendation.target``
+#: (``ontology/anchor_ontology.v4.json:1319-1323``), whose
+#: ``<system_prompt_mode>`` placeholder is this directory's per-mode file name.
+#: A contract test holds the two together, so an ontology change cannot silently
+#: point somewhere else (§1.4).
+SYSTEM_PROMPT_TEMPLATE_DIR = Path("configs/prompts/system_prompt")
+
+#: Wording files are plain Markdown: ``<mode>.md``.
+SYSTEM_PROMPT_TEMPLATE_SUFFIX = ".md"
+
+#: The only placeholders a wording file may use.  They are filled from the
+#: anchor's own metadata (``language`` / ``capability`` / ``knowledge_domain``),
+#: so the system prompt echoes the conversation it belongs to instead of being a
+#: fixed sentence reused everywhere.  Any other placeholder is a load error.
+SYSTEM_PROMPT_TEMPLATE_FIELDS: tuple[str, ...] = (
+    "language",
+    "capability",
+    "domain",
+)
+
+#: Metadata key and default for each placeholder.
+_FIELD_SOURCES: dict[str, tuple[str, str]] = {
+    "language": ("language", "English"),
+    "capability": ("capability", "qa"),
+    "domain": ("knowledge_domain", "general"),
 }
 
+#: A mode names a file, never a path: rejecting separators, dots and empty
+#: values keeps a bad ontology or metadata value from reading — or reporting —
+#: a file outside the wording directory (§2.3 边界校验).
+_MODE_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
 
-def get_system_prompt_values(ontology: OntologyV4) -> list[str]:
-    """Return the system-prompt modes the sampler may choose from.
 
-    The modes are the values of the v4 ``system_prompt_mode`` axis: the absence
-    case plus one value per style (five in the shipped ontology).  Reading them
-    from the ontology keeps the vocabulary in one place (§1.4) — this module
-    restates no value, so a value added to the axis is usable here without a
-    code change.
+class SystemPromptTemplateError(RuntimeError):
+    """Raised when a mode's wording file is missing, empty or malformed.
+
+    The message always names the path and what was expected.  It never contains
+    credential material: a wording path and a mode name are not secret (§15).
+    """
+
+
+def system_prompt_template_path(mode: str, directory: str | Path | None = None) -> Path:
+    """Return the wording file a ``system_prompt_mode`` value must have.
 
     Args:
-        ontology: The loaded v4 ontology.
+        mode: A ``system_prompt_mode`` value (any value except ``none``).
+        directory: Wording directory override; defaults to
+            :data:`SYSTEM_PROMPT_TEMPLATE_DIR`.  Tests point it at a scratch
+            directory to exercise the failure paths.
 
     Returns:
-        One mode string per axis value, in the axis's declaration order.
+        ``<directory>/<mode>.md``.  The path is returned even when the file does
+        not exist, so an error message can name what was expected.
 
     Raises:
-        KeyError: If the ontology declares no ``system_prompt_mode`` axis —
-            a schema-level defect the v4 loader rejects before this point.
+        SystemPromptTemplateError: If *mode* is not a bare file-name value.
     """
-    return list(ontology.axis_values("system_prompt_mode"))
+    if _MODE_PATTERN.fullmatch(mode) is None:
+        raise SystemPromptTemplateError(
+            f"invalid system_prompt_mode {mode!r}: a mode names a wording file, "
+            f"so it must match {_MODE_PATTERN.pattern!r}"
+        )
+    base = Path(directory) if directory is not None else SYSTEM_PROMPT_TEMPLATE_DIR
+    return base / f"{mode}{SYSTEM_PROMPT_TEMPLATE_SUFFIX}"
 
 
-def build_system_prompt_prompt(anchor_meta: dict[str, Any], mode: str) -> str:
+def _check_placeholders(body: str, path: Path) -> None:
+    """Reject placeholder syntax the renderer cannot fill.
+
+    Raises:
+        SystemPromptTemplateError: On unbalanced braces, or on a placeholder
+            outside :data:`SYSTEM_PROMPT_TEMPLATE_FIELDS`.
+    """
+    try:
+        parsed = list(string.Formatter().parse(body))
+    except ValueError as exc:
+        raise SystemPromptTemplateError(f"malformed placeholder syntax in {path}: {exc}") from exc
+    used = {name for _, name, _, _ in parsed if name is not None}
+    unknown = sorted(used - set(SYSTEM_PROMPT_TEMPLATE_FIELDS))
+    if unknown:
+        raise SystemPromptTemplateError(
+            f"unknown placeholder(s) {unknown} in {path}: allowed placeholders "
+            f"are {list(SYSTEM_PROMPT_TEMPLATE_FIELDS)}"
+        )
+
+
+def _read_template(mode: str, directory: str | Path | None = None) -> str:
+    """Read one mode's wording template.
+
+    Args:
+        mode: A ``system_prompt_mode`` value.
+        directory: Wording directory override (tests only).
+
+    Returns:
+        The file's content with surrounding whitespace removed.
+
+    Raises:
+        SystemPromptTemplateError: If the directory is missing, or the file is
+            missing, unreadable, empty, or uses a disallowed placeholder.
+    """
+    path = system_prompt_template_path(mode, directory)
+    if not path.parent.is_dir():
+        raise SystemPromptTemplateError(
+            f"system-prompt wording directory not found: {path.parent} "
+            f"(expected one {SYSTEM_PROMPT_TEMPLATE_SUFFIX} file per "
+            f"system_prompt_mode value, including {path.name!r})"
+        )
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise SystemPromptTemplateError(
+            f"no wording file for system_prompt_mode {mode!r}: expected {path}"
+        ) from exc
+    except OSError as exc:
+        raise SystemPromptTemplateError(
+            f"cannot read system-prompt wording file {path}: {exc.strerror}"
+        ) from exc
+    body = raw.strip()
+    if not body:
+        raise SystemPromptTemplateError(
+            f"system-prompt wording file is empty: {path} "
+            f"(expected the wording the input generator is asked to follow)"
+        )
+    _check_placeholders(body, path)
+    return body
+
+
+def build_system_prompt_prompt(
+    anchor_meta: dict[str, Any],
+    mode: str,
+    directory: str | Path | None = None,
+) -> str:
     """Build the input-generator prompt that writes one system prompt.
 
-    The generated text has to fit the conversation it will be attached to, so
-    the instruction is combined with the anchor's own ``knowledge_domain`` and
-    ``capability``: a system prompt that contradicts the dialogue it precedes
-    produces a low-quality anchor (the failure mode scheme §5.4 warns about).
+    The wording is the mode's data file (see the module docstring); the text has
+    to fit the conversation it will be attached to, so the template's
+    ``{language}`` / ``{capability}`` / ``{domain}`` placeholders are filled from
+    the anchor's own metadata — a system prompt that contradicts the dialogue it
+    precedes produces a low-quality anchor (the failure mode scheme §5.4 warns
+    about).
 
     Args:
         anchor_meta: Anchor metadata (``language`` / ``knowledge_domain`` /
             ``capability``).
         mode: A system-prompt style (any value except
             :data:`SYSTEM_PROMPT_NONE`).
+        directory: Wording directory override (tests only).
 
     Returns:
         Prompt text for the input generator.
 
     Raises:
-        KeyError: If *mode* is not a known style.
+        SystemPromptTemplateError: If *mode* is the absence case, or if its
+            wording file is missing, empty or malformed.  There is no fallback
+            wording: a silent default would be a second source of truth.
     """
-    style_instruction = SYSTEM_PROMPT_GENERATION_INSTRUCTIONS[mode]
-    language = anchor_meta.get("language", "English")
-    domain = anchor_meta.get("knowledge_domain", "general")
-    capability = anchor_meta.get("capability", "qa")
-    return (
-        "You are writing a system prompt for an assistant, not a message to "
-        "the user. "
-        f"{style_instruction} "
-        f"Write it in {language}. "
-        f"The assistant will handle a '{capability}' task in the field of "
-        f"'{domain}', so the system prompt must fit that field and task — a "
-        f"generic persona that could belong to any conversation is not "
-        f"acceptable. "
-        "Output the system prompt text only, with no quotes, no label and no "
-        "explanation."
-    )
+    if mode == SYSTEM_PROMPT_NONE:
+        raise SystemPromptTemplateError(
+            f"system_prompt_mode {SYSTEM_PROMPT_NONE!r} is the absence case: such "
+            f"an anchor carries no system message, so no wording is written for it"
+        )
+    template = _read_template(mode, directory)
+    values = {
+        placeholder: anchor_meta.get(key, default)
+        for placeholder, (key, default) in _FIELD_SOURCES.items()
+    }
+    return template.format(**values)

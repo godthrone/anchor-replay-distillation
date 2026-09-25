@@ -48,7 +48,6 @@ from ard.backends.api_client import (
     ChatAPIStats,
 )
 from ard.core.system_prompt import (
-    SYSTEM_PROMPT_GENERATION_INSTRUCTIONS,
     SYSTEM_PROMPT_NONE,
     build_system_prompt_prompt,
 )
@@ -479,6 +478,9 @@ def _generate_system_message(
         in real conversation data.
 
     Raises:
+        SystemPromptTemplateError: The mode has no usable wording file (the
+            wording lives in data, not in code — see
+            :mod:`ard.core.system_prompt`).
         ARDTimeoutError: The generator request exceeded the layered timeout.
         httpx.HTTPError: Transport/server failure.
     """
@@ -486,16 +488,12 @@ def _generate_system_message(
     if mode == SYSTEM_PROMPT_NONE:
         return None
 
-    # An unknown mode is a sampler/ontology bug, not a server problem: raise
-    # rather than silently generating no system prompt, which would make the
-    # anchor claim a style it does not have (§2.2 显式即防呆).
-    if mode not in SYSTEM_PROMPT_GENERATION_INSTRUCTIONS:
-        raise ValueError(
-            f"unknown system prompt mode {mode!r} for anchor {spec.id}; "
-            f"known modes: "
-            f"{sorted(SYSTEM_PROMPT_GENERATION_INSTRUCTIONS)} "
-            f"and {SYSTEM_PROMPT_NONE!r}"
-        )
+    # An unknown mode is a sampler/ontology bug, not a server problem:
+    # ``build_system_prompt_prompt`` reads the mode's wording file and raises
+    # naming the path it expected, rather than silently generating no system
+    # prompt — which would make the anchor claim a style it does not have
+    # (§2.2 显式即防呆, §2.3 报错含路径).  The call happens while the request is
+    # built, so an unknown mode never reaches the server.
 
     try:
         system_text = input_client.chat(
