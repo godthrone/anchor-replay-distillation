@@ -127,6 +127,87 @@ def test_anchor_texts_refuses_unusable_records(records: list[dict], fragment: st
         acceptance.anchor_texts(records)
 
 
+def test_anchor_field_declares_the_text_parts_only_space() -> None:
+    """The declared anchor field must say the image pixels are not embedded."""
+    assert acceptance.ANCHOR_TEXT_FIELD == "messages[last].content(text parts only)"
+
+
+def test_anchor_texts_takes_the_text_part_of_a_multimodal_turn() -> None:
+    """An image-modality anchor is measured through its request text."""
+    records = [
+        _record(
+            "img1",
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": "images/aesthetics/sample_01.jpg"},
+                        {"type": "text", "text": "What is happening in this painting?"},
+                    ],
+                }
+            ],
+        )
+    ]
+    assert acceptance.anchor_texts(records) == ["What is happening in this painting?"]
+
+
+def test_anchor_texts_joins_every_text_part_and_ignores_non_text_parts() -> None:
+    records = [
+        _record(
+            "img2",
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}},
+                        {"type": "text", "text": "first half"},
+                        {"type": "image", "image": "images/x/y.jpg"},
+                        {"type": "text", "text": "   "},
+                        {"type": "text", "text": "second half"},
+                    ],
+                }
+            ],
+        )
+    ]
+    assert acceptance.anchor_texts(records) == [
+        "first half" + acceptance.TEXT_PART_SEPARATOR + "second half"
+    ]
+
+
+def test_anchor_texts_refuses_a_turn_without_any_text_part() -> None:
+    """An image-only anchor is named and refused — never skipped, never blank-filled."""
+    records = [
+        _record("a1", [{"role": "user", "content": "text anchor"}]),
+        _record(
+            "img-only",
+            [{"role": "user", "content": [{"type": "image", "image": "images/x/y.jpg"}]}],
+        ),
+    ]
+    with pytest.raises(acceptance.AcceptanceError) as excinfo:
+        acceptance.anchor_texts(records)
+    message = str(excinfo.value)
+    assert "anchor record 1" in message
+    assert "img-only" in message
+    assert "no text part" in message
+    assert "image" in message
+
+
+def test_anchor_texts_refuses_blank_text_parts() -> None:
+    records = [
+        _record(
+            "img-blank",
+            [{"role": "user", "content": [{"type": "text", "text": "   "}]}],
+        )
+    ]
+    with pytest.raises(acceptance.AcceptanceError, match="no text part"):
+        acceptance.anchor_texts(records)
+
+
+def test_user_turn_text_refuses_a_non_string_non_list_content() -> None:
+    with pytest.raises(acceptance.AcceptanceError, match="must be a string"):
+        acceptance.user_turn_text(42, "anchor record 0 (id='a')")
+
+
 # ── Repeat groups and the noise band ────────────────────────────────────────
 
 

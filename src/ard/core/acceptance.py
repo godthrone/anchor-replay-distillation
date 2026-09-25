@@ -23,6 +23,10 @@ the ε band all come from :mod:`ard.core.coverage`.  What this module adds is th
 **space declaration** (which field of which artifact was embedded, ``|A|``,
 ``|T|``, and the embedder identity — model and dimension only, never an endpoint
 or a key), the noise-band assembly, and the report rendering.
+
+The declared anchor field is the final user turn's **text parts only**
+(:data:`ANCHOR_TEXT_FIELD`): an image-modality anchor participates through the
+text of its request, and its image pixels never enter the metric space.
 """
 
 from __future__ import annotations
@@ -41,7 +45,21 @@ from ard.core.types import JsonObjectSequence, StringPairs
 REPORT_SCHEMA: Final[str] = "ard-acceptance-1"
 
 #: Which artifact field the anchor side embeds, declared in every report.
-ANCHOR_TEXT_FIELD: Final[str] = "messages[last].content (the final user-role turn)"
+#: The ``(text parts only)`` qualifier is load-bearing, not decoration: an
+#: image-modality anchor's final user turn is a multimodal part list, and this
+#: ruler embeds **only its ``text`` parts**.  Image pixels never enter the
+#: metric space, so the declaration must say so wherever the space is read
+#: (``docs/measurement.md`` §5).
+ANCHOR_TEXT_FIELD: Final[str] = "messages[last].content(text parts only)"
+
+#: The multimodal part type whose ``text`` field is the embeddable text.
+#: Parts of any other type (``image``, ``image_url``, …) contribute no text.
+TEXT_PART_TYPE: Final[str] = "text"
+
+#: How the text parts of one turn are joined when it carries more than one.
+#: The writer emits a single text part, so this is a boundary default rather
+#: than a live behaviour; it is named so it cannot drift silently.
+TEXT_PART_SEPARATOR: Final[str] = "\n"
 
 #: Which field of a target-set entry this project embeds.
 TARGET_TEXT_FIELD: Final[str] = "text"
@@ -145,7 +163,9 @@ class SpaceDeclaration(BaseModel):
 
     Attributes:
         anchors_source: where the anchor vectors' texts came from.
-        anchor_field: which field of that artifact was embedded.
+        anchor_field: which field of that artifact was embedded —
+            ``ANCHOR_TEXT_FIELD``, which for a multimodal turn names the text
+            parts only, so the declaration cannot be read as "the image too".
         targets_source: path of the target-set file.
         target_field: which field of an entry was embedded.
         n_anchor: ``|A|``.
@@ -349,6 +369,65 @@ def structure_mismatch(structure: StructureReadout) -> str | None:
     return "plan does not match the construction rule — " + "; ".join(mismatches)
 
 
+def user_turn_text(content: object, where: str) -> str:
+    """Return the embeddable text of one final user turn's ``content``.
+
+    The writer emits two shapes and this ruler accepts both:
+
+    * a plain ``str`` — every text-only anchor, byte-identical to before;
+    * a multimodal part list — the image-modality anchors.  Only the parts
+      whose ``type`` is :data:`TEXT_PART_TYPE` and whose ``text`` is a
+      non-blank string contribute; parts of any other type (``image``,
+      ``image_url``, …) are ignored, because **this ruler embeds text only and
+      image pixels never enter the metric space**.  The contributing parts are
+      joined with :data:`TEXT_PART_SEPARATOR` in list order.
+
+    A multimodal turn with no usable text part is refused, naming the record and
+    what it did carry: silently skipping it would publish a ``q95`` over a
+    smaller anchor set than the run produced, and substituting an empty string
+    would fabricate a point in the space.
+
+    Args:
+        content: the ``content`` field of the final user-role message.
+        where: a human-readable record label used in every error message.
+
+    Returns:
+        The embeddable text, stripped of no characters (the raw string wins as
+        written; only the emptiness test looks at whitespace).
+
+    Raises:
+        AcceptanceError: if *content* is missing/blank, is neither a string nor
+            a part list, or is a part list with no non-blank text part.
+    """
+    if content is None:
+        raise AcceptanceError(f"{where}: the final user turn has blank content")
+    if isinstance(content, str):
+        if not content.strip():
+            raise AcceptanceError(f"{where}: the final user turn has blank content")
+        return content
+    if not isinstance(content, list):
+        raise AcceptanceError(
+            f"{where}: the final user turn's content must be a string or a multimodal part "
+            f"list, got {type(content).__name__}"
+        )
+    texts = [
+        part["text"]
+        for part in content
+        if isinstance(part, Mapping)
+        and part.get("type") == TEXT_PART_TYPE
+        and isinstance(part.get("text"), str)
+        and part["text"].strip()
+    ]
+    if not texts:
+        carried = sorted({str(part.get("type")) for part in content if isinstance(part, Mapping)})
+        raise AcceptanceError(
+            f"{where}: the final user turn carries no text part "
+            f"({len(content)} part(s), types {carried}) — the metric space embeds the text "
+            "parts only, so this anchor has nothing to measure and is not skipped silently"
+        )
+    return TEXT_PART_SEPARATOR.join(texts)
+
+
 def anchor_texts(records: JsonObjectSequence) -> list[str]:
     """Return the embedded text of every bank record, in file order.
 
@@ -357,9 +436,15 @@ def anchor_texts(records: JsonObjectSequence) -> list[str]:
     record is guaranteed to carry.  (The plan itself holds coordinates only, so
     it cannot supply this — see the space declaration in every report.)
 
+    An image-modality anchor's final user turn is a multimodal part list; its
+    text parts are extracted by :func:`user_turn_text`, so image anchors take
+    part in the readout **as text** while their pixels stay out of the metric
+    space.
+
     Raises:
         AcceptanceError: if the bank is empty, a record has no ``messages``
-            list, its last message is not a user turn, or the content is blank.
+            list, its last message is not a user turn, or its content yields no
+            text (blank string, or a part list with no text part).
     """
     if not records:
         raise AcceptanceError(
@@ -378,10 +463,7 @@ def anchor_texts(records: JsonObjectSequence) -> list[str]:
                 f"{where}: the last message is not a user turn "
                 f"(role={last.get('role') if isinstance(last, Mapping) else type(last).__name__!r})"
             )
-        content = last.get("content")
-        if not isinstance(content, str) or not content.strip():
-            raise AcceptanceError(f"{where}: the final user turn has blank content")
-        texts.append(content)
+        texts.append(user_turn_text(last.get("content"), where))
     return texts
 
 

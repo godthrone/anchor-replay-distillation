@@ -27,7 +27,7 @@ from ard.backends import embedding_client as ec
 from ard.backends.coverage_wiring import CoverageWiringError
 from ard.backends.embedding_client import EmbeddingRequestError
 from ard.config import load_config
-from ard.core.types import AnchorSpec, GeneratedAnchor, TurnSpec
+from ard.core.types import AnchorSpec, DataSource, GeneratedAnchor, TurnSpec
 from ard.domain.bank import append_anchor
 
 _REAL_HTTPX_CLIENT = httpx.Client
@@ -365,7 +365,7 @@ def test_metric_run_writes_q95_and_declares_the_space(
         "dimension": DIMENSION,
         "normalize": True,
     }
-    assert metrics["space"]["anchor_field"] == "messages[last].content (the final user-role turn)"
+    assert metrics["space"]["anchor_field"] == "messages[last].content(text parts only)"
     assert metrics["space"]["target_field"] == "text"
     assert metrics["space"]["epsilon"] == pytest.approx(0.5)
     assert "header 'epsilon'" in metrics["space"]["epsilon_source"]
@@ -379,6 +379,101 @@ def test_metric_run_writes_q95_and_declares_the_space(
     assert API_KEY not in report_text
     assert API_BASE not in report_text
     assert API_KEY not in (result_dir / "config.toml").read_text(encoding="utf-8")
+
+
+def test_metric_run_embeds_the_text_part_of_a_multimodal_anchor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An image-modality anchor joins the readout through its request text.
+
+    The bank record's final user turn is a multimodal part list (image first,
+    then the text the writer emits).  Before WP-S9b the whole run was refused
+    here; now the text part is embedded and the report says the space is
+    text-parts-only.
+    """
+    output_dir = tmp_path / "out"
+    target_set_path = tmp_path / "targets.json"
+    target_set_path.write_text(
+        json.dumps({"epsilon": 0.5, "targets": [{"text": "target-x"}]}), encoding="utf-8"
+    )
+    config_path = tmp_path / "config.toml"
+    _write_config(config_path, output_dir, _metric_block(target_set_path))
+    monkeypatch.setattr(
+        pipeline,
+        "sample_specs",
+        lambda config: pytest.fail("the plan double must replace the v4 sampler"),
+    )
+
+    def spy(**kwargs: object) -> list[GeneratedAnchor]:
+        specs = kwargs["specs"]
+        output_path = kwargs["output_path"]
+        stats = kwargs["stats"]
+        assert isinstance(specs, list)
+        assert isinstance(output_path, Path)
+        written: list[GeneratedAnchor] = []
+        for spec in specs:
+            assert isinstance(spec, AnchorSpec)
+            anchor = GeneratedAnchor(
+                id=spec.id,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "image": "images/aesthetics/sample_01.jpg"},
+                            {"type": "text", "text": f"question {spec.id}"},
+                        ],
+                    }
+                ],
+                target_answer=f"answer {spec.id}",
+                target_model="target-model",
+                input_generator_model="input-model",
+                anchor_meta=spec.anchor_meta,
+                reasoning=None,
+                data_source=DataSource.ARD_MULTI,
+            )
+            append_anchor(anchor, output_path)
+            written.append(anchor)
+        stats.requested = len(specs)
+        stats.written = len(written)
+        stats.succeeded = len(written)
+        return written
+
+    monkeypatch.setattr(pipeline, "generate_text_anchors", spy)
+    mock = _MockEmbeddings(
+        monkeypatch,
+        {
+            "question img-0": [1.0, 0.0, 0.0],
+            "question img-1": [0.0, 1.0, 0.0],
+            "target-x": [1.0, 0.0, 0.0],
+        },
+    )
+    plan = [
+        AnchorSpec(
+            id=f"img-{index}",
+            anchor_meta={
+                "modality": "image",
+                "language": "English",
+                "knowledge_domain": f"k{index}",
+                "visual_domain": "aesthetics",
+            },
+            turns=[TurnSpec(turn_index=0, role="user", is_final=True)],
+        )
+        for index in range(2)
+    ]
+
+    result_dir = pipeline.run(load_config(config_path), generate_specs=lambda cfg: plan)
+
+    metrics = json.loads((result_dir / "results" / "coverage.json").read_text(encoding="utf-8"))[
+        "metrics"
+    ]
+    # both image anchors were accepted (before the fix this raised AcceptanceError)
+    assert metrics["space"]["n_anchor"] == 2
+    assert metrics["space"]["anchor_field"] == "messages[last].content(text parts only)"
+    # the embedded texts are the text parts; the image parts never reached the client
+    embedded = [text for request in mock.requests for text in json.loads(request.content)["input"]]
+    assert "question img-0" in embedded
+    assert "question img-1" in embedded
+    assert all("sample_01.jpg" not in text for text in embedded)
 
 
 def test_embedding_failure_keeps_the_structure_readout_on_disk(
