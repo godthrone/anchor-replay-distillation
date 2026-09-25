@@ -61,6 +61,19 @@ class AnchorSpec:
     id: str
     anchor_meta: dict[str, Any]
     turns: list[TurnSpec]
+    """The conversation *prefix*, one :class:`TurnSpec` per message, ending on
+    the final user question — the answer is the generation target, not a turn
+    here, so the count is **odd** (``user`` first, ``user`` last, roles
+    alternating; see Validation).
+
+    This is **not** the number an ontology ``conversation_type`` declares: its
+    ``turns`` attribute counts *exchanges* (one user question plus the answer it
+    receives), so ``n`` ontology turns are ``2 * n - 1`` spec turns —
+    ``single_turn`` 1 → 1, ``clarification`` 2 → 3, ``constraint_update`` 4 → 7
+    (see :func:`ard.core.sampling.turn_counts_by_conversation_type`).  Reading
+    the ontology count as a message count is impossible: an even count could not
+    start and end on ``user`` and would be rejected by ``__post_init__``.
+    """
     input_generator_id: str | None = None
 
     def __post_init__(self) -> None:
