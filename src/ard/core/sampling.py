@@ -2,7 +2,9 @@
 
 Responsibility: turn a validated v4 ontology into the anchor coordinates and
 :class:`~ard.core.types.AnchorSpec` objects of a run, using the **construction
-rule** — every legal restricted block exactly once, the ``knowledge_domain``
+rule** — one coordinate per legal restricted block within each modality group
+(the image-capable blocks therefore contribute two coordinates, one per
+modality; see :func:`sample_coordinates`), the ``knowledge_domain``
 axis rotated over its tree leaves, the ``visual_domain`` axis rotated over its
 leaves in the image modality, and the four remaining free axes (``language`` /
 ``response_style`` / ``difficulty`` / ``context_length``) drawn from the run
@@ -382,8 +384,12 @@ def sample_coordinates(
     2. the 891 legal restricted blocks whose capability is image-capable, with
        ``visual_domain`` rotating over its 21 leaves.
 
-    Every block appears exactly once; within each group the free axes rotate or
-    are drawn from ``random.Random(seed)``, so the same ``(ontology, seed)``
+    Within each group every block contributes exactly one coordinate — but the
+    two groups overlap: the 891 image-capable blocks are a subset of the 935, so
+    those 891 coordinates appear **twice** in the plan, once per modality, and
+    ``modality`` is part of the duplicate-detection identity that keeps the two
+    distinct.  Within each group the free axes rotate or are drawn from
+    ``random.Random(seed)``, so the same ``(ontology, seed)``
     yields a byte-identical coordinate tuple and a different seed does not.
 
     ``scale`` only changes **how many** blocks each group contributes (see

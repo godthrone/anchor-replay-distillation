@@ -9,8 +9,11 @@ evaluate a student model.
 
 The plan comes from the v4 ontology (`ontology/anchor_ontology.v4.json`) and is derived, not
 configured: **935 legal text-modality restricted blocks + 891 legal image-modality restricted
-blocks = 1,826 anchors**, one anchor per legal block, with the 209 `knowledge_domain` leaves
-(and, for image coordinates, the 21 `visual_domain` leaves) rotated across them. That fixed
+blocks = 1,826 anchors** — one anchor per block *within each modality group*, with the 209
+`knowledge_domain` leaves (and, for image coordinates, the 21 `visual_domain` leaves) rotated
+across them. The 891 image-capable blocks are a subset of the 935, so those coordinates appear
+twice, once per modality; the two are told apart by `modality`, which is part of the identity a
+duplicate check uses. That fixed
 target set is what makes a run auditable: every accepted coordinate is either covered exactly
 once or the run refuses to proceed.
 
