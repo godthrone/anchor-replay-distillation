@@ -84,7 +84,9 @@ uv run python -m ard --config configs/config.toml --smoke --image-dir examples/i
 
 **What `--smoke` means.** It materialises the *same* construction rule at a reduced scale —
 8 restricted blocks (4 text blocks + 4 image blocks, evenly spaced over the enumeration, first
-and last included). Those blocks are a subset of the blocks the full plan enumerates (8/8
+and last included). Those are 8 plan slots but only **6 distinct `RestrictedBlock`s**: two blocks
+appear once per modality, the same 891⊂935 subset identity behind the 1,826 count above. Those
+blocks are a subset of the blocks the full plan enumerates (8/8
 block-level coverage), but their coordinates are re-rotated at smoke scale, so the 8 anchors
 are **not** rows of the 1,826-anchor plan (only 1/8 coincide coordinate-wise). Its point is
 that a fresh checkout can see a complete artifact in minutes. The
