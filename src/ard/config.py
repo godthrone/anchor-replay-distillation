@@ -5,23 +5,11 @@
 from __future__ import annotations
 
 import random
-import sys
+import tomllib
 from pathlib import Path
 from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-
-# ── TOML parsing ──────────────────────────────────────────────────────────
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    try:
-        import tomli as tomllib  # type: ignore[no-recheck]
-    except ImportError as exc:
-        raise ImportError(
-            "tomli is required for Python < 3.11. Install with: pip install tomli"
-        ) from exc
-
 
 # ── Boundary validation (§2.3) ────────────────────────────────────────────
 
@@ -194,8 +182,8 @@ class GenerationConfig(BaseModel):
     # system random source; an explicit int pins that run's sampling order.
     seed: int | None = None
     concurrency: int = 4
-    backpressure_threshold: int = 3       # 连续超时触发冷却的阈值
-    backpressure_cooldown: float = 60.0   # 冷却暂停秒数
+    backpressure_threshold: int = 3  # 连续超时触发冷却的阈值
+    backpressure_cooldown: float = 60.0  # 冷却暂停秒数
 
     @model_validator(mode="after")
     def _resolve_seed(self) -> GenerationConfig:

@@ -164,11 +164,7 @@ def failure_reason(exc: BaseException) -> str:
 
 def is_server_instability(exc_or_reason: BaseException | str) -> bool:
     """Whether *exc_or_reason* justifies a backpressure cooldown."""
-    reason = (
-        exc_or_reason
-        if isinstance(exc_or_reason, str)
-        else failure_reason(exc_or_reason)
-    )
+    reason = exc_or_reason if isinstance(exc_or_reason, str) else failure_reason(exc_or_reason)
     return reason in SERVER_INSTABILITY_REASONS
 
 
@@ -188,10 +184,7 @@ def build_input_prompt(meta: dict[str, Any]) -> str:
 
 
 def build_target_prompt(meta: dict[str, Any]) -> str:
-    return (
-        "You are a knowledgeable assistant. "
-        "Answer the user's question accurately and helpfully."
-    )
+    return "You are a knowledgeable assistant. Answer the user's question accurately and helpfully."
 
 
 def _build_user_prompt(
@@ -364,7 +357,7 @@ def _abs_to_rel_path(abs_path: str) -> str:
     """Extract relative path (images/xxx.jpg) from absolute path."""
     idx = abs_path.rfind("/images/")
     if idx >= 0:
-        return abs_path[idx + 1:]  # images/xxx.jpg
+        return abs_path[idx + 1 :]  # images/xxx.jpg
     return abs_path
 
 
@@ -421,10 +414,7 @@ def anchor_data_source(messages: list[dict[str, Any]]) -> DataSource:
         content = message.get("content")
         if not isinstance(content, list):
             continue
-        if any(
-            isinstance(part, dict) and part.get("type") in IMAGE_PART_TYPES
-            for part in content
-        ):
+        if any(isinstance(part, dict) and part.get("type") in IMAGE_PART_TYPES for part in content):
             return DataSource.ARD_MULTI
     return DataSource.ARD_TEXT
 
@@ -504,10 +494,7 @@ def _generate_system_message(
                 },
                 {
                     "role": "user",
-                    "content": (
-                        f"Write the system prompt ({mode}) for this "
-                        f"conversation now."
-                    ),
+                    "content": (f"Write the system prompt ({mode}) for this conversation now."),
                 },
             ],
             # §1.4 单一真相源: no per-request temperature here.  The sampling
@@ -517,15 +504,17 @@ def _generate_system_message(
         ).content.strip()
     except ARDTimeoutError:
         logger.exception(
-            "Anchor %s: timeout generating the %s system prompt — "
-            "abandoning this anchor",
-            spec.id, mode,
+            "Anchor %s: timeout generating the %s system prompt — abandoning this anchor",
+            spec.id,
+            mode,
         )
         raise
     except Exception as exc:
         logger.exception(
             "Anchor %s: error generating the %s system prompt: %s",
-            spec.id, mode, exc,
+            spec.id,
+            mode,
+            exc,
         )
         raise
     if not system_text:
@@ -541,7 +530,8 @@ def _generate_system_message(
         # has none to pass on.
         logger.exception(
             "Anchor %s: empty %s system prompt — abandoning anchor",
-            spec.id, mode,
+            spec.id,
+            mode,
         )
         raise ARDEmptyContentError(
             f"system prompt generation returned no text for anchor {spec.id} ({mode})",
@@ -638,7 +628,9 @@ def _generate_one_anchor(
             try:
                 user_msg = input_client.chat(
                     _build_user_prompt(
-                        turn, messages, spec.anchor_meta,
+                        turn,
+                        messages,
+                        spec.anchor_meta,
                         image_path=turn.image_path,
                         image_data_url=image_data_url,
                     ),
@@ -656,7 +648,9 @@ def _generate_one_anchor(
                 logger.exception(
                     "Anchor %s: timeout generating user turn %d/%d — "
                     "abandoning this anchor to preserve role alternation",
-                    spec.id, turn_idx + 1, total_turns,
+                    spec.id,
+                    turn_idx + 1,
+                    total_turns,
                 )
                 raise
             except Exception as exc:
@@ -667,7 +661,9 @@ def _generate_one_anchor(
             if not user_msg:
                 logger.warning(
                     "Anchor %s: empty user message at turn %d/%d — abandoning anchor",
-                    spec.id, turn_idx + 1, total_turns,
+                    spec.id,
+                    turn_idx + 1,
+                    total_turns,
                 )
                 stats.record_abandon("empty_user_message")
                 return None
@@ -686,18 +682,20 @@ def _generate_one_anchor(
                 logger.exception(
                     "Anchor %s: timeout generating assistant turn %d/%d — "
                     "abandoning this anchor to preserve role alternation",
-                    spec.id, turn_idx + 1, total_turns,
+                    spec.id,
+                    turn_idx + 1,
+                    total_turns,
                 )
                 raise
             except Exception as exc:
-                logger.exception(
-                    "Anchor %s: error generating assistant turn: %s", spec.id, exc
-                )
+                logger.exception("Anchor %s: error generating assistant turn: %s", spec.id, exc)
                 raise
             if not assist_msg:
                 logger.warning(
                     "Anchor %s: empty assistant message at turn %d/%d — abandoning anchor",
-                    spec.id, turn_idx + 1, total_turns,
+                    spec.id,
+                    turn_idx + 1,
+                    total_turns,
                 )
                 stats.record_abandon("empty_assistant_message")
                 return None
@@ -705,7 +703,10 @@ def _generate_one_anchor(
         else:
             logger.warning(
                 "Anchor %s: unknown turn role %r at turn %d/%d — abandoning anchor",
-                spec.id, turn.role, turn_idx + 1, total_turns,
+                spec.id,
+                turn.role,
+                turn_idx + 1,
+                total_turns,
             )
             stats.record_abandon("unknown_role")
             return None
@@ -721,7 +722,11 @@ def _generate_one_anchor(
             logger.warning(
                 "Anchor %s: after turn %d/%d the history has %d conversation "
                 "message(s), expected %d — abandoning anchor",
-                spec.id, turn_idx + 1, total_turns, turn_messages, turn_idx + 1,
+                spec.id,
+                turn_idx + 1,
+                total_turns,
+                turn_messages,
+                turn_idx + 1,
             )
             stats.record_abandon("history_not_advanced")
             return None
@@ -744,14 +749,12 @@ def _generate_one_anchor(
         # the (already validated) system is stripped from the actual roles.
         actual_roles = [m["role"] for m in messages]
         conversation_roles = [r for r in actual_roles if r != "system"]
-        if (
-            message_shape_error(messages) is not None
-            or conversation_roles != expected_roles
-        ):
+        if message_shape_error(messages) is not None or conversation_roles != expected_roles:
             logger.warning(
-                "Anchor %s: message roles %r do not match spec roles %r — "
-                "abandoning anchor",
-                spec.id, actual_roles, expected_roles,
+                "Anchor %s: message roles %r do not match spec roles %r — abandoning anchor",
+                spec.id,
+                actual_roles,
+                expected_roles,
             )
             stats.record_abandon("role_mismatch")
             return None
@@ -762,15 +765,14 @@ def _generate_one_anchor(
             response = target_client.chat(messages)
         except ARDTimeoutError:
             logger.exception(
-                "Anchor %s: timeout generating final user turn %d/%d — "
-                "abandoning this anchor",
-                spec.id, turn_idx + 1, total_turns,
+                "Anchor %s: timeout generating final user turn %d/%d — abandoning this anchor",
+                spec.id,
+                turn_idx + 1,
+                total_turns,
             )
             raise
         except Exception as exc:
-            logger.exception(
-                "Anchor %s: error generating final user turn: %s", spec.id, exc
-            )
+            logger.exception("Anchor %s: error generating final user turn: %s", spec.id, exc)
             raise
         target_answer = response.content.strip()
         reasoning = response.reasoning
@@ -779,14 +781,18 @@ def _generate_one_anchor(
         if len(target_answer) < min_answer_chars:
             logger.warning(
                 "Anchor %s: target answer too short (%d < %d chars) — skipping",
-                spec.id, len(target_answer), min_answer_chars,
+                spec.id,
+                len(target_answer),
+                min_answer_chars,
             )
             stats.record_abandon("answer_too_short")
             return None
         if max_answer_chars is not None and len(target_answer) > max_answer_chars:
             logger.warning(
                 "Anchor %s: target answer too long (%d > %d chars) — skipping",
-                spec.id, len(target_answer), max_answer_chars,
+                spec.id,
+                len(target_answer),
+                max_answer_chars,
             )
             stats.record_abandon("answer_too_long")
             return None
@@ -806,7 +812,8 @@ def _generate_one_anchor(
             # ever constructed (§2.3 边界校验即防呆).
             logger.warning(
                 "Anchor %s: produced invalid message shape (%s) — abandoning anchor",
-                spec.id, shape_error,
+                spec.id,
+                shape_error,
             )
             stats.record_abandon("invalid_shape")
             return None
@@ -831,7 +838,8 @@ def _generate_one_anchor(
     # (it only requires first/last role), so warn instead of failing silently.
     logger.warning(
         "Anchor %s: no final turn produced an answer (%d turns) — no anchor",
-        spec.id, total_turns,
+        spec.id,
+        total_turns,
     )
     stats.record_abandon("no_final_turn")
     return None
@@ -955,9 +963,11 @@ def generate_text_anchors(
                 # untouched instead of incrementing or resetting it.
                 counted = consecutive_server_failures
                 logger.warning(
-                    "Anchor abandoned (%s): %s "
-                    "(%d consecutive server failure(s), threshold %d)",
-                    reason, exc, counted, backpressure_threshold,
+                    "Anchor abandoned (%s): %s (%d consecutive server failure(s), threshold %d)",
+                    reason,
+                    exc,
+                    counted,
+                    backpressure_threshold,
                 )
                 pbar.update(1)
                 if counted >= backpressure_threshold:
@@ -968,7 +978,8 @@ def generate_text_anchors(
                         "Backpressure triggered: %d consecutive server failures "
                         "(timeout/transport), pausing generation for %.1fs to let the "
                         "server recover.",
-                        counted, backpressure_cooldown,
+                        counted,
+                        backpressure_cooldown,
                     )
                     sleep(backpressure_cooldown)
                     stats.backpressure_events += 1
@@ -1017,10 +1028,10 @@ def generate_text_anchors(
         # A run that dropped anchors must not look like a clean run (§3.2).
         logger.warning(
             "Anchor generation abandoned %d/%d anchor(s): %s",
-            stats.abandoned_total, target_count,
+            stats.abandoned_total,
+            target_count,
             ", ".join(
-                f"{reason}={count}"
-                for reason, count in sorted(stats.abandoned_by_reason.items())
+                f"{reason}={count}" for reason, count in sorted(stats.abandoned_by_reason.items())
             ),
         )
     if invalid_shape or invalid_data_source or duplicate_ids:
@@ -1028,7 +1039,10 @@ def generate_text_anchors(
             "Anchor bank %s accepted %d anchor(s); rejected %d with an invalid "
             "message shape, %d with a data_source outside the vocabulary and "
             "%d duplicate id(s).",
-            output_path, written, len(invalid_shape), len(invalid_data_source),
+            output_path,
+            written,
+            len(invalid_shape),
+            len(invalid_data_source),
             len(duplicate_ids),
         )
     for anchor_id, reason in invalid_shape:
@@ -1038,7 +1052,8 @@ def generate_text_anchors(
     for duplicate_id in duplicate_ids:
         logger.warning(
             "  duplicate id skipped: %s (an anchor with this id is already in %s)",
-            duplicate_id, output_path,
+            duplicate_id,
+            output_path,
         )
 
     return anchors

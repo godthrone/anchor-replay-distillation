@@ -290,9 +290,9 @@ def test_spec_plan_has_one_spec_per_coordinate_and_unique_ids(
     specs = sample_anchors(ontology, AnchorGenerationConfig(seed=3))
     assert len(specs) == EXPECTED_TOTAL
     assert len({spec.id for spec in specs}) == EXPECTED_TOTAL
-    assert [spec.anchor_meta["modality"] for spec in specs] == [
-        c.modality for c in plan
-    ], "plan order must be preserved (the resume path slices this list)"
+    assert [spec.anchor_meta["modality"] for spec in specs] == [c.modality for c in plan], (
+        "plan order must be preserved (the resume path slices this list)"
+    )
 
 
 # ── turn counts: derived from the ontology ──────────────────────────────────

@@ -110,9 +110,7 @@ def test_smoke_is_not_a_config_field() -> None:
     assert "smoke" not in ARDConfig.model_fields
 
 
-def test_missing_config_file_fails_cleanly(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_missing_config_file_fails_cleanly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _pin_project_root(monkeypatch, tmp_path)
     missing = tmp_path / "nope.toml"
     with pytest.raises(SystemExit) as excinfo:

@@ -36,10 +36,11 @@ import socket
 import struct
 import threading
 import time
+from collections.abc import Generator
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 import httpx
 
@@ -326,14 +327,12 @@ def encode_image_to_base64(path: str | Path) -> str:
         ".png": "image/png",
         ".webp": "image/webp",
         ".gif": "image/gif",
-        
     }
     suffix = path.suffix.lower()
     mime = extension_to_mime.get(suffix)
     if mime is None:
         raise ValueError(
-            f"Unsupported image format: {suffix!r}. "
-            f"Supported: {', '.join(extension_to_mime)}"
+            f"Unsupported image format: {suffix!r}. Supported: {', '.join(extension_to_mime)}"
         )
 
     data = path.read_bytes()
@@ -487,8 +486,14 @@ def _stream_socket(response: httpx.Response) -> socket.socket | None:
         ``None`` if the socket could not be reached or duplicated.
     """
     node: Any = response
-    for attribute in ("stream", "_stream", "_httpcore_stream", "_stream",
-                      "_connection", "_network_stream"):
+    for attribute in (
+        "stream",
+        "_stream",
+        "_httpcore_stream",
+        "_stream",
+        "_connection",
+        "_network_stream",
+    ):
         node = getattr(node, attribute, None)
         if node is None:
             return None
@@ -611,7 +616,9 @@ def _iter_lines_with_timeout(
                 line_queue.put(("line", line))
                 if stop_event.is_set():
                     break
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — thread boundary: any failure of
+            # the reader thread must reach the consumer through the queue instead
+            # of dying silently in a thread nobody joins (§13.1 not swallowed).
             line_queue.put(("error", exc))
         line_queue.put(("done", None))
 
@@ -628,8 +635,7 @@ def _iter_lines_with_timeout(
                 stop_event.set()
                 phase = "first token (prefill)" if first_token else "inter-token"
                 raise ARDTimeoutError(
-                    f"Streaming request timed out waiting for {phase} "
-                    f"(timeout={timeout:.0f}s)"
+                    f"Streaming request timed out waiting for {phase} (timeout={timeout:.0f}s)"
                 )
 
             if kind == "done":
@@ -712,9 +718,7 @@ def _send_streaming_request(
             "it enables thinking on vLLM, and null additionally leaks reasoning "
             "text into message.content."
         )
-    _assert_enable_thinking_is_bool(
-        template_kwargs["enable_thinking"], where="request boundary"
-    )
+    _assert_enable_thinking_is_bool(template_kwargs["enable_thinking"], where="request boundary")
 
     headers: dict[str, str] = {"Content-Type": "application/json"}
     if config.api_key is not None:
@@ -734,12 +738,15 @@ def _send_streaming_request(
     reasoning_chunks = 0
 
     with httpx.Client(timeout=http_timeout) as client:
-        with client.stream("POST", config.chat_completions_url,
-                           json=payload, headers=headers) as response:
+        with client.stream(
+            "POST", config.chat_completions_url, json=payload, headers=headers
+        ) as response:
             if response.status_code != 200:
                 try:
                     body = response.read().decode("utf-8", errors="replace")
-                except Exception:
+                except Exception:  # noqa: BLE001 — best-effort diagnostic read of an
+                    # error body; the HTTP status is the real signal, so a failure
+                    # here must not replace it with a traceback.
                     body = "<unreadable>"
                 raise RuntimeError(
                     f"Chat completions request failed with HTTP {response.status_code}: {body}"
@@ -919,16 +926,21 @@ class ChatAPIClient:
                     raise
                 last_error = exc
                 if attempt < self._config.max_retries:
-                    delay = min(2.0 ** attempt, 30.0)
+                    delay = min(2.0**attempt, 30.0)
                     if _is_timeout_error(exc):
                         logger.warning(
                             "Attempt %d/%d failed (timeout). Retrying in %.1fs...",
-                            attempt + 1, self._config.max_retries + 1, delay,
+                            attempt + 1,
+                            self._config.max_retries + 1,
+                            delay,
                         )
                     else:
                         logger.warning(
                             "Attempt %d/%d failed: %s. Retrying in %.1fs...",
-                            attempt + 1, self._config.max_retries + 1, exc, delay,
+                            attempt + 1,
+                            self._config.max_retries + 1,
+                            exc,
+                            delay,
                         )
                     time.sleep(delay)
             except httpx.TimeoutException as exc:
@@ -945,16 +957,19 @@ class ChatAPIClient:
                     ) from exc
                 last_error = exc
                 if attempt < self._config.max_retries:
-                    delay = min(2.0 ** attempt, 30.0)
+                    delay = min(2.0**attempt, 30.0)
                     logger.warning(
                         "Attempt %d/%d failed (timeout). Retrying in %.1fs...",
-                        attempt + 1, self._config.max_retries + 1, delay,
+                        attempt + 1,
+                        self._config.max_retries + 1,
+                        delay,
                     )
                     time.sleep(delay)
 
         logger.error(
             "All %d attempts failed: %s",
-            self._config.max_retries + 1, last_error,
+            self._config.max_retries + 1,
+            last_error,
         )
         raise RuntimeError(
             f"Chat request failed after {self._config.max_retries + 1} attempt(s): {last_error}"
@@ -985,7 +1000,9 @@ class ChatAPIClient:
                 # field for it — a caller that needs reasoning uses chat()).
                 response = self.chat(req.messages, req.temperature)
                 results[index] = ChatResult(content=response.content, success=True)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — per-request isolation: one bad
+                # request must not abort the batch; the failure is recorded on its
+                # own result instead of being dropped (§3.2 transparent).
                 results[index] = ChatResult(
                     content="",
                     success=False,

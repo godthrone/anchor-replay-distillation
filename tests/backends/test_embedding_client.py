@@ -283,9 +283,7 @@ def test_normalization_off_accepts_zero_vector(endpoint: MockEndpoint):
 # ── Retry policy ────────────────────────────────────────────────────────────
 
 
-def test_5xx_is_retried_then_succeeds(
-    endpoint: MockEndpoint, no_sleep: list[float]
-):
+def test_5xx_is_retried_then_succeeds(endpoint: MockEndpoint, no_sleep: list[float]):
     def responder(attempt: int, request: httpx.Request) -> httpx.Response:
         if attempt < 3:
             return httpx.Response(503, text=f"upstream busy {attempt}")
@@ -333,9 +331,7 @@ def test_429_is_retried(endpoint: MockEndpoint, no_sleep: list[float]):
 
 
 @pytest.mark.parametrize("status", [400, 401, 403, 404, 422])
-def test_other_4xx_is_not_retried(
-    endpoint: MockEndpoint, no_sleep: list[float], status: int
-):
+def test_other_4xx_is_not_retried(endpoint: MockEndpoint, no_sleep: list[float], status: int):
     endpoint.install(lambda attempt, request: httpx.Response(status, text="bad request"))
 
     with pytest.raises(ec.EmbeddingRequestError) as excinfo:

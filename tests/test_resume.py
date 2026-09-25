@@ -343,9 +343,7 @@ def test_resume_does_not_touch_the_clients_before_generating(
 # ── 2. finished run → nothing to do ─────────────────────────────────────────
 
 
-def test_complete_bank_is_left_untouched(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_complete_bank_is_left_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """N ≥ M → no generation, no rewrite, same bytes (a re-run is idempotent)."""
     from ard.config import load_config
     from ard.pipeline import run
@@ -362,9 +360,7 @@ def test_complete_bank_is_left_untouched(
     assert manifest["total_anchors"] == _TARGET_COUNT
 
 
-def test_overfilled_bank_is_left_untouched(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_overfilled_bank_is_left_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """More records than requested is still "nothing to do", not an error."""
     from ard.config import load_config
     from ard.pipeline import run
@@ -402,9 +398,7 @@ def test_overwrite_clears_the_bank_and_generates_the_full_target(
     assert len(records) == _TARGET_COUNT
     # The plan double is positional, so clearing the bank regenerates the plan
     # from its first entry — the ids are a function of the plan, not of the run.
-    assert [r["id"] for r in records] == [
-        f"resumed-{index}" for index in range(_TARGET_COUNT)
-    ]
+    assert [r["id"] for r in records] == [f"resumed-{index}" for index in range(_TARGET_COUNT)]
 
 
 # ── 4. the interrupted-run fragment must not defeat the resume ──────────────
@@ -432,9 +426,9 @@ def test_trailing_fragment_is_ignored_instead_of_crashing_the_resume(
     with caplog.at_level("WARNING"):
         run(load_config(tmp_path / "config.toml"), generate_specs=plan)
 
-    assert any(
-        "unreadable line" in record.getMessage() for record in caplog.records
-    ), "the discarded fragment must be announced, not silently swallowed"
+    assert any("unreadable line" in record.getMessage() for record in caplog.records), (
+        "the discarded fragment must be announced, not silently swallowed"
+    )
     assert spy.requested == [_TARGET_COUNT - existing], (
         "the fragment is not a record, so it must not shrink the missing batch"
     )

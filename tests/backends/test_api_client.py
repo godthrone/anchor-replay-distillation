@@ -116,7 +116,9 @@ def test_chat_client_creation():
 def test_build_payload_enable_thinking_true():
     """_build_payload sends chat_template_kwargs when enable_thinking=True."""
     config = ChatAPIConfig(
-        api_base="https://api.example.com", model_name="m", api_key="k",
+        api_base="https://api.example.com",
+        model_name="m",
+        api_key="k",
         enable_thinking=True,
     )
     payload = _build_payload(config, [{"role": "user", "content": "hi"}], None)
@@ -127,7 +129,9 @@ def test_build_payload_enable_thinking_true():
 def test_build_payload_enable_thinking_false():
     """_build_payload sends chat_template_kwargs when enable_thinking=False (B3 regression)."""
     config = ChatAPIConfig(
-        api_base="https://api.example.com", model_name="m", api_key="k",
+        api_base="https://api.example.com",
+        model_name="m",
+        api_key="k",
         enable_thinking=False,
     )
     payload = _build_payload(config, [{"role": "user", "content": "hi"}], None)
@@ -164,7 +168,9 @@ def test_build_payload_enable_thinking_none_is_rejected():
     """
     with pytest.raises(TypeError, match="enable_thinking must be True or False"):
         ChatAPIConfig(
-            api_base="https://api.example.com", model_name="m", api_key="k",
+            api_base="https://api.example.com",
+            model_name="m",
+            api_key="k",
             enable_thinking=None,  # type: ignore[arg-type]
         )
 
@@ -173,7 +179,9 @@ def test_build_payload_always_sends_enable_thinking_as_bool():
     """The key is always present and always a real bool — no omitted-key state."""
     for value in (True, False):
         config = ChatAPIConfig(
-            api_base="https://api.example.com", model_name="m", api_key="k",
+            api_base="https://api.example.com",
+            model_name="m",
+            api_key="k",
             enable_thinking=value,
         )
         payload = _build_payload(config, [{"role": "user", "content": "hi"}], None)
@@ -202,7 +210,9 @@ def test_build_payload_enable_thinking_default():
 # the accumulated answer is the concatenation of the ``content`` fragments.
 
 _TEST_CONFIG = ChatAPIConfig(
-    api_base="https://api.example.com", model_name="m", api_key="k",
+    api_base="https://api.example.com",
+    model_name="m",
+    api_key="k",
     max_retries=0,
 )
 
@@ -243,9 +253,7 @@ def _sse_transport(lines: list[str], *, delay: float = 0.0) -> httpx.MockTranspo
             for line in lines:
                 yield line.encode("utf-8")
 
-        return httpx.Response(
-            200, headers={"content-type": "text/event-stream"}, content=body()
-        )
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body())
 
     return httpx.MockTransport(handler)
 
@@ -366,9 +374,7 @@ def test_httpx_timeout_has_no_read_deadline(monkeypatch):
     def recording_client(*args, **kwargs):
         captured["timeout"] = kwargs.get("timeout")
         return _REAL_HTTPX_CLIENT(
-            transport=httpx.MockTransport(
-                lambda request: httpx.Response(200, json={"choices": []})
-            )
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"choices": []}))
         )
 
     monkeypatch.setattr(api_module.httpx, "Client", recording_client)
@@ -396,8 +402,12 @@ def test_first_token_timeout_still_fires_and_releases_reader(slow_sse_server):
     """
     server = slow_sse_server(5.0)
     config = ChatAPIConfig(
-        api_base=server.url, model_name="m", api_key="k",
-        max_retries=0, first_token_timeout=0.5, inter_token_timeout=5.0,
+        api_base=server.url,
+        model_name="m",
+        api_key="k",
+        max_retries=0,
+        first_token_timeout=0.5,
+        inter_token_timeout=5.0,
     )
 
     started = time.monotonic()
@@ -427,7 +437,9 @@ def test_failfast_timeout_reports_single_attempt(monkeypatch, caplog):
 
     monkeypatch.setattr(api_module, "_send_streaming_request", fake_send)
     config = ChatAPIConfig(
-        api_base="https://api.example.com", model_name="m", api_key="k",
+        api_base="https://api.example.com",
+        model_name="m",
+        api_key="k",
         max_retries=3,  # a non-trivial cap: must NOT leak into the message
     )
 
@@ -454,8 +466,11 @@ def test_retry_on_timeout_true_retries_and_reports_real_attempts(monkeypatch, ca
     monkeypatch.setattr(api_module, "_send_streaming_request", fake_send)
     monkeypatch.setattr(api_module.time, "sleep", lambda _: None)  # skip backoff
     config = ChatAPIConfig(
-        api_base="https://api.example.com", model_name="m", api_key="k",
-        max_retries=3, retry_on_timeout=True,
+        api_base="https://api.example.com",
+        model_name="m",
+        api_key="k",
+        max_retries=3,
+        retry_on_timeout=True,
     )
 
     with caplog.at_level(logging.WARNING, logger="ard.backends.api_client"):
@@ -485,8 +500,12 @@ def test_first_token_wait_not_capped_at_30s(slow_sse_server):
     """
     server = slow_sse_server(31.0)
     config = ChatAPIConfig(
-        api_base=server.url, model_name="m", api_key="k",
-        max_retries=0, first_token_timeout=90.0, inter_token_timeout=15.0,
+        api_base=server.url,
+        model_name="m",
+        api_key="k",
+        max_retries=0,
+        first_token_timeout=90.0,
+        inter_token_timeout=15.0,
     )
 
     started = time.monotonic()
@@ -541,6 +560,7 @@ def test_encode_image_to_base64_unsupported_format(tmp_path):
     with pytest.raises(ValueError, match="Unsupported image format"):
         encode_image_to_base64(bad)
 
+
 # ── Reasoning handling (WP-F3 regression) ───────────────────────────────────
 #
 # Real-server shape (vLLM 0.22.0 + Qwen3.8-27B): the reasoning field is
@@ -551,6 +571,7 @@ def test_encode_image_to_base64_unsupported_format(tmp_path):
 # as ``ChatResponse.reasoning`` and lands in ``targets[0].output.reasoning`` —
 # and it is still a budget consumer, so an exhausted budget must not silently
 # produce an empty answer.
+
 
 def _reasoning_chunk(text: str, *, finish_reason: str | None = None) -> dict:
     """One thinking-phase chunk: ``content`` is ``null``, only ``reasoning`` set."""
@@ -599,9 +620,7 @@ def test_reasoning_text_is_captured_and_kept_out_of_content(inject_sse_transport
     reset_reasoning_stats()
     inject_sse_transport(_reasoning_then_answer_stream())
 
-    response = ChatAPIClient(_TEST_CONFIG).chat(
-        [{"role": "user", "content": "what is 6*7"}]
-    )
+    response = ChatAPIClient(_TEST_CONFIG).chat([{"role": "user", "content": "what is 6*7"}])
 
     # ① content is exactly the answer — no reasoning prose leaked into it.
     assert response.content == "Six times seven is 42."
@@ -609,9 +628,7 @@ def test_reasoning_text_is_captured_and_kept_out_of_content(inject_sse_transport
     assert "forty-two" not in response.content
 
     # ② the reasoning text itself is available, whole and in arrival order.
-    assert response.reasoning == (
-        "The user asks for a number. Six times seven is forty-two."
-    )
+    assert response.reasoning == ("The user asks for a number. Six times seven is forty-two.")
 
     # ③ it is still observable at run level: counters, no text.
     stats = reasoning_stats()
@@ -625,9 +642,7 @@ def test_reasoning_text_is_captured_and_kept_out_of_content(inject_sse_transport
     assert stats.get("empty_content", 0) == 0
 
 
-def test_reasoning_only_truncated_raises_and_warns(
-    inject_sse_transport, caplog
-):
+def test_reasoning_only_truncated_raises_and_warns(inject_sse_transport, caplog):
     """F3 core bug: reasoning ate the budget → no content, must not be silent.
 
     Asserts the three required properties: the failure is *announced*
@@ -667,11 +682,13 @@ def test_empty_content_without_reasoning_is_not_a_timeout(inject_sse_transport, 
     transport problem, and it must never be retried as one.
     """
     reset_reasoning_stats()
-    inject_sse_transport([
-        _sse_data(_chunk({"role": "assistant", "content": None})),
-        _sse_data(_empty_content_only_chunk(finish_reason="stop")),
-        _sse_data("[DONE]"),
-    ])
+    inject_sse_transport(
+        [
+            _sse_data(_chunk({"role": "assistant", "content": None})),
+            _sse_data(_empty_content_only_chunk(finish_reason="stop")),
+            _sse_data("[DONE]"),
+        ]
+    )
 
     with caplog.at_level(logging.WARNING, logger=api_module.logger.name):
         with pytest.raises(ARDEmptyContentError) as excinfo:
@@ -710,11 +727,15 @@ def test_empty_content_is_not_retried(inject_sse_transport, monkeypatch):
 
     real_inject = counting_transport()
     monkeypatch.setattr(
-        api_module.httpx, "Client",
+        api_module.httpx,
+        "Client",
         lambda *a, **k: _REAL_HTTPX_CLIENT(transport=real_inject, timeout=httpx.Timeout(None)),
     )
     config = ChatAPIConfig(
-        api_base="https://api.example.com", model_name="m", api_key="k", max_retries=2,
+        api_base="https://api.example.com",
+        model_name="m",
+        api_key="k",
+        max_retries=2,
     )
 
     with pytest.raises(ARDEmptyContentError):
@@ -735,9 +756,7 @@ def test_reasoning_only_truncation_still_fails_without_content(inject_sse_transp
     inject_sse_transport(_reasoning_only_truncated_stream())
 
     with pytest.raises(ARDEmptyContentError):
-        ChatAPIClient(_TEST_CONFIG).chat(
-            [{"role": "user", "content": "hi"}]
-        )
+        ChatAPIClient(_TEST_CONFIG).chat([{"role": "user", "content": "hi"}])
 
     stats = reasoning_stats()
     assert stats["reasoning_only_responses"] == 1
@@ -747,16 +766,16 @@ def test_reasoning_only_truncation_still_fails_without_content(inject_sse_transp
 def test_reasoning_content_fallback_field_is_supported(inject_sse_transport):
     """``delta.reasoning_content`` (DeepSeek spelling) is also recognised."""
     reset_reasoning_stats()
-    inject_sse_transport([
-        _sse_data(_chunk({"role": "assistant", "content": None})),
-        _sse_data(_chunk({"reasoning_content": "thinking with the other spelling"})),
-        _sse_data(_chunk({"content": "answer"}, finish_reason="stop")),
-        _sse_data("[DONE]"),
-    ])
-
-    response = ChatAPIClient(_TEST_CONFIG).chat(
-        [{"role": "user", "content": "hi"}]
+    inject_sse_transport(
+        [
+            _sse_data(_chunk({"role": "assistant", "content": None})),
+            _sse_data(_chunk({"reasoning_content": "thinking with the other spelling"})),
+            _sse_data(_chunk({"content": "answer"}, finish_reason="stop")),
+            _sse_data("[DONE]"),
+        ]
     )
+
+    response = ChatAPIClient(_TEST_CONFIG).chat([{"role": "user", "content": "hi"}])
 
     assert response.content == "answer"
     assert response.reasoning == "thinking with the other spelling"
@@ -796,7 +815,9 @@ def test_enable_thinking_rejects_non_bool(value):
     """
     with pytest.raises(TypeError, match="enable_thinking must be True or False"):
         ChatAPIConfig(
-            api_base="https://api.example.com", model_name="m", api_key="k",
+            api_base="https://api.example.com",
+            model_name="m",
+            api_key="k",
             enable_thinking=value,  # type: ignore[arg-type]
         )
 
@@ -805,7 +826,9 @@ def test_enable_thinking_rejects_non_bool(value):
 def test_enable_thinking_accepts_both_bools(value):
     """Both real bools are accepted and reach the payload as bools."""
     config = ChatAPIConfig(
-        api_base="https://api.example.com", model_name="m", api_key="k",
+        api_base="https://api.example.com",
+        model_name="m",
+        api_key="k",
         enable_thinking=value,
     )
     payload = _build_payload(config, [{"role": "user", "content": "hi"}], None)
@@ -817,7 +840,8 @@ def test_enable_thinking_rejected_before_any_request(monkeypatch):
     """The contract is enforced at construction, before a client can send NULL."""
     sent: list[dict] = []
     monkeypatch.setattr(
-        api_module.httpx, "Client",
+        api_module.httpx,
+        "Client",
         lambda *a, **k: _REAL_HTTPX_CLIENT(
             transport=httpx.MockTransport(
                 lambda request: sent.append(request.read()) or httpx.Response(200, content=b"")
@@ -825,8 +849,12 @@ def test_enable_thinking_rejected_before_any_request(monkeypatch):
         ),
     )
     with pytest.raises(TypeError):
-        ChatAPIClient(ChatAPIConfig(
-            api_base="https://api.example.com", model_name="m", api_key="k",
-            enable_thinking=None,  # type: ignore[arg-type]
-        ))
+        ChatAPIClient(
+            ChatAPIConfig(
+                api_base="https://api.example.com",
+                model_name="m",
+                api_key="k",
+                enable_thinking=None,  # type: ignore[arg-type]
+            )
+        )
     assert sent == []

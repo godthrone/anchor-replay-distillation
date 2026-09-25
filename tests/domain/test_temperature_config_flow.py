@@ -71,9 +71,7 @@ def _sse_stream(content: str) -> list[str]:
                 "object": "chat.completion.chunk",
                 "created": 1,
                 "model": "m",
-                "choices": [
-                    {"index": 0, "delta": {"content": content}, "finish_reason": "stop"}
-                ],
+                "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": "stop"}],
             }
         ),
         _sse_data("[DONE]"),
@@ -120,9 +118,7 @@ def _recording_transport(recorder: list[dict], content: str) -> httpx.MockTransp
             for line in _sse_stream(content):
                 yield line.encode("utf-8")
 
-        return httpx.Response(
-            200, headers={"content-type": "text/event-stream"}, content=body()
-        )
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body())
 
     return httpx.MockTransport(handler)
 

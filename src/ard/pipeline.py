@@ -121,9 +121,7 @@ def _flatten_key(key: str) -> str:
 REDACTED_KEY_WORD_SET: frozenset[str] = frozenset(REDACTED_KEY_WORDS)
 """Word-level comparison set — the single definition of "is a secret key"."""
 
-REDACTED_KEY_FLAT_SET: frozenset[str] = frozenset(
-    _flatten_key(word) for word in REDACTED_KEY_WORDS
-)
+REDACTED_KEY_FLAT_SET: frozenset[str] = frozenset(_flatten_key(word) for word in REDACTED_KEY_WORDS)
 """Flattened names, so single-token spellings like ``apikey`` also match."""
 
 NOT_SECRET_KEY_WORDS: frozenset[str] = frozenset({"timeout", "timeouts"})
@@ -518,9 +516,7 @@ def _write_coverage_report(report: acceptance.AcceptanceReport, results_dir: Pat
         json.dumps(report.model_dump(mode="json"), indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
-    (results_dir / "coverage.md").write_text(
-        acceptance.render_markdown(report), encoding="utf-8"
-    )
+    (results_dir / "coverage.md").write_text(acceptance.render_markdown(report), encoding="utf-8")
     return coverage_json
 
 
@@ -1029,6 +1025,8 @@ def run(
     logger.info("Done! Output: %s", output_dir)
     logger.info(
         "  Total anchors: %d (%d existing + %d new)",
-        total, existing_count, total - existing_count,
+        total,
+        existing_count,
+        total - existing_count,
     )
     return output_dir

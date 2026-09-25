@@ -1,10 +1,12 @@
 """Tests for ARD — domain bank, text_anchor prompts, and pipeline."""
 
 import json
-from pathlib import Path
 
 import pytest
 
+from ard.core.sampling import generate_anchor_id
+from ard.core.types import DataSource, GeneratedAnchor
+from ard.domain.anchor_shape import message_shape_error
 from ard.domain.append_outcome import AppendOutcome
 from ard.domain.bank import (
     anchor_to_dict,
@@ -17,11 +19,7 @@ from ard.domain.bank import (
     write_anchor_bank,
     write_manifest,
 )
-from ard.domain.anchor_shape import message_shape_error
 from ard.domain.text_anchor import build_input_prompt, build_target_prompt
-from ard.core.sampling import generate_anchor_id
-from ard.core.types import DataSource, GeneratedAnchor, AnchorGenerationConfig
-
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -52,7 +50,11 @@ def test_anchor_to_dict_format():
     assert d["targets"][0]["id"] == "primary"
     assert d["targets"][0]["output"]["content"] == "answer"
     assert d["targets"][0]["output"]["reasoning"] == "six times seven is forty-two"
-    assert d["anchor_meta"] == {"knowledge_domain": "math", "language": "English", "capability": "qa"}
+    assert d["anchor_meta"] == {
+        "knowledge_domain": "math",
+        "language": "English",
+        "capability": "qa",
+    }
     assert d["teacher_id"] == "target"
 
 
@@ -192,15 +194,18 @@ def test_message_shape_error_accepts_valid_shapes():
     """The exit contract accepts U, UAU and UAUAU."""
     assert message_shape_error([{"role": "user", "content": "q"}]) is None
     assert message_shape_error(_uau_messages()) is None
-    assert message_shape_error(
-        [
-            {"role": "user", "content": "q1"},
-            {"role": "assistant", "content": "a1"},
-            {"role": "user", "content": "q2"},
-            {"role": "assistant", "content": "a2"},
-            {"role": "user", "content": "q3"},
-        ]
-    ) is None
+    assert (
+        message_shape_error(
+            [
+                {"role": "user", "content": "q1"},
+                {"role": "assistant", "content": "a1"},
+                {"role": "user", "content": "q2"},
+                {"role": "assistant", "content": "a2"},
+                {"role": "user", "content": "q3"},
+            ]
+        )
+        is None
+    )
 
 
 def test_message_shape_error_rejects_uauau_and_uauu():
@@ -234,17 +239,20 @@ def test_message_shape_error_accepts_optional_leading_system():
     """A single leading ``system`` is allowed for U, UAU and UAUAU (D1)."""
     assert message_shape_error(_with_system([{"role": "user", "content": "q"}])) is None
     assert message_shape_error(_with_system(_uau_messages())) is None
-    assert message_shape_error(
-        _with_system(
-            [
-                {"role": "user", "content": "q1"},
-                {"role": "assistant", "content": "a1"},
-                {"role": "user", "content": "q2"},
-                {"role": "assistant", "content": "a2"},
-                {"role": "user", "content": "q3"},
-            ]
+    assert (
+        message_shape_error(
+            _with_system(
+                [
+                    {"role": "user", "content": "q1"},
+                    {"role": "assistant", "content": "a1"},
+                    {"role": "user", "content": "q2"},
+                    {"role": "assistant", "content": "a2"},
+                    {"role": "user", "content": "q3"},
+                ]
+            )
         )
-    ) is None
+        is None
+    )
 
 
 def test_message_shape_error_rejects_system_not_in_first_position():
@@ -364,8 +372,10 @@ def test_write_anchor_bank_refuses_invalid_shape(tmp_path):
         write_anchor_bank(
             [
                 _make_anchor("good"),
-                _make_anchor("bad", messages=[{"role": "user", "content": "q"},
-                                              {"role": "user", "content": "q2"}]),
+                _make_anchor(
+                    "bad",
+                    messages=[{"role": "user", "content": "q"}, {"role": "user", "content": "q2"}],
+                ),
             ],
             path,
         )
@@ -485,7 +495,11 @@ def test_build_manifest_from_records_basic(tmp_path):
         },
         {
             "id": "c",
-            "anchor_meta": {"knowledge_domain": "physics", "language": "English", "capability": "reasoning"},
+            "anchor_meta": {
+                "knowledge_domain": "physics",
+                "language": "English",
+                "capability": "reasoning",
+            },
         },
     ]
     manifest = build_manifest_from_records(records, tmp_path / "out")
@@ -500,7 +514,11 @@ def test_build_manifest_from_records_visual_domain(tmp_path):
     records = [
         {
             "id": "v1",
-            "anchor_meta": {"visual_domain": "general", "question_type": "description", "language": "English"},
+            "anchor_meta": {
+                "visual_domain": "general",
+                "question_type": "description",
+                "language": "English",
+            },
         },
     ]
     manifest = build_manifest_from_records(records, tmp_path / "out")
@@ -514,9 +532,21 @@ def test_build_manifest_from_records_visual_domain(tmp_path):
 def test_build_manifest_counts(tmp_path):
     """build_manifest counts domains, languages, capabilities."""
     anchors = [
-        _make_anchor("a", anchor_meta={"knowledge_domain": "math", "language": "English", "capability": "qa"}),
-        _make_anchor("b", anchor_meta={"knowledge_domain": "math", "language": "简体中文", "capability": "qa"}),
-        _make_anchor("c", anchor_meta={"knowledge_domain": "physics", "language": "English", "capability": "reasoning"}),
+        _make_anchor(
+            "a", anchor_meta={"knowledge_domain": "math", "language": "English", "capability": "qa"}
+        ),
+        _make_anchor(
+            "b",
+            anchor_meta={"knowledge_domain": "math", "language": "简体中文", "capability": "qa"},
+        ),
+        _make_anchor(
+            "c",
+            anchor_meta={
+                "knowledge_domain": "physics",
+                "language": "English",
+                "capability": "reasoning",
+            },
+        ),
     ]
     manifest = build_manifest(anchors, tmp_path / "out")
     assert manifest["total_anchors"] == 3
@@ -572,4 +602,5 @@ def test_build_target_prompt():
 def test_pipeline_imports():
     """Verify pipeline module is importable."""
     from ard.pipeline import run
+
     assert callable(run)

@@ -108,7 +108,9 @@ def _parsed_records(path: Path) -> list[dict[str, Any]]:
                     "Ignoring unreadable line %d in %s (%d byte(s)) — it is "
                     "excluded from the bank's record count; the remaining "
                     "records are kept",
-                    line_no, path, len(line),
+                    line_no,
+                    path,
+                    len(line),
                 )
                 continue
             records.append(record)
@@ -238,7 +240,9 @@ def append_anchor(anchor: GeneratedAnchor, path: Path) -> AppendOutcome:
         # conversation is not distillable data and must never be published.
         logger.warning(
             "Anchor %s rejected by the output shape gate (%s) — not written to %s",
-            anchor.id, shape_error, path,
+            anchor.id,
+            shape_error,
+            path,
         )
         return AppendOutcome.INVALID_SHAPE_SKIPPED
 
@@ -248,7 +252,9 @@ def append_anchor(anchor: GeneratedAnchor, path: Path) -> AppendOutcome:
         # published, and it must be refused *before* the file is opened.
         logger.warning(
             "Anchor %s rejected by the data_source gate (%s) — not written to %s",
-            anchor.id, routing_error, path,
+            anchor.id,
+            routing_error,
+            path,
         )
         return AppendOutcome.INVALID_DATA_SOURCE_SKIPPED
 
@@ -258,7 +264,8 @@ def append_anchor(anchor: GeneratedAnchor, path: Path) -> AppendOutcome:
         if anchor.id in known:
             logger.warning(
                 "Anchor %s already present in %s — duplicate not written",
-                anchor.id, path,
+                anchor.id,
+                path,
             )
             return AppendOutcome.DUPLICATE_SKIPPED
         with open(path, "a+", encoding="utf-8") as f:
@@ -382,9 +389,7 @@ def write_anchor_bank(anchors: list[GeneratedAnchor], output_path: str | Path) -
         )
 
     rejected_sources = [
-        (a.id, data_source_error(a))
-        for a in anchors
-        if data_source_error(a) is not None
+        (a.id, data_source_error(a)) for a in anchors if data_source_error(a) is not None
     ]
     if rejected_sources:
         raise ValueError(
@@ -402,7 +407,9 @@ def write_anchor_bank(anchors: list[GeneratedAnchor], output_path: str | Path) -
     if duplicates:
         logger.warning(
             "write_anchor_bank: dropped %d duplicate id(s) for %s: %s",
-            len(duplicates), output_path, ", ".join(sorted(set(duplicates))),
+            len(duplicates),
+            output_path,
+            ", ".join(sorted(set(duplicates))),
         )
 
     with open(output_path, "w", encoding="utf-8") as f:
@@ -570,9 +577,7 @@ def with_generation_report(
         The same *manifest* object, enriched.
     """
     counters = {key: value for key, value in (stats or {}).items() if value}
-    observed_failures = {
-        key: value for key, value in (failures or {}).items() if value
-    }
+    observed_failures = {key: value for key, value in (failures or {}).items() if value}
     if not counters and not observed_failures:
         return manifest
     generation: dict[str, Any] = {}

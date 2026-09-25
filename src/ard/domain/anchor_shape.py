@@ -84,9 +84,7 @@ def message_shape_error(messages: list[Any]) -> str | None:
 
     # Vocabulary is ``user`` / ``assistant`` plus the optional ``system``.
     if any(r not in ("user", "assistant", "system") for r in roles):
-        index = next(
-            i for i, r in enumerate(roles) if r not in ("user", "assistant", "system")
-        )
+        index = next(i for i, r in enumerate(roles) if r not in ("user", "assistant", "system"))
         return f"message {index} has unknown role {roles[index]!r}"
 
     # system: at most one, and only at position 0 (D1).  Checked *before* the

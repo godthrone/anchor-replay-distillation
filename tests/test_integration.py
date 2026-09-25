@@ -243,9 +243,7 @@ class TestGenerateTextAnchors:
         mock_target = _scripted_chat_client(
             # The single *assistant* turn is answered by the target model.
             content="Machine learning is a subset of AI.",
-            final=_final_target_response(
-                "Transformers use self-attention mechanisms."
-            ),
+            final=_final_target_response("Transformers use self-attention mechanisms."),
         )
 
         results = generate_text_anchors(
@@ -322,14 +320,10 @@ class TestGenerateTextAnchors:
         # Content should be a list (multimodal format) when an image is present
         assert isinstance(content, list)
         has_image = any(
-            isinstance(part, dict) and part.get("type") in IMAGE_PART_TYPES
-            for part in content
+            isinstance(part, dict) and part.get("type") in IMAGE_PART_TYPES for part in content
         )
         assert has_image, "content list should contain an image part"
-        has_text = any(
-            isinstance(part, dict) and part.get("type") == "text"
-            for part in content
-        )
+        has_text = any(isinstance(part, dict) and part.get("type") == "text" for part in content)
         assert has_text, "content list should contain a text part"
 
 
@@ -395,7 +389,8 @@ class TestRoleDrivenGeneration:
 
         mock_input = MagicMock(spec=ChatAPIClient)
         mock_input.chat.side_effect = [
-            ChatResponse(content="question one"), ChatResponse(content="question two")
+            ChatResponse(content="question one"),
+            ChatResponse(content="question two"),
         ]
         mock_target = _scripted_chat_client(
             content="assistant reply", final=_final_target_response("final target answer")
@@ -448,7 +443,8 @@ class TestRoleDrivenGeneration:
 
         mock_input = MagicMock(spec=ChatAPIClient)
         mock_input.chat.side_effect = [
-            ChatResponse(content="question one"), ChatResponse(content="question two")
+            ChatResponse(content="question one"),
+            ChatResponse(content="question two"),
         ]
         mock_target = MagicMock(spec=ChatAPIClient)
         mock_target.chat.side_effect = ARDTimeoutError("timed out")
@@ -471,7 +467,8 @@ class TestRoleDrivenGeneration:
 
         mock_input = MagicMock(spec=ChatAPIClient)
         mock_input.chat.side_effect = [
-            ChatResponse(content="question one"), ARDTimeoutError("timed out")
+            ChatResponse(content="question one"),
+            ARDTimeoutError("timed out"),
         ]
         mock_target = _scripted_chat_client(
             content="assistant reply", final=_final_target_response("final target answer")
@@ -620,7 +617,6 @@ class TestRoleDrivenGeneration:
         assert len(records) == 1
         assert [m["role"] for m in records[0]["messages"]] == ["user", "assistant", "user"]
 
-
     def test_duplicate_ids_across_specs_are_banked_once(self, tmp_path: Path) -> None:
         """Anchors whose metadata collides share an id and must not double the bank.
 
@@ -677,6 +673,7 @@ class TestRoleDrivenGeneration:
 
 
 # ── allocate_images tests ────────────────────────────────────────────────────
+
 
 class TestAllocateImages:
     """Integration tests for the ``allocate_images`` quota function."""
@@ -905,16 +902,12 @@ class TestManifestGenerationReport:
             base[section]["api_key"] = "unused"
         config_path.write_text(_toml_dump(base), encoding="utf-8")
 
-        monkeypatch.setattr(
-            "ard.pipeline.generate_text_anchors", _scripted_generate_text_anchors
-        )
+        monkeypatch.setattr("ard.pipeline.generate_text_anchors", _scripted_generate_text_anchors)
 
         # A three-anchor plan, injected through ``run``'s plan seam: the anchor
         # count is rule-derived since WP-S2a, so a test that wants a small batch
         # supplies the plan instead of a config field.
-        result_dir = run(
-            load_config(config_path), generate_specs=lambda cfg: _three_specs()
-        )
+        result_dir = run(load_config(config_path), generate_specs=lambda cfg: _three_specs())
         manifest = json.loads((result_dir / "manifest.json").read_text(encoding="utf-8"))
 
         assert manifest["total_anchors"] == 1, "the bank holds exactly one record"

@@ -505,9 +505,7 @@ def load_ontology_v4(path: str | Path) -> OntologyV4:
     except json.JSONDecodeError as exc:
         raise OntologySchemaError(
             source,
-            [
-                f"<json>:{exc.lineno}:{exc.colno}: expected valid JSON (received: {exc.msg})"
-            ],
+            [f"<json>:{exc.lineno}:{exc.colno}: expected valid JSON (received: {exc.msg})"],
         ) from exc
     if not isinstance(raw, dict):
         raise OntologySchemaError(

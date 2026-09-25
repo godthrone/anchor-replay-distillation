@@ -137,9 +137,7 @@ def _rig(
 
     output_dir = tmp_path / "out"
     config_path = tmp_path / "config.toml"
-    _write_config(
-        config_path, output_dir, seed=seed, skip_missing_images=skip_missing_images
-    )
+    _write_config(config_path, output_dir, seed=seed, skip_missing_images=skip_missing_images)
     spy = _GeneratorSpy()
     monkeypatch.setattr(
         pipeline,
@@ -159,9 +157,7 @@ def _image_dir(tmp_path: Path, domains: dict[str, int]) -> Path:
         directory = root / domain
         directory.mkdir(parents=True)
         for index in range(count):
-            Image.new("RGB", (4, 4), color=index * 20).save(
-                directory / f"img_{index}.png", "PNG"
-            )
+            Image.new("RGB", (4, 4), color=index * 20).save(directory / f"img_{index}.png", "PNG")
     return root
 
 
@@ -202,9 +198,7 @@ def test_the_output_records_reference_the_domain_subdirectory(
 
     run(load_config(tmp_path / "config.toml"), image_dir=str(images), generate_specs=plan)
 
-    record = json.loads(
-        (output_dir / "anchor_bank.jsonl").read_text(encoding="utf-8").strip()
-    )
+    record = json.loads((output_dir / "anchor_bank.jsonl").read_text(encoding="utf-8").strip())
     assert record["data_source"] == "ard_multi"
 
     manifest = _manifest(output_dir)
@@ -227,19 +221,14 @@ def test_same_seed_is_byte_identical(tmp_path: Path, monkeypatch: pytest.MonkeyP
         output_dir, spy, plan = _rig(root, monkeypatch, specs, seed=1234)
         run(load_config(root / "config.toml"), image_dir=str(images), generate_specs=plan)
         selected = [
-            Path(path).relative_to(output_dir.parent).as_posix()
-            for path in spy.image_paths
-            if path
+            Path(path).relative_to(output_dir.parent).as_posix() for path in spy.image_paths if path
         ]
         copied = sorted(
-            f"{p.relative_to(output_dir).as_posix()}:"
-            f"{hashlib.sha256(p.read_bytes()).hexdigest()}"
+            f"{p.relative_to(output_dir).as_posix()}:{hashlib.sha256(p.read_bytes()).hexdigest()}"
             for p in output_dir.rglob("*")
             if p.is_file() and p.suffix == ".png"
         )
-        digests.append(
-            hashlib.sha256("\n".join([*selected, *copied]).encode()).hexdigest()
-        )
+        digests.append(hashlib.sha256("\n".join([*selected, *copied]).encode()).hexdigest())
 
     assert digests[0] == digests[1]
 
@@ -323,18 +312,14 @@ def test_skip_missing_images_warns_and_declares_each_dropped_anchor(
 
     images = _image_dir(tmp_path, {"animals": 1})
     specs = [_spec("t1", None), _spec("a1", "animals"), _spec("v1", "vehicles")]
-    output_dir, spy, plan = _rig(
-        tmp_path, monkeypatch, specs, skip_missing_images=True
-    )
+    output_dir, spy, plan = _rig(tmp_path, monkeypatch, specs, skip_missing_images=True)
 
     with caplog.at_level("WARNING"):
         run(load_config(tmp_path / "config.toml"), image_dir=str(images), generate_specs=plan)
 
     assert spy.requested == [["t1", "a1"]], "the unsupported anchor is not generated"
     skipped = [
-        record.getMessage()
-        for record in caplog.records
-        if "Skipping anchor" in record.getMessage()
+        record.getMessage() for record in caplog.records if "Skipping anchor" in record.getMessage()
     ]
     assert len(skipped) == 1, "one WARNING per dropped anchor"
     assert "v1" in skipped[0] and "vehicles" in skipped[0]
@@ -366,7 +351,6 @@ def test_resuming_a_skip_run_stays_declared_and_writes_no_new_record(
     assert spy.requested == [["a1"]], "the second run generates nothing new"
     assert (output_dir / "anchor_bank.jsonl").read_text(encoding="utf-8") == before
     assert any(
-        "Every remaining anchor (1) was skipped" in record.getMessage()
-        for record in caplog.records
+        "Every remaining anchor (1) was skipped" in record.getMessage() for record in caplog.records
     )
     assert _manifest(output_dir)["images"]["skipped_visual_domains"] == ["vehicles"]

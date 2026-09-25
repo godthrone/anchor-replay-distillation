@@ -85,10 +85,7 @@ class AnchorSpec:
             raise ValueError("Last turn must be user")
         for i in range(len(self.turns) - 1):
             if self.turns[i].role == self.turns[i + 1].role:
-                raise ValueError(
-                    f"Turns {i} and {i+1} have same role "
-                    f"'{self.turns[i].role}'"
-                )
+                raise ValueError(f"Turns {i} and {i + 1} have same role '{self.turns[i].role}'")
 
 
 @dataclass(slots=True)

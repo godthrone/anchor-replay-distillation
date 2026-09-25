@@ -30,17 +30,28 @@ logger = logging.getLogger(__name__)
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 
 RAW_EXTENSIONS = {
-    ".cr2", ".nef", ".arw", ".dng", ".orf", ".rw2",
-    ".raf", ".pef", ".srw", ".3fr", ".erf", ".mef",
-    ".mrw", ".nrw", ".ptx", ".r3d", ".rwl", ".srf",
+    ".cr2",
+    ".nef",
+    ".arw",
+    ".dng",
+    ".orf",
+    ".rw2",
+    ".raf",
+    ".pef",
+    ".srw",
+    ".3fr",
+    ".erf",
+    ".mef",
+    ".mrw",
+    ".nrw",
+    ".ptx",
+    ".r3d",
+    ".rwl",
+    ".srf",
     ".x3f",
 }
 
-CONVERTABLE_EXTENSIONS = (
-    SUPPORTED_EXTENSIONS
-    | {".bmp", ".tiff", ".tif"}
-    | RAW_EXTENSIONS
-)
+CONVERTABLE_EXTENSIONS = SUPPORTED_EXTENSIONS | {".bmp", ".tiff", ".tif"} | RAW_EXTENSIONS
 
 
 def scan_images(
@@ -68,15 +79,9 @@ def scan_images(
         raise NotADirectoryError(f"Image directory not found: {root}")
 
     if recursive:
-        paths = [
-            p for p in root.rglob("*")
-            if p.is_file() and p.suffix.lower() in extensions
-        ]
+        paths = [p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in extensions]
     else:
-        paths = [
-            p for p in root.iterdir()
-            if p.is_file() and p.suffix.lower() in extensions
-        ]
+        paths = [p for p in root.iterdir() if p.is_file() and p.suffix.lower() in extensions]
 
     return sorted(paths)
 
@@ -334,9 +339,7 @@ def convert_image(src: Path, dst: Path, quality: int = 95) -> bool:
         try:
             import rawpy  # noqa: PLC0415 — optional dependency
         except ImportError:
-            logger.warning(
-                "rawpy not installed, cannot convert RAW image: %s", src
-            )
+            logger.warning("rawpy not installed, cannot convert RAW image: %s", src)
             return False
         try:
             with rawpy.imread(str(src)) as raw:
@@ -346,7 +349,9 @@ def convert_image(src: Path, dst: Path, quality: int = 95) -> bool:
             dst_jpg = dst.with_suffix(".jpg")
             Image.fromarray(rgb).save(str(dst_jpg), "JPEG", quality=quality)
             return True
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — rawpy raises across its own
+            # exception hierarchy per decoder; the conversion is best-effort and the
+            # failure is reported per image at WARNING (§3.2 transparent).
             logger.warning("Failed to convert RAW image %s: %s", src, exc)
             return False
 
@@ -363,7 +368,9 @@ def convert_image(src: Path, dst: Path, quality: int = 95) -> bool:
         dst_jpg = dst.with_suffix(".jpg")
         img.save(str(dst_jpg), "JPEG", quality=quality)
         return True
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — Pillow raises across its own
+        # exception hierarchy per format; the conversion is best-effort and the
+        # failure is reported per image at WARNING (§3.2 transparent).
         logger.warning("Failed to convert image %s: %s", src, exc)
         return False
 
@@ -403,7 +410,10 @@ def convert_and_copy_images(
 
     logger.info(
         "Converting %d images to %s (quality=%d, force=%s)…",
-        len(image_paths), images_dir, quality, force,
+        len(image_paths),
+        images_dir,
+        quality,
+        force,
     )
 
     relative_paths: list[str] = []
@@ -438,6 +448,7 @@ def convert_and_copy_images(
 
     logger.info(
         "Conversion complete: %d/%d images succeeded",
-        len(relative_paths), len(image_paths),
+        len(relative_paths),
+        len(image_paths),
     )
     return relative_paths

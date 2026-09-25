@@ -141,9 +141,7 @@ def test_timeout_and_transport_are_server_instability() -> None:
     assert failure_reason(ARDTimeoutError("timed out")) == "timeout"
     assert failure_reason(httpx.ConnectError("connection refused")) == "transport_error"
     assert is_server_instability(ARDTimeoutError("timed out")) is True
-    assert is_server_instability(
-        httpx.ConnectError("connection refused")
-    ) is True
+    assert is_server_instability(httpx.ConnectError("connection refused")) is True
 
 
 def test_model_output_failures_are_not_server_instability() -> None:
@@ -185,15 +183,14 @@ def test_consecutive_timeouts_trigger_cooldown_and_reset_counter(
 
     # Both WARNINGs that used to live in unreachable code are asserted here.
     warnings = [record.getMessage() for record in caplog.records]
-    assert any(
-        "Backpressure triggered: 3 consecutive server failures" in m for m in warnings
-    ), warnings
+    assert any("Backpressure triggered: 3 consecutive server failures" in m for m in warnings), (
+        warnings
+    )
     assert any("pausing generation for 60.0s" in m for m in warnings), warnings
     assert any("resetting the" in m and "resuming generation" in m for m in warnings), warnings
     # Even below the threshold the per-anchor streak is observable in the log.
     assert any(
-        "Anchor abandoned (timeout)" in m and "consecutive server failure(s)" in m
-        for m in warnings
+        "Anchor abandoned (timeout)" in m and "consecutive server failure(s)" in m for m in warnings
     ), warnings
 
 

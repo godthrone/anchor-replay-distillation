@@ -175,7 +175,9 @@ class ConstraintEvaluator:
             if constraint.type == "orthogonality"
         ]
         declared_free = {
-            axis for constraint in orthogonality for axis in constraint.axes  # type: ignore[union-attr]
+            axis
+            for constraint in orthogonality
+            for axis in constraint.axes  # type: ignore[union-attr]
         }
         if declared_free != set(FREE_AXES):
             raise ConstraintEvaluationError(

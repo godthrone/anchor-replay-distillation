@@ -463,9 +463,7 @@ class EmbeddingClient:
             vectors.append(self._to_unit_vector(raw, batch_index, position))
         return vectors
 
-    def _to_unit_vector(
-        self, raw: list[Any], batch_index: int, position: int
-    ) -> list[float]:
+    def _to_unit_vector(self, raw: list[Any], batch_index: int, position: int) -> list[float]:
         """Validate one raw row and optionally L2-normalise it."""
         values: list[float] = []
         for value in raw:

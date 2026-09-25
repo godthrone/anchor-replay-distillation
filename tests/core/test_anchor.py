@@ -81,7 +81,7 @@ def test_generate_anchor_id_different_inputs():
 
 def test_config_load_minimal(tmp_path):
     """load_config loads a minimal config.toml."""
-    from ard.config import load_config, ARDConfig
+    from ard.config import ARDConfig, load_config
 
     config_path = tmp_path / "config.toml"
     config_path.write_text(
@@ -217,10 +217,10 @@ def test_config_missing_file():
 
 def test_cli_requires_config():
     """CLI parser requires --config."""
-    from ard.cli import main as _  # ensure importable
-
     import subprocess
     import sys
+
+    from ard.cli import main as _  # noqa: F401 — importing it is the assertion
 
     result = subprocess.run(
         [sys.executable, "-m", "ard", "--help"],
@@ -238,12 +238,11 @@ def test_cli_requires_config():
 def test_config_section_types():
     """Verify config section types are importable and constructible."""
     from ard.config import (
-        ARDConfig,
-        InputGeneratorConfig,
-        TargetModelConfig,
         GenerationConfig,
+        InputGeneratorConfig,
         OntologyConfig,
         OutputConfig,
+        TargetModelConfig,
     )
 
     ig = InputGeneratorConfig(api_base="https://api.example.com", model_name="m", api_key="k")

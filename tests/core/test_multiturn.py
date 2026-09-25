@@ -171,6 +171,7 @@ def test_config_has_no_system_persona_field():
     from pydantic import ValidationError
 
     from ard.config import GenerationConfig
+
     with pytest.raises(ValidationError):
         GenerationConfig(system_persona="none")  # type: ignore[call-arg]
     assert "system_persona" not in GenerationConfig.model_fields

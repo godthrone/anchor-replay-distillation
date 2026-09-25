@@ -125,9 +125,7 @@ def test_copy_images_to_output_copies_and_handles_collision(tmp_path: Path) -> N
     _make_image(tmp_path / "photo.png", "PNG")
     _make_image(tmp_path / "photo.png", "PNG", color=10)  # duplicate name
 
-    rel = copy_images_to_output(
-        [tmp_path / "photo.png", tmp_path / "photo.png"], tmp_path / "out"
-    )
+    rel = copy_images_to_output([tmp_path / "photo.png", tmp_path / "photo.png"], tmp_path / "out")
 
     assert rel == ["images/photo.png", "images/photo_1.png"]
     assert (tmp_path / "out" / "images" / "photo.png").read_bytes() == (
