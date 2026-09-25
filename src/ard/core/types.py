@@ -99,7 +99,7 @@ class GeneratedAnchor:
     """
 
     id: str
-    messages: list[dict[str, Any]]
+    messages: ChatMessageList
     target_answer: str
     target_model: str
     input_generator_model: str
@@ -162,14 +162,17 @@ class AnchorGenerationConfig:
 JsonObject: TypeAlias = dict[str, Any]
 """One decoded JSON object: a bank record, a manifest fragment, a plan entry."""
 
+JsonObjectMapping: TypeAlias = Mapping[str, Any]
+"""The same object seen through a read-only, mapping-like view."""
+
 JsonObjectList: TypeAlias = list[JsonObject]
 """Decoded JSON objects in file or plan order."""
 
-JsonObjectSequence: TypeAlias = Sequence[Mapping[str, Any]]
+JsonObjectSequence: TypeAlias = Sequence[JsonObjectMapping]
 """A read-only run of decoded JSON objects, in file or plan order.
 
-The element type is ``Mapping``, not ``JsonObject``: every consumer only reads,
-so callers may hand over real ``dict``s *or* mapping-like doubles.
+The element type is the mapping view, not ``JsonObject``: every consumer only
+reads, so callers may hand over real ``dict``s *or* mapping-like doubles.
 """
 
 ChatContentPart: TypeAlias = dict[str, Any]
@@ -200,6 +203,9 @@ ChatMessageList: TypeAlias = list[ChatMessage]
 
 StringList: TypeAlias = list[str]
 """A list of strings: anchor ids, names, legal values."""
+
+StringSet: TypeAlias = set[str]
+"""An unordered, hashable set of strings: anchor ids already seen, and the like."""
 
 StringTuple: TypeAlias = tuple[str, ...]
 """An ordered, hashable run of strings — one axis's values."""

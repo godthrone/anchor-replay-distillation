@@ -45,7 +45,7 @@ import threading
 from pathlib import Path
 from typing import Any, TypeAlias
 
-from ard.core.types import DataSource, GeneratedAnchor, JsonObjectList
+from ard.core.types import DataSource, GeneratedAnchor, JsonObjectList, StringSet
 from ard.domain.anchor_shape import message_shape_error
 from ard.domain.append_outcome import AppendOutcome
 
@@ -64,7 +64,7 @@ SCHEMA_VERSION = "4.0.0"
 FileFingerprint: TypeAlias = tuple[int, int]
 
 #: One bank file's cache entry: the fingerprint it was read at, plus its ids.
-BankIdCacheEntry: TypeAlias = tuple[FileFingerprint | None, set[str]]
+BankIdCacheEntry: TypeAlias = tuple[FileFingerprint | None, StringSet]
 
 # Ids already present per bank file.  The fingerprint makes an externally
 # truncated/rewritten bank invalidate the cache instead of silently suppressing
