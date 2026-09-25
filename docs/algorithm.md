@@ -180,5 +180,5 @@ v3 本体文件被删除后，原文 "left untouched" 已成假话，故改。�
 
 ## 6. 复现
 
-- 采样由 `generation.seed` 决定；不设该字段则每次运行从系统随机源抽新 seed，实际使用的 seed 记入输出目录的 `config.json`（`configs/config.toml:49-53`）。
+- 采样由 `generation.seed` 决定；不设该字段则每次运行从系统随机源抽新 seed，实际使用的 seed 记入输出目录的 `config.toml`（`configs/config.toml:53-56`）。
 - 同一 `(本体, seed)` 必然得到同一计划；构造规则本身无随机性，自由轴之外的取值完全确定。

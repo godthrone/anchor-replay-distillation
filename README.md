@@ -91,7 +91,7 @@ set `[output] directory` in config to pin the name). After a few minutes you sho
   plan and `metrics: null`, which is exactly what a smoke run should say — 8 anchors are not
   the 1,826-anchor plan, and the report does not pretend otherwise;
 - `manifest.json` — composition plus the smoke declaration;
-- `config.json` and `logs/`.
+- `config.toml` and `logs/`.
 
 **Full run** — all 1,826 anchors, one endpoint call per turn. Supply your own image directory
 laid out as `<image_dir>/<visual_domain>/<image file>` with all 21 visual domains present:
@@ -151,7 +151,7 @@ The picture comes from `<image_dir>/<visual_domain>/<file>` — a picture belong
 anchor's own `visual_domain` coordinate, never to a flat pool, because a flat pool cannot
 guarantee that the image matches the label it is attached to. Paths are relative to the run
 directory, so `outputs/<run_name>/images/<visual_domain>/…` resolves directly; the run copies
-and (unless `--no-convert`) converts the selected image there. A worked, small example of
+and (unless `[images] convert = false`) converts the selected image there. A worked, small example of
 these records is checked in under `examples/` — see [examples/README.md](examples/README.md).
 
 ## Configuration reference
@@ -159,28 +159,41 @@ these records is checked in under `examples/` — see [examples/README.md](examp
 Every field lives in `configs/config.toml` (English comments, all fields defined) and the
 override supplies values only. **All artifacts are decided by the config** — the CLI passes
 input locations and run boundaries only: `--config`, `--override`, `--image-dir`,
-`--no-convert`, `--smoke`.
+`--smoke`.
 
 | Section | What it controls |
 |---|---|
 | `[input_generator]` | The question-generator endpoint (`api_base`, `model_name`, `api_key`), sampling temperature, timeouts, retries |
 | `[target_model]` | The teacher endpoint — its answer is the supervision target. `enable_thinking` switches the reasoning channel on (`targets[0].output.reasoning`) |
-| `[generation]` | `concurrency`, the optional `seed` (omit it and every run draws a fresh seed; the seed actually used is recorded in the run's `config.json`), backpressure thresholds. The anchor count and the turn counts are **not** configurable — they come from the ontology |
+| `[generation]` | `concurrency`, the optional `seed` (omit it and every run draws a fresh seed; the seed actually used is recorded in the run's `config.toml`), backpressure thresholds. The anchor count and the turn counts are **not** configurable — they come from the ontology |
 | `[ontology]` | Path to the v4 ontology (`ontology/anchor_ontology.v4.json`) |
 | `[output]` | `directory` (empty = `outputs/ard_dataset_<timestamp>`), `overwrite` (default `false`: an existing bank is resumed, not replaced) |
-| `[images]` | `skip_missing_images` (default **`false`**): a missing `visual_domain` directory is refused, not skipped |
+| `[images]` | `convert` (default **`true`**): accept RAW/BMP/TIFF/GIF/WebP and normalise every selected picture to JPEG; `false` accepts only the already-web formats and copies them verbatim. `skip_missing_images` (default **`false`**): a missing `visual_domain` directory is refused, not skipped |
 | `[coverage]` | `enabled` (default `true`) and `target_set_path` — the target set for the metric readout; empty means structure readout only |
 | `[coverage.embedding]` | The OpenAI-compatible `/embeddings` endpoint, model, expected `dimension`, batch size and timeouts used by the metric readout |
 
 `configs/config.override.sample.toml` mirrors every field as a commented template; it is the
 file step 2 copies.
 
+### Interface change: image conversion moved into the config
+
+`[images] convert` is new, and the `--no-convert` CLI flag has been removed. The flag decided
+what landed in `outputs/<run>/images`, so the project's engineering rule that **one config
+describes one artifact** puts that decision in the config: a run archived as `config.toml` must
+reproduce the image bytes as well as the anchors. The flag is deliberately **not** kept as a
+compatibility alias — a CLI flag and a config field for the same decision would be two sources
+of truth. Passing `--no-convert` before is the same as setting `convert = false` now.
+
+The archive is itself a valid `--config`: `python -m ard --config outputs/<run>/config.toml
+--override config.override.toml` re-runs the same configuration with your credentials supplied
+by the override.
+
 ## Output
 
 ```text
 outputs/<run_name>/          # default ard_dataset_<YYYYmmdd_HHMMSS>; --smoke appends _smoke
 ├── anchor_bank.jsonl        # one record per line, schema_version 4.0.0
-├── config.json              # merged config snapshot, credentials redacted
+├── config.toml              # merged config snapshot, credentials redacted
 ├── logs/                    # ard.log / ard_debug.log / ard_error.log
 ├── results/
 │   ├── coverage.json        # machine-readable acceptance readout

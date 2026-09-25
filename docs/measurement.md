@@ -66,7 +66,7 @@
 | `epsilon` / `epsilon_source` | ε 及其来源 | 头部声明或目标集自身尺度 |
 
 **不含密钥**：空间声明只写 model 与 dimension，不写 `api_base`、不写任何 key；输出目录里的配置快照另有脱敏
-（`src/ard/pipeline.py:189`，`_redact_secrets`）。
+（`src/ard/pipeline.py:194`，`_redact_secrets`）。
 
 ## 6. 读数流水线与退化行为
 
@@ -86,15 +86,15 @@ flowchart TD
     W --> R
 ```
 
-退化行为（都**显式**、绝不静默，`src/ard/pipeline.py:470-600`）：
+退化行为（都**显式**、绝不静默，`src/ard/pipeline.py:532-670`）：
 
 | 情形 | 行为 |
 |---|---|
-| `coverage.target_set_path` 未配置 | 只产出**结构读数**（计划计数 vs 构造规则，零模型调用），并写 WARNING：`metric readout not measured …`（`src/ard/pipeline.py:491-493`）；manifest 指针 `metric_readout: false`、`q95: null` |
+| `coverage.target_set_path` 未配置 | 只产出**结构读数**（计划计数 vs 构造规则，零模型调用），并写 WARNING：`metric readout not measured …`（`src/ard/pipeline.py:552-557`）；manifest 指针 `metric_readout: false`、`q95: null` |
 | `[coverage.embedding]` 未配置 | 同上：没有可用嵌入器即不做指标读数，不猜 |
-| 目标集缺失/不可解析/计数或维度与配置矛盾 | 在**创建输出目录之前**拒绝整个运行（`src/ard/pipeline.py:470-512`，`CoverageWiringError`），不产生半成品产物 |
-| 嵌入调用失败 | 结构性读数**先已落盘**（`src/ard/pipeline.py:583-590`），失败照常抛出，但不会抹掉零成本的结构报告 |
-| 无同格重复生成数据 | 噪声带写 `unavailable` 并附原因（`src/ard/core/acceptance.py:48-51`；`src/ard/pipeline.py:597-598` 把原因并入 warnings） |
+| 目标集缺失/不可解析/计数或维度与配置矛盾 | 在**创建输出目录之前**拒绝整个运行（`src/ard/pipeline.py:532-576`，`CoverageWiringError`），不产生半成品产物 |
+| 嵌入调用失败 | 结构性读数**先已落盘**（`src/ard/pipeline.py:647-650`），失败照常抛出，但不会抹掉零成本的结构报告 |
+| 无同格重复生成数据 | 噪声带写 `unavailable` 并附原因（`src/ard/core/acceptance.py:48-51`；`src/ard/pipeline.py:657-658` 把原因并入 warnings） |
 
 ## 7. 已知边界：指标层的分辨力上限
 

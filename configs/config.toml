@@ -1,6 +1,6 @@
 # ARD — Anchor Replay Distillation
 # Base configuration. All fields are defined here.
-# Secret fields (API keys, endpoints) are left empty — fill them in config.override.toml
+# Deployment fields (endpoints, API keys) are left empty — fill them in config.override.toml
 # See configs/config.override.sample.toml for an example.
 
 # Input generator (question generator) — produces the user turn (the

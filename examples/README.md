@@ -120,7 +120,7 @@ A multimodal user turn looks like this:
 ```
 
 The path is relative to the run directory, so `outputs/<run_name>/images/<visual_domain>/…`
-resolves directly; the run copies (and, unless `--no-convert`, converts) the picture there.
+resolves directly; the run copies (and, unless `[images] convert = false`, converts) the picture there.
 It was drawn from `<image_dir>/<visual_domain>/<file>` — the anchor's own `visual_domain`
 coordinate, never a flat pool, because a flat pool cannot guarantee that the image matches
 the label attached to it. The four referenced files exist in this directory at exactly those

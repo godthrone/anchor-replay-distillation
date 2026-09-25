@@ -78,7 +78,7 @@ uv run python -m ard --config configs/config.toml --smoke --image-dir examples/i
   零模型调用、恒产出；未配置目标集时它对完整计划报 `within_rule: false`、`metrics: null`，
   这正是冒烟运行该说的话——8 条不是 1,826 条计划，报告不假装它是；
 - `manifest.json`——库构成 + 冒烟申报；
-- `config.json` 与 `logs/`。
+- `config.toml` 与 `logs/`。
 
 **完整运行**——全部 1,826 条锚点，每一轮一次端点调用。请自备图片目录，按
 `<image_dir>/<visual_domain>/<图片文件>` 布局，且 **21 个视觉域齐备**：
@@ -134,34 +134,44 @@ uv run python -m ard --config configs/config.toml --smoke --image-dir examples/i
 图片取自 `<image_dir>/<visual_domain>/<图片文件>`——图属于锚点自己的 `visual_domain` 坐标，
 绝不从一个扁平图片池里抽：扁平池无法保证"图"与贴在它身上的标签一致。路径相对于运行目录，
 所以 `outputs/<run_name>/images/<visual_domain>/…` 直接可解析；运行时会把选中的图复制到那里，
-并（除非加 `--no-convert`）转码。这些记录的一份小而实用的样例已入库，见
+并（除非设 `[images] convert = false`）转码。这些记录的一份小而实用的样例已入库，见
 [examples/README.md](examples/README.md)。
 
 ## 配置参考
 
 全部字段都定义在 `configs/config.toml`（英文注释、字段齐全），覆写只负责填值。
 **产物一律由 config 决定**——CLI 只传输入定位参数与运行边界参数：`--config`、`--override`、
-`--image-dir`、`--no-convert`、`--smoke`。
+`--image-dir`、`--smoke`。
 
 | 段 | 控制什么 |
 |---|---|
 | `[input_generator]` | 问题生成端点（`api_base`、`model_name`、`api_key`）、采样温度、超时、重试 |
 | `[target_model]` | 教师端点——它的回答就是监督目标。`enable_thinking` 打开推理通道（`targets[0].output.reasoning`） |
-| `[generation]` | `concurrency`；可选 `seed`（省略则每次运行从系统随机源抽新种子，实际使用的种子记在本次运行的 `config.json` 里）；背压阈值。锚点条数与对话轮数**不可配置**——它们由本体推导 |
+| `[generation]` | `concurrency`；可选 `seed`（省略则每次运行从系统随机源抽新种子，实际使用的种子记在本次运行的 `config.toml` 里）；背压阈值。锚点条数与对话轮数**不可配置**——它们由本体推导 |
 | `[ontology]` | v4 本体路径（`ontology/anchor_ontology.v4.json`） |
 | `[output]` | `directory`（留空 = `outputs/ard_dataset_<timestamp>`）、`overwrite`（默认 `false`：已有锚点库是续跑，不是替换） |
-| `[images]` | `skip_missing_images`（默认 **`false`**）：缺某个 `visual_domain` 图片目录时报错，而不是跳过 |
+| `[images]` | `convert`（默认 **`true`**）：接受 RAW/BMP/TIFF/GIF/WebP 并把选中的图统一转成 JPEG；设 `false` 则只接受已适合网络的格式并原样复制。`skip_missing_images`（默认 **`false`**）：缺某个 `visual_domain` 图片目录时报错，而不是跳过 |
 | `[coverage]` | `enabled`（默认 `true`）与 `target_set_path`——指标读数用的目标集；留空即只出结构读数 |
 | `[coverage.embedding]` | 指标读数用的 OpenAI 兼容 `/embeddings` 端点、模型、期望 `dimension`、批大小与超时 |
 
 `configs/config.override.sample.toml` 以注释模板镜像了全部字段，也就是第 2 步复制的那个文件。
+
+### 接口变更：图片转码开关移入 config
+
+新增 `[images] convert`，并删除 `--no-convert` CLI 参数。该参数决定 `outputs/<run>/images`
+里落盘的内容，按项目"一份 config 描述一份产物"的工程规则，这个决定必须放进 config：留档的
+`config.toml` 必须能同时复现图片字节与锚点。旧参数**不保留**为兼容别名——同一决策同时存在 CLI
+参数与 config 字段就是双真相源。过去加 `--no-convert` 等价于现在设 `convert = false`。
+
+留档文件本身就是合法的 `--config`：`python -m ard --config outputs/<run>/config.toml
+--override config.override.toml` 即可用同一份配置重跑，凭证由覆写文件提供。
 
 ## 输出说明
 
 ```text
 outputs/<run_name>/          # 默认 ard_dataset_<YYYYmmdd_HHMMSS>；--smoke 追加 _smoke
 ├── anchor_bank.jsonl        # 每行一条记录，schema_version 4.0.0
-├── config.json              # 合并后的配置快照，凭证已脱敏
+├── config.toml              # 合并后的配置快照，凭证已脱敏
 ├── logs/                    # ard.log / ard_debug.log / ard_error.log
 ├── results/
 │   ├── coverage.json        # 机器可读的验收读数
