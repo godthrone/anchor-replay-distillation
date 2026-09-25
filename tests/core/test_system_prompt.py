@@ -86,8 +86,8 @@ RENDER_META = {
 }
 
 #: sha256 of the prompt each present mode rendered **before** the wording moved
-#: into data files (WP-S6c evidence, recorded in ``S6C-REPORT.md``).  A change
-#: here means the wording changed, not just its location.
+#: into data files (the WP-S6c byte-identity evidence).  A change here means the
+#: wording changed, not just its location.
 RENDERED_SHA256 = {
     "minimal_persona": "543cb1bc58576a326614dd00f6c333d623bdcbaf65855aa14a9cf7184af56ee4",
     "detailed_persona": "055e69c7fa4f49e697e1dbb50240db2e38d84df4ea01d286a0e82e099474f8f2",
