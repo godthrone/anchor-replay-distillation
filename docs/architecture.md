@@ -175,7 +175,7 @@ flowchart TD
 - **选择确定可复现**：候选先按文件名排序，再以 `sha256(f"{seed}:{visual_domain}")` 摘要作种子选一张（`src/ard/domain/image_store.py:167`，`select_domain_image`）——同一 `(候选集, 域, seed)` 在任何平台得到同一张图；选中的图由 `pipeline._assign_images_by_domain` 分配到锚点（`src/ard/pipeline.py:466`，调用点 `:1043`）。
 - **缺图默认报错**：所需域缺目录或缺合法图片时，`pipeline.run` 在**创建输出目录之前**拒绝整个运行（校验块 `src/ard/pipeline.py:832-882`，`raise ConfigError` 在 `:853`（缺目录）与 `:866`（缺域），而第一个副作用 `output_dir.mkdir` 在 `:891`）；只有显式开启 `[images] skip_missing_images = true`（`configs/config.toml:93`）才跳过，且逐条 WARNING 并在 `manifest.json` 里申报跳过数与域——绝不静默。
 - **文本态永不附图**：没有 `visual_domain` 的坐标不携带图片，避免"坐标说文本态、消息里却有图"的错配。
-- **丢弃锚点不留图**：图片在生成**之前**复制，因此一条锚点最终被丢弃（生成失败/重试耗尽）时，它的图片会被 `pipeline._prune_abandoned_images`（`src/ard/pipeline.py:1111`）从 `output/images/` 删除，使产物目录与 `anchor_bank.jsonl` 的引用数一致；同一张图被同域其它**已写出**锚点共享时**不删**（按"是否还有存活记录引用该文件"判定，而非按锚点数），删除失败只记 WARNING、不影响本轮运行。
+- **丢弃锚点不留图**：图片在生成**之前**复制，因此一条锚点最终被丢弃（生成失败/重试耗尽）时，它的图片会被 `pipeline._prune_abandoned_images`（`src/ard/pipeline.py:1174`）从 `output/images/` 删除，使产物目录与 `anchor_bank.jsonl` 的引用数一致。删除判据是"`anchor_bank.jsonl` 里**没有任何记录引用**该文件"，且只考察**本轮放置/复用**的文件（候选集来自本轮 pending specs 的 `image_path`）；记录集是**既有记录 ∪ 本轮写出记录**，所以同一张图被同域其它**已写出**锚点共享时**不删**（按记录引用判定，而非按锚点数），**断点续跑**时既有记录引用的图同样不删（本轮 pending 锚点经 `force=False` 复用同一文件后被丢弃的情形）。删除失败只记 WARNING、不影响本轮运行。
 
 ## 7. 证据基准
 
