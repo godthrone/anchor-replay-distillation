@@ -1,8 +1,9 @@
 """Direct CLI tests for ``src/ard/cli.py`` and ``src/ard/__main__.py`` (T-4).
 
 Covers the argument contract: ``--help`` exits 0, a missing ``--config`` is a
-usage error, ``--no-convert`` is forwarded to the pipeline, a missing config
-file fails cleanly, and the three-tier override priority of §7.1.
+usage error, the removed image-conversion flag is rejected, ``--smoke`` is
+forwarded to the pipeline, a missing config file fails cleanly, and the
+three-tier override priority of §7.1.
 """
 
 from __future__ import annotations
@@ -46,33 +47,39 @@ def test_missing_config_is_usage_error(monkeypatch: pytest.MonkeyPatch) -> None:
     assert excinfo.value.code == 2  # argparse usage error
 
 
-def test_no_convert_is_forwarded_to_pipeline(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_no_convert_flag_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The old CLI flag is gone — image conversion lives in ``[images] convert``.
+
+    §10.1 推论 2 (CLI parameters and config fields have zero intersection) does
+    not allow the flag to survive as a compatibility alias: two sources for one
+    parameter is a double source of truth (§1.4).
+    """
     _pin_project_root(monkeypatch, tmp_path)
     config_path = tmp_path / "config.toml"
     config_path.write_text("# minimal config — every section has defaults\n", encoding="utf-8")
 
-    calls: list[tuple] = []
-    import ard.cli as cli_mod
+    with pytest.raises(SystemExit) as excinfo:
+        _run_main(["--config", str(config_path), "--no-convert"], monkeypatch)
 
-    def fake_run(
-        config: object,
-        image_dir: str | None = None,
-        no_convert: bool = False,
-        smoke: bool = False,
-    ) -> str:
-        calls.append((config, image_dir, no_convert, smoke))
-        return "out"
+    assert excinfo.value.code == 2  # argparse: unrecognized argument
 
-    monkeypatch.setattr(cli_mod, "run_pipeline", fake_run)
-    _run_main(["--config", str(config_path), "--no-convert"], monkeypatch)
 
-    assert len(calls) == 1
-    _, image_dir, no_convert, smoke = calls[0]
-    assert no_convert is True
-    assert image_dir is None
-    assert smoke is False, "a run without --smoke must stay non-smoke"
+def test_convert_is_a_config_field() -> None:
+    """The conversion switch has exactly one source: ``[images] convert``."""
+    from ard.config import ARDConfig, ImageConfig
+
+    assert "convert" in ImageConfig.model_fields
+    assert ImageConfig().convert is True, "the default must match the old flag's absence"
+    assert "no_convert" not in ARDConfig.model_fields
+
+
+def test_pipeline_has_no_conversion_parameter() -> None:
+    """``run()`` takes no conversion flag either — the config is the only source."""
+    import inspect
+
+    from ard.pipeline import run
+
+    assert "no_convert" not in inspect.signature(run).parameters
 
 
 def test_smoke_flag_is_forwarded_to_pipeline(
@@ -89,17 +96,16 @@ def test_smoke_flag_is_forwarded_to_pipeline(
     def fake_run(
         config: object,
         image_dir: str | None = None,
-        no_convert: bool = False,
         smoke: bool = False,
     ) -> str:
-        calls.append((config, image_dir, no_convert, smoke))
+        calls.append((config, image_dir, smoke))
         return "out"
 
     monkeypatch.setattr(cli_mod, "run_pipeline", fake_run)
     _run_main(["--config", str(config_path), "--smoke"], monkeypatch)
 
     assert len(calls) == 1
-    _, _, _, smoke = calls[0]
+    _, _, smoke = calls[0]
     assert smoke is True
 
 

@@ -253,12 +253,26 @@ class ImageConfig(BaseModel):
     anchors are missing from the bank.  When it is true the run logs one
     WARNING per skipped anchor and declares the count and the affected visual
     domains in ``manifest.json`` — it is never silent.
+
+    Both fields here are config fields for the same §10.1 reason: they decide
+    the **content** of ``<output_dir>/images``, so a CLI flag would let one
+    config produce two different artifacts (§1.4 single source of truth).
     """
 
     model_config = ConfigDict(extra="forbid")
 
     skip_missing_images: bool = False
     """Skip anchors whose ``visual_domain`` has no image (default: refuse)."""
+
+    convert: bool = True
+    """Transcode every selected image to JPEG while copying it into the output.
+
+    ``True`` (the default) accepts RAW / BMP / TIFF / GIF / WebP sources and
+    normalises them to JPEG.  ``False`` restricts the accepted set to the
+    already-web formats (PNG / JPEG / GIF / WebP) and copies those bytes
+    verbatim, which changes what lands in ``<output_dir>/images`` — hence a
+    config field rather than a CLI flag (§10.1).
+    """
 
 
 class CoverageEmbeddingConfig(BaseModel):

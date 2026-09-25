@@ -366,10 +366,10 @@ def _abs_to_rel_path(abs_path: str) -> str:
 #: the multimodal sub-corpus:
 #:
 #: * ``image`` — the referenced-path form (``image`` is ``images/x.jpg``) that
-#:   :func:`_convert_images_to_paths` writes for the persisted anchor.  This is
-#:   what both the default and the ``--no-convert`` run produce: ``--no-convert``
-#:   decides whether image *files* are transcoded when copied into the output
-#:   directory, and never touches the message parts;
+#:   :func:`_convert_images_to_paths` writes for the persisted anchor.  Every
+#:   run produces it: ``[images] convert`` decides whether image *files* are
+#:   transcoded when copied into the output directory, and never touches the
+#:   message parts;
 #: * ``image_url`` — the inline form (``image_url.url`` is a base64 data URI)
 #:   that the API call needs.  It is supposed to survive only in records written
 #:   before the alignment fix in :func:`_convert_images_to_paths`, but it is

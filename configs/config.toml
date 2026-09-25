@@ -92,6 +92,14 @@ overwrite = false
 # visual domains are declared in manifest.json.
 skip_missing_images = false
 
+# Transcode each selected image to JPEG while copying it into <output_dir>/images.
+# true  = accept RAW / BMP / TIFF / GIF / WebP sources and normalise them to JPEG.
+# false = accept only PNG / JPEG / GIF / WebP and copy those bytes verbatim.
+# This changes what lands in <output_dir>/images, so it is a config field
+# (§10.1): the archived config.toml then describes the artifact on its own.
+# `convert = true` is the behaviour every pre-v4 run had by default.
+convert = true
+
 [coverage]
 # Acceptance readout of a run, written to <output_dir>/results/coverage.json and
 # coverage.md after generation and before the manifest.

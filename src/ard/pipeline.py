@@ -614,7 +614,6 @@ def run(
     config: ARDConfig,
     *,
     image_dir: str | None = None,
-    no_convert: bool = False,
     generate_specs: SpecSampler | None = None,
     smoke: bool = False,
 ) -> Path:
@@ -631,11 +630,9 @@ def run(
             expected paths and the affected anchor count — unless
             ``[images] skip_missing_images`` is true (then those anchors are
             skipped, WARNING-logged and declared in ``manifest.json``).
-        no_convert: If ``True``, skip image format conversion — only
-            :data:`ard.domain.image_store.SUPPORTED_EXTENSIONS` are
-            accepted and images are copied as-is.  The default
-            (``False``) enables automatic conversion of RAW / BMP /
-            TIFF / GIF / WebP images to JPEG.
+            Whether the selected picture is transcoded to JPEG on the way into
+            ``<output_dir>/images`` is ``[images] convert`` (§10.1) — not an
+            argument of this function.
         generate_specs: Optional override for the plan builder, defaulting to
             :func:`sample_specs`.  Tests inject a small deterministic plan here
             so the resume arithmetic can be exercised without materialising the
@@ -766,7 +763,10 @@ def run(
     # Only the anchors still to be generated are checked: a completed bank needs
     # no image lookup at all.
     pending_specs = plan[existing_count:]
-    image_extensions = SUPPORTED_EXTENSIONS if no_convert else CONVERTABLE_EXTENSIONS
+    # ``[images] convert`` decides both the accepted input set and the bytes
+    # that land in <output_dir>/images, so it is read here from the config
+    # rather than from a CLI flag (§10.1: one source of truth per parameter).
+    image_extensions = CONVERTABLE_EXTENSIONS if config.images.convert else SUPPORTED_EXTENSIONS
     image_resolution: DomainImageResolution | None = None
     skipped_domains: dict[str, list[str]] = {}
     if image_dir is not None and pending_specs:
@@ -953,10 +953,10 @@ def run(
     if image_dir is not None and image_resolution is not None and specs:
         rel_by_domain: dict[str, str] = {}
         for domain, source in image_resolution.selected.items():
-            if no_convert:
-                placed = copy_images_to_output([source], output_dir, subdir=domain)
-            else:
+            if config.images.convert:
                 placed = convert_and_copy_images([source], output_dir, subdir=domain)
+            else:
+                placed = copy_images_to_output([source], output_dir, subdir=domain)
             if not placed:
                 raise ConfigError(
                     f"image {source} for visual_domain {domain!r} could not be "

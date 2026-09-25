@@ -134,13 +134,6 @@ def main() -> None:
         "config.override.toml next to --config.",
     )
     parser.add_argument(
-        "--no-convert",
-        action="store_true",
-        default=False,
-        help="Disable image format conversion. Only PNG/JPEG/GIF/WEBP are "
-        "accepted (via SUPPORTED_EXTENSIONS) and copied as-is.",
-    )
-    parser.add_argument(
         "--smoke",
         action="store_true",
         default=False,
@@ -185,7 +178,6 @@ def main() -> None:
         output_dir = run_pipeline(
             config,
             image_dir=args.image_dir,
-            no_convert=args.no_convert,
             smoke=args.smoke,
         )
         logger.info("Done! Output: %s", output_dir)

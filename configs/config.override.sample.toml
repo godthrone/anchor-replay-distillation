@@ -86,6 +86,12 @@ overwrite = false
 # refused by default; set this to true to skip those anchors (logged as a
 # WARNING and declared in manifest.json), never silently.
 # skip_missing_images = false
+# Transcode each selected image to JPEG while copying it into the output tree
+# (true, the default) instead of copying already-web formats verbatim (false).
+# This decides what lands in <output_dir>/images, so it lives in the config
+# rather than on the command line (§10.1). `convert = true` is the historical
+# default behaviour.
+# convert = true
 
 [coverage]
 # Whether to run the acceptance phase (structure readout + optional metric

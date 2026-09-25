@@ -279,10 +279,9 @@ def test_anchor_data_source_reads_image_parts() -> None:
     Two forms are accepted, and they are accepted for different reasons:
 
     * ``{"type": "image", "image": "images/x.jpg"}`` — the rewritten form that
-      ``_convert_images_to_paths`` writes for every anchor, in the default run
-      *and* in a ``--no-convert`` run (that flag only decides whether image
-      *files* are transcoded when copied into the output directory; it never
-      touches message parts);
+      ``_convert_images_to_paths`` writes for every anchor.  Whether the image
+      *file* was transcoded when copied into the output directory is decided by
+      ``[images] convert``, which never touches message parts;
     * ``{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,…"}}``
       — the API's inline form.  It is **not** an expected persisted form: it
       reaches the bank only through a writer bug, and it did reach it once.  It
@@ -360,14 +359,14 @@ def _image_spec_meta(mode: str) -> dict[str, str]:
     }
 
 
-def test_no_convert_run_routes_image_anchor_to_ard_multi(tmp_path: Path) -> None:
-    """Legacy inline records still route to ``ard_multi`` (no conversion run).
+def test_legacy_inline_record_routes_image_anchor_to_ard_multi(tmp_path: Path) -> None:
+    """Legacy inline records still route to ``ard_multi``.
 
     ``_convert_images_to_paths`` is not called at all here, which is the closest
-    local stand-in for a run whose conversion step is bypassed — the state that
-    produced the pre-fix inline records.  The point is the routing rule, not the
-    conversion: such a record plainly carries an image and must not be filed as
-    text-only (W-1 / §1.4).
+    local stand-in for a record that never went through the rewrite step — the
+    state that produced the pre-fix inline records.  The point is the routing
+    rule, not the conversion: such a record plainly carries an image and must not
+    be filed as text-only (W-1 / §1.4).
 
     Note the asymmetry with the end-to-end test below: **this input can no longer
     be produced by the pipeline itself.**  It is kept as a guard for records
