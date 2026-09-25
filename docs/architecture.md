@@ -165,14 +165,14 @@ flowchart TD
     M -- "否，且 =true" --> W["逐条 WARNING + manifest 声明<br/>该样本不生成"]
 ```
 
-- **唯一约定**：`<image_dir>/<visual_domain>/<图片文件>`，`<image_dir>` 来自 `--image-dir`；只取该子目录的**直接子文件**，扩展名白名单见 `src/ard/domain/image_store.py:128`；约定常量在 `src/ard/domain/image_store.py:120`，`configs/config.toml:79-93` 面向用户说明同一约定。
-- **选择确定可复现**：候选先按文件名排序，再以 `sha256(f"{seed}:{visual_domain}")` 摘要作种子选一张（`src/ard/domain/image_store.py:162-200`）——同一 `(候选集, 域, seed)` 在任何平台得到同一张图。
-- **缺图默认报错**：所需域缺目录或缺合法图片时，`pipeline.run` 在**创建输出目录之前**拒绝整个运行（`src/ard/pipeline.py:764-808`）；只有显式开启 `[images] skip_missing_images = true`（`configs/config.toml:93`）才跳过，且逐条 WARNING 并在 `manifest.json` 里申报跳过数与域——绝不静默。
+- **唯一约定**：`<image_dir>/<visual_domain>/<图片文件>`，`<image_dir>` 来自 `--image-dir`；只取该子目录的**直接子文件**，扩展名白名单见 `src/ard/domain/image_store.py:128`；约定常量 `src/ard/domain/image_store.py:120`，目录解析 `src/ard/domain/image_store.py:123`、`:206`，`configs/config.toml:79-93` 面向用户说明同一约定。
+- **选择确定可复现**：候选先按文件名排序，再以 `sha256(f"{seed}:{visual_domain}")` 摘要作种子选一张（`src/ard/domain/image_store.py:162-200`）——同一 `(候选集, 域, seed)` 在任何平台得到同一张图；选中的图由 `pipeline._assign_images_by_domain` 分配到锚点（`src/ard/pipeline.py:394`，调用点 `:972`）。
+- **缺图默认报错**：所需域缺目录或缺合法图片时，`pipeline.run` 在**创建输出目录之前**拒绝整个运行（校验块 `src/ard/pipeline.py:764-808`，`raise ConfigError` 在 `:795`，而第一个副作用 `output_dir.mkdir` 在 `:820`）；只有显式开启 `[images] skip_missing_images = true`（`configs/config.toml:93`）才跳过，且逐条 WARNING 并在 `manifest.json` 里申报跳过数与域——绝不静默。
 - **文本态永不附图**：没有 `visual_domain` 的坐标不携带图片，避免"坐标说文本态、消息里却有图"的错配。
 
 ## 7. 证据基准
 
-本文行号对应当前工作树（基线提交 `157fec9` 加并行未提交改动）。核对命令行示例：
+本文行号以首页声明的基线提交为准（`a0f3221`）；核对命令行示例：
 
 ```bash
 git grep -n "def run" -- src/ard/pipeline.py
