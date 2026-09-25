@@ -120,6 +120,9 @@ def test_cli_reports_the_missing_field_without_a_traceback(
 ) -> None:
     config_path = _write_config(tmp_path, input_api_base="")
     monkeypatch.setattr(sys, "argv", ["ard", "--config", str(config_path)])
+    # Hermetic: auto-detection must not reach a real developer
+    # .local/config.override.toml inside this checkout (WP-S4).
+    monkeypatch.setattr("ard.cli._find_project_root", lambda _start: None)
 
     with caplog.at_level(logging.ERROR, logger="ard.cli"):
         with pytest.raises(SystemExit) as excinfo:
