@@ -10,16 +10,18 @@ import json
 import logging
 import random
 import re
-import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 from ard.backends.api_client import (
     ChatAPIClient,
     ChatAPIConfig,
+)
+from ard.backends.api_client import (
     reasoning_stats as api_client_reasoning_stats,
 )
 from ard.backends.coverage_wiring import TargetSet, build_metric_readout, load_target_set
@@ -27,9 +29,15 @@ from ard.config import ARDConfig, ConfigError, CoverageEmbedding
 from ard.core import acceptance
 from ard.core.ontology import OntologyV4, load_ontology_v4
 from ard.core.quota import allocate_images
-from ard.core.sampling import sample_anchors
+from ard.core.sampling import (
+    EXPECTED_TOTAL,
+    SMOKE_IMAGE_BLOCKS,
+    SMOKE_SCALE,
+    SMOKE_TEXT_BLOCKS,
+    PlanScale,
+    sample_anchors,
+)
 from ard.core.types import AnchorGenerationConfig, AnchorSpec
-from ard.logging import configure_file_logging
 from ard.domain.bank import (
     build_manifest_from_records,
     count_existing_anchors,
@@ -45,6 +53,7 @@ from ard.domain.image_store import (
     scan_images,
 )
 from ard.domain.text_anchor import AnchorGenerationStats, generate_text_anchors
+from ard.logging import configure_file_logging
 
 logger = logging.getLogger(__name__)
 
@@ -270,9 +279,54 @@ SpecSampler = Callable[[ARDConfig], list[AnchorSpec]]
 #: plan describes — it is not a configurable knob.
 IMAGES_PER_ANCHOR = 1
 
+SMOKE_RUN_SUFFIX = "_smoke"
+"""Run-directory suffix that keeps a smoke artifact from looking like a delivery.
 
-def sample_specs(config: ARDConfig) -> list[AnchorSpec]:
-    """Build the run's full anchor plan from the v4 ontology (the production seam).
+``--smoke`` is a *run-boundary* parameter (constitution §10.1): it produces a
+deliberately incomplete artifact and must never be confusable with the full
+dataset.  The marker travels with the artifact itself — in the run directory's
+name and in ``manifest.json`` — not only in a log line (§2.4 操作防呆).
+"""
+
+
+def _resolve_run_directory(config: ARDConfig, *, timestamp: str, smoke: bool) -> Path:
+    """Return the run directory, tagging it with :data:`SMOKE_RUN_SUFFIX` on smoke.
+
+    The marker is appended to the configured ``output.directory`` as well as to
+    the timestamped default, so a smoke run can never write into the directory a
+    delivery is expected from.  Idempotent: a name already ending in the suffix
+    is not tagged twice.
+    """
+    output_dir = (
+        Path(config.output.directory)
+        if config.output.directory
+        else Path("outputs") / f"ard_dataset_{timestamp}"
+    )
+    if smoke and not output_dir.name.endswith(SMOKE_RUN_SUFFIX):
+        output_dir = output_dir.with_name(output_dir.name + SMOKE_RUN_SUFFIX)
+    return output_dir
+
+
+def _declare_smoke(manifest: dict[str, Any], *, plan_size: int, output_dir: Path) -> None:
+    """Declare in *manifest* that this artifact is a smoke run (§3.2 透明退路).
+
+    Writes the machine-readable claim (``smoke: true``) next to the counts that
+    prove it: what this run planned, and what a full run plans.  A reader of the
+    artifact alone can tell a smoke run from a delivery.
+    """
+    manifest["smoke"] = True
+    manifest["smoke_plan"] = {
+        "run_name": output_dir.name,
+        "planned_anchors": plan_size,
+        "full_expected_anchors": EXPECTED_TOTAL,
+        "text_blocks": SMOKE_TEXT_BLOCKS,
+        "image_blocks": SMOKE_IMAGE_BLOCKS,
+        "note": "SMOKE RUN — deliberately incomplete; not a deliverable.",
+    }
+
+
+def sample_specs(config: ARDConfig, *, scale: PlanScale | None = None) -> list[AnchorSpec]:
+    """Build the run's anchor plan from the v4 ontology (the production seam).
 
     The ontology is loaded here — not before the checkpoint check in
     :func:`run` — so a run whose bank is already complete never pays for the
@@ -281,6 +335,9 @@ def sample_specs(config: ARDConfig) -> list[AnchorSpec]:
 
     Args:
         config: Validated ARD configuration.
+        scale: Which subset of each modality's legal blocks to plan.  ``None``
+            means every legal block; ``--smoke`` passes
+            :data:`~ard.core.sampling.SMOKE_SCALE` through the same rule.
 
     Returns:
         The plan's :class:`~ard.core.types.AnchorSpec` objects, in plan order.
@@ -294,7 +351,7 @@ def sample_specs(config: ARDConfig) -> list[AnchorSpec]:
         seed=config.generation.resolved_seed,
         concurrency=config.generation.concurrency,
     )
-    return sample_anchors(ontology, gen_config)
+    return sample_anchors(ontology, gen_config, scale=scale)
 
 
 @dataclass(frozen=True, slots=True)
@@ -464,6 +521,7 @@ def run(
     image_dir: str | None = None,
     no_convert: bool = False,
     generate_specs: SpecSampler | None = None,
+    smoke: bool = False,
 ) -> Path:
     """Run the ARD anchor generation pipeline.
 
@@ -479,7 +537,17 @@ def run(
         generate_specs: Optional override for the plan builder, defaulting to
             :func:`sample_specs`.  Tests inject a small deterministic plan here
             so the resume arithmetic can be exercised without materialising the
-            1,826-coordinate plan or loading the ontology.
+            1,826-coordinate plan or loading the ontology.  It is not used to
+            implement ``--smoke``: a smoke run goes through the real builder with
+            the real scale knob.
+        smoke: Run-boundary flag (``--smoke``, constitution §10.1).  The
+            **same** construction rule is materialised at a reduced scale
+            (:data:`~ard.core.sampling.SMOKE_SCALE`, 8 of 1,826 anchors) so a
+            clone can see an artifact quickly.  A smoke run is tagged in three
+            places: the run directory gets ``_smoke``, the log carries a
+            WARNING, and ``manifest.json`` declares ``smoke: true`` with its
+            planned count against the full one.  ``False`` (the default) changes
+            nothing about a full run.
 
     Returns:
         Path to the output directory.
@@ -495,7 +563,19 @@ def run(
             / dimension contradicts the file or the config — also before any
             side effect.
     """
-    spec_sampler: SpecSampler = generate_specs if generate_specs is not None else sample_specs
+    if smoke:
+        logger.warning(
+            "SMOKE RUN (--smoke): a reduced plan will be generated; the artifact is "
+            "deliberately incomplete and must not be delivered as a dataset."
+        )
+
+    if generate_specs is not None:
+        spec_sampler: SpecSampler = generate_specs
+    elif smoke:
+        # The very same builder, one named scale knob — never a second rule.
+        spec_sampler = partial(sample_specs, scale=SMOKE_SCALE)
+    else:
+        spec_sampler = sample_specs
     # ── Credential boundary check (§2.3 边界校验即防呆) ─────────────────────
     # Done *before* the output directory exists: a config without an endpoint
     # used to explode later inside ChatAPIConfig, after a half-built output dir
@@ -524,12 +604,7 @@ def run(
 
     # ── Output directory ──────────────────────────────────────────────────
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    dataset_name = f"ard_dataset_{timestamp}"
-    output_dir = (
-        Path(config.output.directory)
-        if config.output.directory
-        else Path("outputs") / dataset_name
-    )
+    output_dir = _resolve_run_directory(config, timestamp=timestamp, smoke=smoke)
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -575,6 +650,18 @@ def run(
     rng = random.Random(gen_config.seed)
     plan = spec_sampler(config)
     target_count = len(plan)
+    if smoke:
+        logger.warning(
+            "SMOKE RUN: plan reduced to %d of %d anchors (%d text blocks + %d "
+            "image blocks) by the standard construction rule at smoke scale. "
+            "results/coverage.json will report within_rule=false against the full "
+            "plan — expected for a smoke artifact. Do not deliver it; run without "
+            "--smoke for the full dataset.",
+            target_count,
+            EXPECTED_TOTAL,
+            SMOKE_TEXT_BLOCKS,
+            SMOKE_IMAGE_BLOCKS,
+        )
     existing_count = count_existing_anchors(output_path)
     remaining = target_count - existing_count
 
@@ -586,6 +673,8 @@ def run(
         )
         all_records = read_anchor_bank(output_path)
         manifest = build_manifest_from_records(all_records, output_dir, config_info)
+        if smoke:
+            _declare_smoke(manifest, plan_size=target_count, output_dir=output_dir)
         # No generation happened, so there are no run counters to report: the
         # previous run's manifest is left as it is rather than overwritten with
         # a clean-looking one (§3.2 — a missing field must not read as "healthy").
@@ -738,6 +827,8 @@ def run(
     acceptance_pointer = _run_acceptance(config, coverage_inputs, plan, all_records, output_path)
     if acceptance_pointer is not None:
         manifest["acceptance"] = acceptance_pointer
+    if smoke:
+        _declare_smoke(manifest, plan_size=target_count, output_dir=output_dir)
     write_manifest(manifest, output_dir / "manifest.json")
 
     total = len(all_records)

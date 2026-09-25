@@ -140,6 +140,17 @@ def main() -> None:
         help="Disable image format conversion. Only PNG/JPEG/GIF/WEBP are "
         "accepted (via SUPPORTED_EXTENSIONS) and copied as-is.",
     )
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        default=False,
+        help="Smoke run: materialise the same construction rule at a reduced "
+        "scale (8 of 1826 anchors) so a fresh checkout can see an artifact "
+        "quickly. The artifact is deliberately incomplete — its run directory "
+        "is suffixed _smoke, the log carries a WARNING, and manifest.json "
+        "declares smoke: true. It is not a configuration field and does not "
+        "change a run without --smoke.",
+    )
 
     args = parser.parse_args()
 
@@ -171,7 +182,12 @@ def main() -> None:
 
     # Run pipeline
     try:
-        output_dir = run_pipeline(config, image_dir=args.image_dir, no_convert=args.no_convert)
+        output_dir = run_pipeline(
+            config,
+            image_dir=args.image_dir,
+            no_convert=args.no_convert,
+            smoke=args.smoke,
+        )
         logger.info("Done! Output: %s", output_dir)
     except FileNotFoundError as exc:
         logger.error("%s", exc)

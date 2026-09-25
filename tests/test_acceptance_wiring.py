@@ -64,6 +64,7 @@ def _write_config(
     coverage_block: str,
     *,
     overwrite: bool = False,
+    ontology_path: str = "unused.json",
 ) -> None:
     path.write_text(
         "\n".join(
@@ -81,7 +82,7 @@ def _write_config(
                 "concurrency = 1",
                 "",
                 "[ontology]",
-                'path = "unused.json"',
+                f'path = "{ontology_path}"',
                 "",
                 "[output]",
                 f'directory = "{output_dir}"',
@@ -116,13 +117,8 @@ def _metric_block(target_set_path: Path) -> str:
     )
 
 
-def _rig(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Replace the v4 sampler and the generator so ``run`` is offline and tiny."""
-    monkeypatch.setattr(
-        pipeline,
-        "sample_specs",
-        lambda config: pytest.fail("the plan double must replace the v4 sampler"),
-    )
+def _install_offline_generator(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace the generator with an in-process writer — no model call, ever."""
 
     def spy(**kwargs: object) -> list[GeneratedAnchor]:
         specs = kwargs["specs"]
@@ -150,6 +146,16 @@ def _rig(monkeypatch: pytest.MonkeyPatch) -> None:
         return written
 
     monkeypatch.setattr(pipeline, "generate_text_anchors", spy)
+
+
+def _rig(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace the v4 sampler and the generator so ``run`` is offline and tiny."""
+    monkeypatch.setattr(
+        pipeline,
+        "sample_specs",
+        lambda config: pytest.fail("the plan double must replace the v4 sampler"),
+    )
+    _install_offline_generator(monkeypatch)
 
 
 class _MockEmbeddings:
@@ -231,6 +237,82 @@ def test_disabled_acceptance_phase_writes_nothing(
     assert not (result_dir / "results").exists()
     manifest = json.loads((result_dir / "manifest.json").read_text(encoding="utf-8"))
     assert "acceptance" not in manifest
+
+
+# ── Smoke run (--smoke): same rule, reduced scale, self-proving artifact ────
+
+_V4_ONTOLOGY = str(_REPO_ROOT / "ontology" / "anchor_ontology.v4.json")
+
+
+def test_smoke_run_is_marked_in_all_three_places_and_costs_no_model_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """``--smoke`` plans 8/1826 through the real rule and says so three times over."""
+    output_dir = tmp_path / "deliverable"
+    config_path = tmp_path / "config.toml"
+    _write_config(config_path, output_dir, _STRUCTURE_ONLY, ontology_path=_V4_ONTOLOGY)
+    _install_offline_generator(monkeypatch)
+    monkeypatch.setattr(
+        ec.httpx,
+        "Client",
+        lambda *args, **kwargs: pytest.fail("the structure readout must cost no model call"),
+    )
+
+    with caplog.at_level("WARNING"):
+        result_dir = pipeline.run(load_config(config_path), smoke=True)
+
+    # 1. the artifact's own run directory is tagged
+    assert result_dir.name == "deliverable_smoke"
+    # 2. the log carries the WARNING, with the exact scale
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert any("SMOKE RUN" in message for message in warnings)
+    assert any("8 of 1826" in message for message in warnings)
+    # 3. manifest.json declares the smoke run and its counts
+    manifest = json.loads((result_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["smoke"] is True
+    assert manifest["smoke_plan"]["run_name"] == "deliverable_smoke"
+    assert manifest["smoke_plan"]["planned_anchors"] == 8
+    assert manifest["smoke_plan"]["full_expected_anchors"] == 1826
+    assert manifest["smoke_plan"]["text_blocks"] == 4
+    assert manifest["smoke_plan"]["image_blocks"] == 4
+    assert manifest["total_anchors"] == 8
+
+    # the acceptance readout still exists, and it is honest about the short plan
+    report = json.loads((result_dir / "results" / "coverage.json").read_text(encoding="utf-8"))
+    assert report["metrics"] is None
+    assert report["structure"]["plan_total"] == 8
+    assert report["structure"]["expected_total"] == 1826
+    assert report["structure"]["within_rule"] is False
+    assert (result_dir / "results" / "coverage.md").is_file()
+
+    # the non-smoke path is untouched: full plan, and no smoke config field
+    from ard.config import ARDConfig
+
+    assert "smoke" not in ARDConfig.model_fields
+    assert len(pipeline.sample_specs(load_config(config_path))) == 1826
+
+
+def test_two_smoke_runs_with_the_same_seed_are_byte_identical(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same seed, two smoke runs → the readouts are byte-for-byte the same."""
+    _install_offline_generator(monkeypatch)
+    reports: list[tuple[bytes, bytes]] = []
+    for index in (1, 2):
+        output_dir = tmp_path / f"deliverable{index}"
+        config_path = tmp_path / f"config{index}.toml"
+        _write_config(config_path, output_dir, _STRUCTURE_ONLY, ontology_path=_V4_ONTOLOGY)
+        result_dir = pipeline.run(load_config(config_path), smoke=True)
+        reports.append(
+            (
+                (result_dir / "results" / "coverage.json").read_bytes(),
+                (result_dir / "results" / "coverage.md").read_bytes(),
+            )
+        )
+
+    assert reports[0] == reports[1]
+    report = json.loads(reports[0][0])
+    assert report["structure"]["plan_total"] == 8
 
 
 # ── Metric path ─────────────────────────────────────────────────────────────

@@ -25,6 +25,10 @@ ontology itself states (``constraint_update = 4``).  That is an **ontology gap,
 not a design choice**: the constant is the single place to change, and
 :func:`_spec_turns` refuses to run if the ontology ever declares something larger.
 
+The module's one scale knob is :class:`PlanScale`: ``--smoke`` passes
+:data:`SMOKE_SCALE` and the same rule materialises 8 anchors instead of 1,826.
+There is no smoke branch — only a smaller subset of the same legal blocks.
+
 Pure computation: the only I/O is reading the ontology through
 :mod:`ard.core.ontology`.
 """
@@ -92,6 +96,45 @@ MODALITY_TEXT = "text_only"
 
 MODALITY_IMAGE = "image"
 """The ``modality`` sample field of a coordinate that carries an image."""
+
+# ── The one scale knob: full plan vs smoke plan ─────────────────────────────
+#
+# ``--smoke`` is a *run-boundary* parameter (constitution §10.1), not a second
+# sampling rule.  It materialises the **same** construction rule at a smaller
+# scale: the same legal blocks are enumerated, the same rotation and the same
+# seeded draws build each coordinate — only fewer blocks per modality are taken.
+# There is no smoke branch anywhere in :func:`sample_coordinates`; the pipeline
+# passes :data:`SMOKE_SCALE` instead of :data:`FULL_SCALE` and nothing else
+# changes.
+
+SMOKE_TEXT_BLOCKS = 4
+"""Legal *text* restricted blocks a smoke plan materialises (of 935)."""
+
+SMOKE_IMAGE_BLOCKS = 4
+"""Legal *image-capable* restricted blocks a smoke plan materialises (of 891)."""
+
+SMOKE_PLAN_SIZE = SMOKE_TEXT_BLOCKS + SMOKE_IMAGE_BLOCKS
+"""Smoke plan size: 4 + 4 = 8 anchors, against 1,826 for a full run."""
+
+
+@dataclass(frozen=True, slots=True)
+class PlanScale:
+    """How many legal restricted blocks each modality contributes to a plan.
+
+    ``None`` means "every legal block" — the full construction rule.  The only
+    non-full value the product ships is :data:`SMOKE_SCALE`; the dataclass exists
+    so a caller passes a *number*, never a second rule.
+    """
+
+    text_blocks: int | None = None
+    image_blocks: int | None = None
+
+
+FULL_SCALE = PlanScale()
+"""The default: every legal block of both modalities — 1,826 anchors."""
+
+SMOKE_SCALE = PlanScale(text_blocks=SMOKE_TEXT_BLOCKS, image_blocks=SMOKE_IMAGE_BLOCKS)
+"""The ``--smoke`` scale: 4 text blocks + 4 image-capable blocks — 8 anchors."""
 
 # ── Turn counts: from the ontology, never from a configuration knob ─────────
 #
@@ -227,6 +270,47 @@ def _rotating(values: tuple[str, ...]) -> Iterator[str]:
         yield from values
 
 
+def _evenly_spaced_indices(total: int, limit: int) -> tuple[int, ...]:
+    """Return *limit* indices spread evenly over ``range(total)``.
+
+    Both endpoints are always included (index ``0`` and index ``total - 1``), so
+    a smoke subset still spans the enumeration from its first to its last block.
+    The arithmetic is integer-only — ``i * (total - 1) // (limit - 1)`` — with no
+    floating point and no dependence on ``random``: the same ``(total, limit)``
+    picks the same blocks on every platform and every run.
+
+    Args:
+        total: Number of enumerated items (``>= 1``).
+        limit: How many indices to return (``>= 1``); ``>= total`` returns all.
+
+    Returns:
+        The selected indices, ascending.
+
+    Raises:
+        SamplingError: If ``limit`` is below 1 — a scale that plans no anchor.
+    """
+    if limit < 1:
+        raise SamplingError(f"a plan scale of {limit} blocks is not a plan")
+    if limit >= total:
+        return tuple(range(total))
+    if limit == 1:
+        return (0,)
+    return tuple(index * (total - 1) // (limit - 1) for index in range(limit))
+
+
+def _select_blocks(
+    blocks: tuple[RestrictedBlock, ...], limit: int | None
+) -> tuple[RestrictedBlock, ...]:
+    """Take *limit* of *blocks*, evenly spaced in enumeration order.
+
+    The smoke plan's selection rule, named and testable: not a slice, not a
+    second enumeration — a subset of the very blocks the full plan uses.
+    """
+    if limit is None or limit >= len(blocks):
+        return blocks
+    return tuple(blocks[index] for index in _evenly_spaced_indices(len(blocks), limit))
+
+
 def _draw(values: tuple[str, ...], rng: random.Random) -> str:
     """Draw one value from ``values`` using the plan's seeded generator."""
     return values[rng.randrange(len(values))]
@@ -274,7 +358,12 @@ def _reject_duplicates(coordinates: Iterable[AnchorCoordinate]) -> None:
         seen.add(identity)
 
 
-def sample_coordinates(ontology: OntologyV4, seed: int) -> tuple[AnchorCoordinate, ...]:
+def sample_coordinates(
+    ontology: OntologyV4,
+    seed: int,
+    *,
+    scale: PlanScale | None = None,
+) -> tuple[AnchorCoordinate, ...]:
     """Build the run's coordinates from the construction rule.
 
     The plan is, in order:
@@ -288,18 +377,25 @@ def sample_coordinates(ontology: OntologyV4, seed: int) -> tuple[AnchorCoordinat
     are drawn from ``random.Random(seed)``, so the same ``(ontology, seed)``
     yields a byte-identical coordinate tuple and a different seed does not.
 
+    ``scale`` only changes **how many** blocks each group contributes (see
+    :data:`SMOKE_SCALE`); the enumeration, the rotation and the seeded draws are
+    the same code for a partial and a full plan.
+
     Args:
         ontology: A validated v4 ontology.
         seed: The run seed driving the random free axes.  It comes from the
             config snapshot, never from a module constant.
+        scale: Which subset of each modality's legal blocks to materialise.
+            ``None`` means :data:`FULL_SCALE` — every legal block.
 
     Returns:
         The plan, as a tuple of :class:`AnchorCoordinate`.
 
     Raises:
-        SamplingError: If the ontology's counts do not match the rule or if two
-            coordinates repeat.
+        SamplingError: If the ontology's counts do not match the rule, if the
+            scale asks for fewer than one block, or if two coordinates repeat.
     """
+    resolved_scale = scale if scale is not None else FULL_SCALE
     evaluator = ConstraintEvaluator(ontology)
     _verify_rule_counts(evaluator)
 
@@ -311,7 +407,12 @@ def sample_coordinates(ontology: OntologyV4, seed: int) -> tuple[AnchorCoordinat
     visual_domains = _rotating(ontology.axis_values("visual_domain"))
 
     coordinates: list[AnchorCoordinate] = []
-    for block in evaluator.enumerate_legal_blocks():
+    text_blocks = _select_blocks(evaluator.enumerate_legal_blocks(), resolved_scale.text_blocks)
+    image_blocks = _select_blocks(
+        evaluator.enumerate_legal_blocks(image_capable_only=True),
+        resolved_scale.image_blocks,
+    )
+    for block in text_blocks:
         coordinates.append(
             _build_coordinate(
                 block,
@@ -322,7 +423,7 @@ def sample_coordinates(ontology: OntologyV4, seed: int) -> tuple[AnchorCoordinat
                 free_values=free_values,
             )
         )
-    for block in evaluator.enumerate_legal_blocks(image_capable_only=True):
+    for block in image_blocks:
         coordinates.append(
             _build_coordinate(
                 block,
@@ -488,19 +589,25 @@ def build_specs(
 def sample_anchors(
     ontology: OntologyV4,
     config: AnchorGenerationConfig,
+    *,
+    scale: PlanScale | None = None,
 ) -> list[AnchorSpec]:
-    """Sample the run's full plan from ``ontology`` (§12.1 entry point).
+    """Sample the run's plan from ``ontology`` (§12.1 entry point).
 
-    The count is **derived** from the construction rule: the returned list has
-    exactly :data:`EXPECTED_TOTAL` entries.  A caller that needs a prefix (the
-    checkpoint/resume path asks only for the anchors still missing) slices the
-    result — the plan itself is never shortened here, because a truncated plan
-    would silently skip coordinates.
+    Without ``scale`` the count is **derived** from the construction rule: the
+    returned list has exactly :data:`EXPECTED_TOTAL` entries.  With
+    :data:`SMOKE_SCALE` the same rule runs at the smoke scale — 8 entries — for
+    a run that only proves the pipeline end to end.  A caller that needs a prefix
+    (the checkpoint/resume path asks only for the anchors still missing) slices
+    the result — the plan itself is never shortened here, because a truncated
+    plan would silently skip coordinates.
 
     Args:
         ontology: A validated v4 ontology.
         config: Generation configuration; only ``seed`` is read.  The turn count
             of each entry comes from the ontology, not from the config.
+        scale: Which subset of each modality's legal blocks to plan.  ``None``
+            means every legal block (the full 1,826-entry plan).
 
     Returns:
         The plan's :class:`AnchorSpec` objects, in plan order.
@@ -509,5 +616,5 @@ def sample_anchors(
         SamplingError: If the ontology cannot produce the rule's coordinate set,
             or cannot supply a turn count for one of them.
     """
-    coordinates = sample_coordinates(ontology, config.seed)
+    coordinates = sample_coordinates(ontology, config.seed, scale=scale)
     return build_specs(coordinates, ontology=ontology)

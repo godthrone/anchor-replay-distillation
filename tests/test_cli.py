@@ -56,17 +56,58 @@ def test_no_convert_is_forwarded_to_pipeline(
     calls: list[tuple] = []
     import ard.cli as cli_mod
 
-    def fake_run(config: object, image_dir: str | None = None, no_convert: bool = False) -> str:
-        calls.append((config, image_dir, no_convert))
+    def fake_run(
+        config: object,
+        image_dir: str | None = None,
+        no_convert: bool = False,
+        smoke: bool = False,
+    ) -> str:
+        calls.append((config, image_dir, no_convert, smoke))
         return "out"
 
     monkeypatch.setattr(cli_mod, "run_pipeline", fake_run)
     _run_main(["--config", str(config_path), "--no-convert"], monkeypatch)
 
     assert len(calls) == 1
-    _, image_dir, no_convert = calls[0]
+    _, image_dir, no_convert, smoke = calls[0]
     assert no_convert is True
     assert image_dir is None
+    assert smoke is False, "a run without --smoke must stay non-smoke"
+
+
+def test_smoke_flag_is_forwarded_to_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--smoke`` reaches the pipeline as a run-boundary flag, not a config field."""
+    _pin_project_root(monkeypatch, tmp_path)
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("# minimal config — every section has defaults\n", encoding="utf-8")
+
+    calls: list[tuple] = []
+    import ard.cli as cli_mod
+
+    def fake_run(
+        config: object,
+        image_dir: str | None = None,
+        no_convert: bool = False,
+        smoke: bool = False,
+    ) -> str:
+        calls.append((config, image_dir, no_convert, smoke))
+        return "out"
+
+    monkeypatch.setattr(cli_mod, "run_pipeline", fake_run)
+    _run_main(["--config", str(config_path), "--smoke"], monkeypatch)
+
+    assert len(calls) == 1
+    _, _, _, smoke = calls[0]
+    assert smoke is True
+
+
+def test_smoke_is_not_a_config_field() -> None:
+    """§10.1 推论 2: CLI parameters and config fields have zero intersection."""
+    from ard.config import ARDConfig
+
+    assert "smoke" not in ARDConfig.model_fields
 
 
 def test_missing_config_file_fails_cleanly(

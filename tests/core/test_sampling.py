@@ -24,6 +24,10 @@ from ard.core.sampling import (
     EXPECTED_TOTAL,
     EXPECTED_VISUAL_DOMAINS,
     MULTI_TURN_DEFAULT,
+    SMOKE_IMAGE_BLOCKS,
+    SMOKE_PLAN_SIZE,
+    SMOKE_SCALE,
+    SMOKE_TEXT_BLOCKS,
     AnchorCoordinate,
     SamplingError,
     sample_anchors,
@@ -140,6 +144,108 @@ def test_image_blocks_are_the_image_capable_subspace(
         for block in evaluator.enumerate_legal_blocks(image_capable_only=True)
     }
     assert {_block_key(c) for c in _image_plan(plan)} == expected
+
+
+# ── the smoke scale: the same rule, fewer blocks ────────────────────────────
+
+
+def test_smoke_scale_declares_four_text_and_four_image_blocks() -> None:
+    assert SMOKE_SCALE.text_blocks == SMOKE_TEXT_BLOCKS == 4
+    assert SMOKE_SCALE.image_blocks == SMOKE_IMAGE_BLOCKS == 4
+    assert SMOKE_PLAN_SIZE == 8
+
+
+def test_evenly_spaced_indices_pin_the_selection_rule() -> None:
+    """The smoke selection is named arithmetic, not a slice — pinned by value.
+
+    Indices span the whole enumeration with both endpoints included; the values
+    below are the shipped rule for 935 text / 891 image blocks.
+    """
+    from ard.core import sampling
+
+    assert sampling._evenly_spaced_indices(935, 4) == (0, 311, 622, 934)
+    assert sampling._evenly_spaced_indices(891, 4) == (0, 296, 593, 890)
+    assert sampling._evenly_spaced_indices(3, 1) == (0,)
+    assert sampling._evenly_spaced_indices(2, 5) == (0, 1)  # more than there are
+    with pytest.raises(SamplingError, match="not a plan"):
+        sampling._evenly_spaced_indices(935, 0)
+
+
+def test_smoke_plan_is_a_subset_of_the_full_plans_blocks(
+    ontology: OntologyV4,
+) -> None:
+    """The smoke plan enumerates the same rule's blocks — just 4 + 4 of them."""
+    smoke = sample_coordinates(ontology, seed=20260925, scale=SMOKE_SCALE)
+    full = sample_coordinates(ontology, seed=20260925)
+
+    assert len(smoke) == SMOKE_PLAN_SIZE
+    assert [c.modality for c in smoke] == ["text_only"] * 4 + ["image"] * 4
+    assert len({c.identity() for c in smoke}) == SMOKE_PLAN_SIZE  # no repeats
+
+    evaluator = ConstraintEvaluator(ontology)
+    from ard.core import sampling
+
+    text_all = evaluator.enumerate_legal_blocks()
+    image_all = evaluator.enumerate_legal_blocks(image_capable_only=True)
+    text_taken = [_block_key(c) for c in smoke if c.modality == "text_only"]
+    image_taken = [_block_key(c) for c in smoke if c.modality == "image"]
+    assert text_taken == [
+        tuple(getattr(block, axis) for axis in RESTRICTED_AXES)
+        for block in (text_all[i] for i in sampling._evenly_spaced_indices(935, 4))
+    ]
+    assert image_taken == [
+        tuple(getattr(block, axis) for axis in RESTRICTED_AXES)
+        for block in (image_all[i] for i in sampling._evenly_spaced_indices(891, 4))
+    ]
+    # each modality's smoke blocks are a subset of the same modality's full set
+    assert set(text_taken) <= {_block_key(c) for c in full if c.modality == "text_only"}
+    assert set(image_taken) <= {_block_key(c) for c in full if c.modality == "image"}
+
+
+def test_smoke_spec_plan_is_byte_identical_for_the_same_seed(
+    ontology: OntologyV4,
+) -> None:
+    """Same seed, two smoke runs → the same bytes; a different seed → not."""
+    config = AnchorGenerationConfig(seed=99)
+
+    def fingerprint() -> str:
+        specs = sample_anchors(ontology, config, scale=SMOKE_SCALE)
+        return json.dumps(
+            [
+                {
+                    "id": spec.id,
+                    "meta": spec.anchor_meta,
+                    "turns": [(t.turn_index, t.role, t.is_final) for t in spec.turns],
+                }
+                for spec in specs
+            ],
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+
+    first = fingerprint()
+    assert len(json.loads(first)) == SMOKE_PLAN_SIZE
+    assert first == fingerprint()
+    assert first != json.dumps(
+        [
+            {
+                "id": spec.id,
+                "meta": spec.anchor_meta,
+                "turns": [(t.turn_index, t.role, t.is_final) for t in spec.turns],
+            }
+            for spec in sample_anchors(
+                ontology, AnchorGenerationConfig(seed=100), scale=SMOKE_SCALE
+            )
+        ],
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+
+
+def test_a_full_run_is_unchanged_by_the_scale_knob(ontology: OntologyV4) -> None:
+    """Explicit ``scale=None`` and the default are the same 1,826-entry plan."""
+    config = AnchorGenerationConfig(seed=5)
+    assert sample_anchors(ontology, config) == sample_anchors(ontology, config, scale=None)
 
 
 # ── determinism (same seed → identical plan; different seed → not) ───────────
