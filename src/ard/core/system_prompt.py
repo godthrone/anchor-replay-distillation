@@ -29,7 +29,7 @@ from __future__ import annotations
 import re
 import string
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeAlias
 
 __all__ = [
     "SYSTEM_PROMPT_NONE",
@@ -68,8 +68,11 @@ SYSTEM_PROMPT_TEMPLATE_FIELDS: tuple[str, ...] = (
     "domain",
 )
 
+#: One placeholder's source: the metadata key it reads and its default.
+FieldSource: TypeAlias = tuple[str, str]
+
 #: Metadata key and default for each placeholder.
-_FIELD_SOURCES: dict[str, tuple[str, str]] = {
+_FIELD_SOURCES: dict[str, FieldSource] = {
     "language": ("language", "English"),
     "capability": ("capability", "qa"),
     "domain": ("knowledge_domain", "general"),

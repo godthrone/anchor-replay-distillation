@@ -16,6 +16,7 @@ from ard.core.ontology import (
     OntologyV4,
     load_ontology_v4,
 )
+from ard.core.types import AxisValuesByAxis, StringPairs
 
 # The 11 universal axes split into 5 orthogonal (free) and 6 restricted axes.
 # Both tuples are validated against the ontology's own R5/R7 declarations at
@@ -70,7 +71,7 @@ class AxisPairTable(BaseModel):
     constraint_id: str
     from_axis: str
     to_axis: str
-    targets: dict[str, tuple[str, ...]]
+    targets: AxisValuesByAxis
 
 
 class LegalBlockCounts(BaseModel):
@@ -94,7 +95,7 @@ class ConstraintEvaluator:
         self.ontology: OntologyV4 = ontology
         self.free_axes: tuple[str, ...] = FREE_AXES
         self.restricted_axes: tuple[str, ...] = RESTRICTED_AXES
-        self.axis_values: dict[str, tuple[str, ...]] = {
+        self.axis_values: AxisValuesByAxis = {
             axis: ontology.axis_values(axis) for axis in RESTRICTED_AXES
         }
         self.image_capable: frozenset[str] = self._resolve_image_capable()
@@ -129,7 +130,7 @@ class ConstraintEvaluator:
                 )
         from_values = self.axis_values[from_axis]
         to_values = self.axis_values[to_axis]
-        targets: dict[str, tuple[str, ...]] = {}
+        targets: AxisValuesByAxis = {}
         for rule in constraint.rules:
             if rule.from_value not in from_values:
                 raise ConstraintEvaluationError(
@@ -240,7 +241,7 @@ class ConstraintEvaluator:
                                     blocks.append(block)
         return tuple(blocks)
 
-    def unsolvable_capability_input_pairs(self) -> tuple[tuple[str, str], ...]:
+    def unsolvable_capability_input_pairs(self) -> StringPairs:
         """Return the (capability, input_condition) pairs with no legal block."""
         solved = {
             (block.capability, block.input_condition) for block in self.enumerate_legal_blocks()

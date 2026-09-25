@@ -39,11 +39,17 @@ import hashlib
 import random
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeAlias
 
 from ard.core.constraints import ConstraintEvaluator, RestrictedBlock
 from ard.core.ontology import FlatAxisWithAttributes, OntologyV4
-from ard.core.types import AnchorGenerationConfig, AnchorSpec, TurnSpec
+from ard.core.types import (
+    AnchorGenerationConfig,
+    AnchorSpec,
+    AxisValuesByAxis,
+    StringPairs,
+    TurnSpec,
+)
 
 #: The anchor-id dimensions, in hash order.  The set is the legacy one (v3.0.0
 #: ids), kept deliberately: the bank's uniqueness gate and the checkpoint/resume
@@ -168,9 +174,12 @@ a reviewer can ratify or change it in one line; the guard in
 behind it.
 """
 
+#: One row of the rule's expectation table: a label and the count it expects.
+CountExpectation: TypeAlias = tuple[str, int]
+
 #: The rule's four expectations as an ordered table, so one failure names every
 #: mismatch at once (one run, one fix).
-_COUNT_EXPECTATIONS: tuple[tuple[str, int], ...] = (
+_COUNT_EXPECTATIONS: tuple[CountExpectation, ...] = (
     ("knowledge_domain leaves", EXPECTED_KNOWLEDGE_DOMAINS),
     ("visual_domain leaves", EXPECTED_VISUAL_DOMAINS),
     ("legal restricted blocks (text)", EXPECTED_TEXT_BLOCKS),
@@ -235,7 +244,7 @@ class AnchorCoordinate:
             meta["visual_domain"] = self.visual_domain
         return meta
 
-    def identity(self) -> tuple[tuple[str, str], ...]:
+    def identity(self) -> StringPairs:
         """Return a hashable identity for duplicate detection."""
         return tuple(self.as_dict().items())
 
@@ -323,7 +332,7 @@ def _build_coordinate(
     knowledge_domain: str,
     visual_domain: str | None,
     rng: random.Random,
-    free_values: dict[str, tuple[str, ...]],
+    free_values: AxisValuesByAxis,
 ) -> AnchorCoordinate:
     """Combine one legal restricted block with its free-axis choices."""
     languages = free_values["language"]
@@ -348,7 +357,7 @@ def _build_coordinate(
 
 def _reject_duplicates(coordinates: Iterable[AnchorCoordinate]) -> None:
     """Raise :class:`SamplingError` naming the first duplicated coordinate."""
-    seen: set[tuple[tuple[str, str], ...]] = set()
+    seen: set[StringPairs] = set()
     for index, coordinate in enumerate(coordinates):
         identity = coordinate.identity()
         if identity in seen:
@@ -400,9 +409,7 @@ def sample_coordinates(
     _verify_rule_counts(evaluator)
 
     rng = random.Random(seed)
-    free_values: dict[str, tuple[str, ...]] = {
-        axis: ontology.axis_values(axis) for axis in RANDOM_FREE_AXES
-    }
+    free_values: AxisValuesByAxis = {axis: ontology.axis_values(axis) for axis in RANDOM_FREE_AXES}
     knowledge_domains = _rotating(ontology.axis_values("knowledge_domain"))
     visual_domains = _rotating(ontology.axis_values("visual_domain"))
 

@@ -28,13 +28,14 @@ or a key), the noise-band assembly, and the report rendering.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Final
+from typing import Any, Final, TypeAlias
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict
 
 from ard.core import constraints, sampling
 from ard.core import coverage as ruler
+from ard.core.types import JsonObjectSequence, StringPairs
 
 #: Version of the acceptance report schema — bumped when a field changes meaning.
 REPORT_SCHEMA: Final[str] = "ard-acceptance-1"
@@ -49,6 +50,15 @@ TARGET_TEXT_FIELD: Final[str] = "text"
 NOISE_UNAVAILABLE_REASON: Final[str] = (
     "noise band unavailable (no repeated generation data provided)"
 )
+
+#: One restricted-axis value tuple: a sampled block's identity in the plan.
+BlockKey: TypeAlias = tuple[Any, ...]
+
+#: Record indices of anchors that share one coordinate.
+IndexGroup: TypeAlias = list[int]
+
+#: One structure check: its label, the measured count, the expected count.
+CountCheck: TypeAlias = tuple[str, int, int]
 
 _STRICT = ConfigDict(extra="forbid", frozen=True)
 
@@ -227,7 +237,7 @@ def conventions() -> Conventions:
     )
 
 
-def structure_readout(plan: Sequence[Mapping[str, Any]]) -> StructureReadout:
+def structure_readout(plan: JsonObjectSequence) -> StructureReadout:
     """Summarise *plan*: plan coordinates in, coverage counts out.
 
     Args:
@@ -246,11 +256,11 @@ def structure_readout(plan: Sequence[Mapping[str, Any]]) -> StructureReadout:
 
     text_entries = 0
     image_entries = 0
-    text_blocks: set[tuple[Any, ...]] = set()
-    image_blocks: set[tuple[Any, ...]] = set()
+    text_blocks: set[BlockKey] = set()
+    image_blocks: set[BlockKey] = set()
     knowledge_leaves: set[str] = set()
     visual_leaves: set[str] = set()
-    identities: set[tuple[tuple[str, str], ...]] = set()
+    identities: set[StringPairs] = set()
 
     for meta in plan:
         identities.add(tuple(sorted((str(key), str(value)) for key, value in meta.items())))
@@ -311,7 +321,7 @@ def structure_mismatch(structure: StructureReadout) -> str | None:
     whose anchors are already on disk: "the plan is not the rule's plan" is a
     reading about the artifact, and the reader must be able to see it.
     """
-    checks: tuple[tuple[str, int, int], ...] = (
+    checks: tuple[CountCheck, ...] = (
         ("plan entries", structure.plan_total, structure.expected_total),
         ("text-only plan entries", structure.plan_text_entries, structure.expected_text_blocks),
         ("image plan entries", structure.plan_image_entries, structure.expected_image_blocks),
@@ -339,7 +349,7 @@ def structure_mismatch(structure: StructureReadout) -> str | None:
     return "plan does not match the construction rule — " + "; ".join(mismatches)
 
 
-def anchor_texts(records: Sequence[Mapping[str, Any]]) -> list[str]:
+def anchor_texts(records: JsonObjectSequence) -> list[str]:
     """Return the embedded text of every bank record, in file order.
 
     The anchor side is the record's **final user-role turn**: that is the
@@ -375,7 +385,7 @@ def anchor_texts(records: Sequence[Mapping[str, Any]]) -> list[str]:
     return texts
 
 
-def repeat_groups(coordinates: Sequence[Mapping[str, Any]]) -> list[list[int]]:
+def repeat_groups(coordinates: JsonObjectSequence) -> list[IndexGroup]:
     """Group record indices that carry the **same** full coordinate.
 
     The v4 plan has no repeated coordinate, so this list is normally empty; it
@@ -385,7 +395,7 @@ def repeat_groups(coordinates: Sequence[Mapping[str, Any]]) -> list[list[int]]:
     Raises:
         AcceptanceError: if a record carries no ``anchor_meta`` mapping.
     """
-    groups: dict[tuple[tuple[str, str], ...], list[int]] = {}
+    groups: dict[StringPairs, IndexGroup] = {}
     for index, meta in enumerate(coordinates):
         if not isinstance(meta, Mapping) or not meta:
             raise AcceptanceError(
@@ -421,7 +431,7 @@ def intrinsic_epsilon(targets: ruler.VectorSet) -> float:
     return float(np.percentile(nearest, ruler.QUANTILE_LEVELS[0], method=ruler.PERCENTILE_METHOD))
 
 
-def noise_section(anchors: ruler.VectorSet, groups: Sequence[Sequence[int]]) -> NoiseSection:
+def noise_section(anchors: ruler.VectorSet, groups: Sequence[IndexGroup]) -> NoiseSection:
     """Assemble the noise band from repeat-generation groups, or state its absence.
 
     Args:

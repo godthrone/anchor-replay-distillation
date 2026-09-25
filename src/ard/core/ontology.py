@@ -16,6 +16,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidationError
 
+from ard.core.types import StringList
+
 # ── Schema configuration ───────────────────────────────────────────────────
 
 _STRICT = ConfigDict(extra="forbid", frozen=True)
@@ -70,7 +72,7 @@ class TurnAttributes(RootModel[dict[str, int | str]]):
     """Turn-count attributes of a single ``conversation_type`` value."""
 
 
-class SubdomainLeaves(RootModel[dict[str, list[str]]]):
+class SubdomainLeaves(RootModel[dict[str, StringList]]):
     """Leaf coordinate values of one knowledge domain, keyed by subdomain name."""
 
 
