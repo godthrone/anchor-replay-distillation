@@ -34,8 +34,11 @@ that carries no `.git` (GitHub "Download ZIP", `git archive`) falls back to the 
 ### 2. Provide endpoint credentials
 
 ```bash
-cp configs/config.override.sample.toml .local/config.override.toml
+mkdir -p .local && cp configs/config.override.sample.toml .local/config.override.toml
 ```
+
+The `mkdir -p` is not decoration: `.local/` is gitignored, so a fresh clone does not have it
+and `cp` would fail with `No such file or directory`. Both READMEs run this as one line.
 
 Then fill in `api_base`, `model_name` and `api_key` for `[input_generator]` and
 `[target_model]` (and, only if you want the `q95` readout, `[coverage.embedding]`).

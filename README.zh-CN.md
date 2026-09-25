@@ -28,8 +28,11 @@ uv sync
 ### 2. 准备端点凭证
 
 ```bash
-cp configs/config.override.sample.toml .local/config.override.toml
+mkdir -p .local && cp configs/config.override.sample.toml .local/config.override.toml
 ```
+
+`mkdir -p` 不是装饰：`.local/` 被 gitignore，全新 clone 里没有这个目录，直接 `cp` 会以
+`No such file or directory` 失败。两版 README 都把它作为一行执行。
 
 然后填写 `[input_generator]` 与 `[target_model]` 的 `api_base`、`model_name`、`api_key`
 （只有在需要 `q95` 读数时才填 `[coverage.embedding]`）。
