@@ -2,7 +2,8 @@
 
 > 职责：说明 ARD 一轮锚点计划的**目标集口径**、**构造规则**（坐标如何被选出）、**轮数口径**、**坐标与措辞的边界**，
 > 以及本体指纹沿革。纯计算实现见 `src/ard/core/sampling.py` / `constraints.py` / `ontology.py`；判据与读数定义见 `docs/measurement.md`。
-> 基线：本页所有 `文件:行` 以提交 `a0f3221` 的树为准（并行开发期，代码行号可能随提交漂移；按符号名可定位）。
+> 基线：本页所有 `文件:行` 已按提交 `a94e7b3` 的树逐条核对（该提交之后只有文档变更，被引用的代码行未再漂移；
+> 此前按 `a0f3221` 记录的行号已随代码演进整体平移并用符号名交叉核对过）。
 
 ## 1. 目标集口径
 
@@ -17,15 +18,15 @@
 |---|---:|---|
 | 自由轴积 `free_axis_product` | **52,668** | `ontology/anchor_ontology.v4.json:1340`（4 × 209 × 7 × 3 × 3） |
 | 受限轴原始组合 `raw_restricted_block` | 100,800 | `:1341` |
-| 文本态合法受限块 | **935** | `:1342`；`src/ard/core/sampling.py:79` |
-| 影像态合法受限块（18 个 image-capable capability） | **891** | `:1343`；`src/ard/core/sampling.py:82` |
-| `knowledge_domain` 叶 | **209**（18 domain / 36 subdomain） | `:55-59` |
-| `visual_domain` 叶 | **21** | `:296-300` |
-| **一轮计划总数** | **1,826**（935 + 891） | `src/ard/core/sampling.py:91` |
+| 文本态合法受限块 | **935** | `:1342`；`src/ard/core/sampling.py:87` |
+| 影像态合法受限块（18 个 image-capable capability） | **891** | `:1343`；`src/ard/core/sampling.py:90` |
+| `knowledge_domain` 叶 | **209**（18 domain / 36 subdomain） | `:63-67` |
+| `visual_domain` 叶 | **21** | `:307-311` |
+| **一轮计划总数** | **1,826**（935 + 891） | `src/ard/core/sampling.py:99` |
 
 **总数不是配置项**：它由构造规则与本体唯一推导。`configs/config.toml` 中没有 `target_count` 一类字段，
 `sampling.sample_anchors` 的返回长度就是计划长度；本体计数一旦与规则不符，采样器**报错退出**而不是产出更短/更长的计划
-（`src/ard/core/sampling.py:243-265`）。
+（`src/ard/core/sampling.py:254-276`）。
 
 ## 2. 构造规则
 
@@ -47,14 +48,14 @@ flowchart TD
 
 | 轴 | 取值方式 | 证据 |
 |---|---|---|
-| 6 个受限轴（`capability`/`system_prompt_mode`/`conversation_type`/`output_format`/`input_condition`/`answer_mode`） | **穷举合法受限块，每块恰好 1 条** | `src/ard/core/sampling.py:361-439`；`src/ard/core/constraints.py:210-262` |
-| `knowledge_domain` | **轮转**：第 i 条取 `leaves[i % 209]` | `src/ard/core/sampling.py:70`、`:406-408` |
-| `visual_domain` | **轮转**：第 i 条取 `leaves[i % 21]`（仅影像态；文本态缺席） | `src/ard/core/sampling.py:70`、`:406-408` |
-| `language` / `response_style` / `difficulty` / `context_length` | **按 run seed 随机抽取** | `src/ard/core/sampling.py:72-77`、`:401-403`；`_draw` `src/ard/core/sampling.py:314-317` |
-| `modality` | 采样字段（非轴）：前 935 条 `text_only`，后 891 条 `image` | `src/ard/core/sampling.py:415-435`；本体 `ontology/anchor_ontology.v4.json:1303-1309` |
+| 6 个受限轴（`capability`/`system_prompt_mode`/`conversation_type`/`output_format`/`input_condition`/`answer_mode`） | **穷举合法受限块，每块恰好 1 条** | `src/ard/core/sampling.py:372-452`；`src/ard/core/constraints.py:212-264` |
+| `knowledge_domain` | **轮转**：第 i 条取 `leaves[i % 209]` | `src/ard/core/sampling.py:78`、`:419-421` |
+| `visual_domain` | **轮转**：第 i 条取 `leaves[i % 21]`（仅影像态；文本态缺席） | `src/ard/core/sampling.py:78`、`:419-421` |
+| `language` / `response_style` / `difficulty` / `context_length` | **按 run seed 随机抽取** | `src/ard/core/sampling.py:80-85`、`:416-418`；`_draw` `src/ard/core/sampling.py:325-328` |
+| `modality` | 采样字段（非轴）：前 935 条 `text_only`，后 891 条 `image` | `src/ard/core/sampling.py:428-448`；本体 `ontology/anchor_ontology.v4.json:1303-1309` |
 
-已知的两个失败模式都做成**显式报错**而非静默降级：坐标重复（`src/ard/core/sampling.py:349-358`）、本体叶数与期望不符
-（`src/ard/core/sampling.py:243-265`，报文给出 `expected (received: …)`）。
+已知的两个失败模式都做成**显式报错**而非静默降级：坐标重复（`src/ard/core/sampling.py:360-369`）、本体叶数与期望不符
+（`src/ard/core/sampling.py:254-276`，报文给出 `expected (received: …)`）。
 
 **"每块恰好 1 条"的作用域是模态组内**：891 个影像态合法块是 935 个文本态合法块的子集，因此这 891 个
 受限坐标各出现**两次**——文本态组一次、影像态组一次——二者靠采样字段 `modality` 区分，而 `modality` 正是
@@ -75,17 +76,17 @@ flowchart TD
 
 - 本体 `conversation_type.value_attributes.turns` 数的是**交换**（exchange = 一个用户问题 + 它得到的回答）；
 - `AnchorSpec.messages`（生成产物中的消息数组）数的是**消息**，其长度 = `2n − 1`：`user` 开头、`user` 结尾、角色交替，
-  因为**最后一轮必须是 user**——它的回答才是训练目标，不作为 spec 轮存在（`src/ard/core/types.py:61-74`）。
+  因为**最后一轮必须是 user**——它的回答才是训练目标，不作为 spec 轮存在（`src/ard/core/types.py:62-75`）。
 
 例：`single_turn`(1) → 1 条消息；`clarification`(2) → 3 条；`constraint_update`(4) → 7 条。
-映射实现见 `src/ard/core/sampling.py:442-473`（`_spec_turns`）与 `:476-506`（`turn_counts_by_conversation_type`）。
+映射实现见 `src/ard/core/sampling.py:455-486`（`_spec_turns`）与 `:489-519`（`turn_counts_by_conversation_type`）。
 
-**`MULTI_TURN_DEFAULT = 4` 的取值依据与本体缺口**（`src/ard/core/sampling.py:154-167`）：
+**`MULTI_TURN_DEFAULT = 4` 的取值依据与本体缺口**（`src/ard/core/sampling.py:162-175`）：
 
 - 依据：本体对 `tool_assisted` 与 `source_review` 只写 `turns: "multi"`，**没有数值上界**；常量取本体自身声明的最大轮数
   `constraint_update = 4`，即"`multi` = 本体已声明的最长交换数"。
 - 缺口：这是**本体缺口，不是设计选择**——本体没有表达"multi 的上界"。代码把该数字收在单一常量处，
-  并设硬门：本体一旦声明比它更大的轮数，`_spec_turns` 直接报错（`:468-473`），不静默采用。
+  并设硬门：本体一旦声明比它更大的轮数，`_spec_turns` 直接报错（`:481-486`），不静默采用。
 - 轮数**不是配置项**：`configs/config.toml` 无对应字段，改轮数只能改本体（或该常量）。
 
 ## 4. 坐标与措辞
@@ -110,13 +111,14 @@ flowchart TD
 - `none.md` 是唯一例外：`none` 是"无 system message"的缺省态，没有生成措辞，该文件只**陈述**这一事实、
   **永不被渲染**（`build_system_prompt_prompt` 对 `none` 显式报错）；每个文件（含它）都必须非空。
 
-**加载与报错语义**：`src/ard/core/system_prompt.py` 只持契约（目录 + 读取 + 占位符校验），**不含任何内置措辞串**
-（目录常量 `src/ard/core/system_prompt.py:56`；错误类型/读取/校验/组装 `:84-217`）。目录缺失、mode 无对应文件、
+**加载与报错语义**：措辞的契约与渲染是纯计算，落在 `src/ard/core/system_prompt.py`（目录常量 `:64`；错误类型、模板路径校验、模板校验、渲染 `:95-226`），**不含任何内置措辞串**；
+**读文件**是设施动作，落在 `src/ard/backends/prompt_loader.py:38`（`load_system_prompt_template`）与组装入口 `:75`
+（`build_system_prompt_prompt`）——`core/` 内零文件访问（§1.3，由 `tests/core/test_core_is_pure.py` 守卫）。目录缺失、mode 无对应文件、
 文件为空、占位符非法**一律硬报错**，报文含**路径与期望**（§2.3），**不静默回退到硬编码**（那等于重建第二个真相源，§1.4）；
 报文只含路径与 mode 名，无机密（§15）。`system_prompt_mode = none` 时 `_generate_system_message` 直接返回 `None`，
-不发起任何请求（`src/ard/domain/text_anchor.py:488`）。
+不发起任何请求（`src/ard/domain/text_anchor.py:484`）。
 
-**模板目录来源单点**：`SYSTEM_PROMPT_TEMPLATE_DIR`（`src/ard/core/system_prompt.py:56`）是运行时**唯一**一处
+**模板目录来源单点**：`SYSTEM_PROMPT_TEMPLATE_DIR`（`src/ard/core/system_prompt.py:64`）是运行时**唯一**一处
 声明该目录的地方（`git grep -n "configs/prompts" -- src` 仅此 1 命中）；契约测试
 `test_template_dir_is_the_ontology_declared_location` 把它与本体声明的 `target`（`<system_prompt_mode>` 替换后）
 逐字对齐，任一侧漂移即在 CI 报错。**未新增 config 字段**：生成路径拿不到 config 对象，加字段就没有消费者（§7.2）。
@@ -133,25 +135,26 @@ flowchart TD
 
 | 轴 | 措辞来源 | 证据 |
 |---|---|---|
-| `language` | 内联模板串（user 侧）+ 数据文件占位符 `{language}`（system-prompt 侧） | `src/ard/domain/text_anchor.py:182`、`:262`、`:270`；`configs/prompts/system_prompt/*.md` |
-| `knowledge_domain` | 内联模板串 + 数据文件占位符 `{domain}` | `src/ard/domain/text_anchor.py:183`、`:271`；`configs/prompts/system_prompt/*.md` |
-| `capability` | 内联模板串 + 数据文件占位符 `{capability}` | `src/ard/domain/text_anchor.py:184`、`:264`、`:272`；`configs/prompts/system_prompt/*.md` |
-| `conversation_type` | 内联模板串（作为 "conversation style" 回显；其 `turns` 另决定消息条数） | `src/ard/domain/text_anchor.py:185`、`:265`、`:273` |
-| `system_prompt_mode` | **数据文件** `configs/prompts/system_prompt/<mode>.md`（5 个取值各一份；present 模式 = 完整生成 prompt 模板） | `configs/prompts/system_prompt/`、`configs/prompts/README.md:1`、`src/ard/core/system_prompt.py:56`、`:84-217`；消费点 `src/ard/domain/text_anchor.py:503`（`none` 不生成 system message） |
+| `language` | 内联模板串（user 侧）+ 数据文件占位符 `{language}`（system-prompt 侧） | `src/ard/domain/text_anchor.py:184`、`:261`、`:269`；`configs/prompts/system_prompt/*.md` |
+| `knowledge_domain` | 内联模板串 + 数据文件占位符 `{domain}` | `src/ard/domain/text_anchor.py:185`、`:270`；`configs/prompts/system_prompt/*.md` |
+| `capability` | 内联模板串 + 数据文件占位符 `{capability}` | `src/ard/domain/text_anchor.py:186`、`:263`、`:271`；`configs/prompts/system_prompt/*.md` |
+| `conversation_type` | 内联模板串（作为 "conversation style" 回显；其 `turns` 另决定消息条数） | `src/ard/domain/text_anchor.py:187`、`:264`、`:272` |
+| `system_prompt_mode` | **数据文件** `configs/prompts/system_prompt/<mode>.md`（5 个取值各一份；present 模式 = 完整生成 prompt 模板） | `configs/prompts/system_prompt/`、`configs/prompts/README.md:1`、`src/ard/core/system_prompt.py:64`、`:95-226`；消费点 `src/ard/domain/text_anchor.py:499`（`none` 不生成 system message） |
 
-> 注：`text_anchor.py` 因删除一行 import，该文件 51 行之后整体上移一行；此前记录的行号（如 `:177`）已偏移。
+> 注：`text_anchor.py` 的 import 段历经两次删除（最近一次是把 system-prompt 措辞读取下沉到
+> `src/ard/backends/prompt_loader.py`，§1.3），其 import 段之后的行号整体上移；本页行号已按上面声明的基线提交逐条重核，无需再自行换算。
 
 - **仅坐标的轴**（取值进入 `anchor_meta` / id / 统计，但**不改变 prompt 的文本措辞**）：
 
 | 轴 | 取值仍被谁使用（非措辞） | 证据 |
 |---|---|---|
-| `response_style` | 采样坐标、id 维度之一 | `src/ard/core/sampling.py:72-77`、`:191-207`、`:339`；`src/ard/core/constraints.py:26` |
-| `difficulty` | 采样坐标 | `src/ard/core/sampling.py:341`；`src/ard/core/constraints.py:27` |
-| `context_length` | 采样坐标 | `src/ard/core/sampling.py:342`；`src/ard/core/constraints.py:28` |
-| `output_format` | 受限块合法性判定（决定有哪些合法块） | `src/ard/core/constraints.py:34`、`:53`、`:226`、`:233`；`src/ard/core/sampling.py:340` |
-| `input_condition` | 受限块合法性判定 | `src/ard/core/constraints.py:35`、`:54`、`:227`、`:234`、`:242-250`；`src/ard/core/sampling.py:343` |
-| `answer_mode` | 受限块合法性判定 | `src/ard/core/constraints.py:36`、`:55`、`:228`、`:235`；`src/ard/core/sampling.py:344` |
-| `visual_domain` | **决定影像态图片目录** `<image_dir>/<visual_domain>/`；进 manifest 分组标签 | `src/ard/domain/image_store.py:120-206`；调用点 `src/ard/pipeline.py:764-808`；分组标签 `src/ard/domain/bank.py:440` |
+| `response_style` | 采样坐标、id 维度之一 | `src/ard/core/sampling.py:80-85`、`:202-218`、`:350`；`src/ard/core/constraints.py:26` |
+| `difficulty` | 采样坐标 | `src/ard/core/sampling.py:352`；`src/ard/core/constraints.py:27` |
+| `context_length` | 采样坐标 | `src/ard/core/sampling.py:353`；`src/ard/core/constraints.py:28` |
+| `output_format` | 受限块合法性判定（决定有哪些合法块） | `src/ard/core/constraints.py:34`、`:53`、`:228`、`:235`；`src/ard/core/sampling.py:351` |
+| `input_condition` | 受限块合法性判定 | `src/ard/core/constraints.py:35`、`:54`、`:229`、`:236`、`:244-252`；`src/ard/core/sampling.py:354` |
+| `answer_mode` | 受限块合法性判定 | `src/ard/core/constraints.py:36`、`:55`、`:230`、`:237`；`src/ard/core/sampling.py:355` |
+| `visual_domain` | **决定影像态图片目录** `<image_dir>/<visual_domain>/`；进 manifest 分组标签 | `src/ard/domain/image_store.py:125-211`；调用点 `src/ard/pipeline.py:832-879`；分组标签 `src/ard/domain/bank.py:453` |
 
 **边界声明（如实记录，不补措辞）**：上述 7 个"仅坐标"轴（6 个受限轴 + `visual_domain`）的取值**不改变 prompt 的文本措辞**；
 `visual_domain` 经图片目录影响**输入图像的内容**（属于内容而非措辞），其余 6 个受限轴只作为**约束求解的输入**

@@ -3,7 +3,8 @@
 > 职责：定义 ARD 的验收尺子——距离、分位、覆盖读数、ε 敏感带、配对 bootstrap、噪声带、空间声明要求与退化行为，
 > 并写明该尺子的**可分辨性边界**。纯计算实现见 `src/ard/core/coverage.py`；读数组装见 `src/ard/core/acceptance.py`
 > 与 `src/ard/backends/coverage_wiring.py`；产物见 `results/coverage.json` / `coverage.md`。
-> 基线：本页所有 `文件:行` 以提交 `a0f3221` 的树为准（并行开发期，代码行号可能随提交漂移；按符号名可定位）。
+> 基线：本页所有 `文件:行` 已按提交 `a94e7b3` 的树逐条核对（该提交之后只有文档变更，被引用的代码行未再漂移；
+> 此前按 `a0f3221` 记录的行号已随代码演进整体平移）。
 
 ## 1. 距离与分位
 
@@ -25,10 +26,10 @@
 | `extent_at_100` | `Extent(1.00 × ε)` = 报告的主覆盖读数 |
 | `extent_at_105` | `Extent(1.05 × ε)` |
 
-ε 的来源被显式落在空间声明里（`src/ard/backends/coverage_wiring.py:179-190`）：
+ε 的来源被显式落在空间声明里（`src/ard/backends/coverage_wiring.py:180-191`）：
 
 1. 目标集文件头部声明了 `epsilon` ⇒ 原样使用；
-2. 未声明 ⇒ 用目标集**自身尺度**：目标点之间最近邻距离的 type-7 中位数（`src/ard/core/acceptance.py:400-422`，`intrinsic_epsilon`）；
+2. 未声明 ⇒ 用目标集**自身尺度**：目标点之间最近邻距离的 type-7 中位数（`src/ard/core/acceptance.py:410-432`，`intrinsic_epsilon`）；
    目标点少于 2 个时**报错**，不猜测。
 
 ## 3. 配对 bootstrap
@@ -47,26 +48,26 @@
 原料是同一格的**互异对**距离（`pairwise_distances`，`src/ard/core/coverage.py:549-576`）。判据 `within_noise_band(value, band)`
 为闭区间判定：落在 `[q50, max]` 内 = 与重复生成噪声**不可分辨**（`src/ard/core/coverage.py:597-608`）。
 
-组装：`src/ard/core/acceptance.py:424-464`（`noise_section`）从库记录中找同坐标分组（`repeat_groups`，`:378-399`），
-无重复生成数据时按 `NOISE_UNAVAILABLE_REASON`（`src/ard/core/acceptance.py:48-51`）显式写 **`unavailable`**，绝不省略。
+组装：`src/ard/core/acceptance.py:434-474`（`noise_section`）从库记录中找同坐标分组（`repeat_groups`，`:388-408`），
+无重复生成数据时按 `NOISE_UNAVAILABLE_REASON`（`src/ard/core/acceptance.py:49-52`）显式写 **`unavailable`**，绝不省略。
 
 ## 5. 空间声明要求
 
-每次指标读数必须**声明它是在什么空间里测的**（`src/ard/core/acceptance.py:133-165`，`SpaceDeclaration`）：
+每次指标读数必须**声明它是在什么空间里测的**（`src/ard/core/acceptance.py:143-175`，`SpaceDeclaration`）：
 
 | 字段 | 要求 | 值/来源 |
 |---|---|---|
 | `anchors_source` | 锚点向量来自哪个产物 | 锚点库路径（如 `outputs/<run>/anchor_bank.jsonl`） |
-| `anchor_field` | 嵌入的是该产物的哪个字段 | `src/ard/core/acceptance.py:43`：`messages[last].content`（最后一个 user 轮） |
+| `anchor_field` | 嵌入的是该产物的哪个字段 | `src/ard/core/acceptance.py:44`：`messages[last].content`（最后一个 user 轮） |
 | `targets_source` | 目标集文件路径 | `coverage.target_set_path` |
-| `target_field` | 嵌入目标条目的哪个字段 | `src/ard/core/acceptance.py:46`：`text` |
+| `target_field` | 嵌入目标条目的哪个字段 | `src/ard/core/acceptance.py:47`：`text` |
 | `n_anchor` / `n_target` | `|A|` / `|T|` | 实测矩阵行数 |
-| `embedder` | **嵌入器身份 = model + dimension + normalize** | `src/ard/core/acceptance.py:123-131`；由 `[coverage.embedding]` 解析 |
+| `embedder` | **嵌入器身份 = model + dimension + normalize** | `src/ard/core/acceptance.py:133-141`；由 `[coverage.embedding]` 解析 |
 | `distance` / `quantile_method` | 距离与分位定义 | `"1 - cos"`、`"linear"`（type-7） |
 | `epsilon` / `epsilon_source` | ε 及其来源 | 头部声明或目标集自身尺度 |
 
 **不含密钥**：空间声明只写 model 与 dimension，不写 `api_base`、不写任何 key；输出目录里的配置快照另有脱敏
-（`src/ard/pipeline.py:194`，`_redact_secrets`）。
+（`src/ard/pipeline.py:206`，`_redact_secrets`）。
 
 ## 6. 读数流水线与退化行为
 
@@ -86,15 +87,15 @@ flowchart TD
     W --> R
 ```
 
-退化行为（都**显式**、绝不静默，`src/ard/pipeline.py:532-670`）：
+退化行为（都**显式**、绝不静默，`src/ard/pipeline.py:602-737`）：
 
 | 情形 | 行为 |
 |---|---|
-| `coverage.target_set_path` 未配置 | 只产出**结构读数**（计划计数 vs 构造规则，零模型调用），并写 WARNING：`metric readout not measured …`（`src/ard/pipeline.py:552-557`）；manifest 指针 `metric_readout: false`、`q95: null` |
+| `coverage.target_set_path` 未配置 | 只产出**结构读数**（计划计数 vs 构造规则，零模型调用），并写 WARNING：`metric readout not measured …`（`src/ard/pipeline.py:622-627`）；manifest 指针 `metric_readout: false`、`q95: null` |
 | `[coverage.embedding]` 未配置 | 同上：没有可用嵌入器即不做指标读数，不猜 |
-| 目标集缺失/不可解析/计数或维度与配置矛盾 | 在**创建输出目录之前**拒绝整个运行（`src/ard/pipeline.py:532-576`，`CoverageWiringError`），不产生半成品产物 |
-| 嵌入调用失败 | 结构性读数**先已落盘**（`src/ard/pipeline.py:647-650`），失败照常抛出，但不会抹掉零成本的结构报告 |
-| 无同格重复生成数据 | 噪声带写 `unavailable` 并附原因（`src/ard/core/acceptance.py:48-51`；`src/ard/pipeline.py:657-658` 把原因并入 warnings） |
+| 目标集缺失/不可解析/计数或维度与配置矛盾 | 在**创建输出目录之前**拒绝整个运行（`src/ard/pipeline.py:602-646`，`CoverageWiringError`），不产生半成品产物 |
+| 嵌入调用失败 | 结构性读数**先已落盘**（`src/ard/pipeline.py:714-717`），失败照常抛出，但不会抹掉零成本的结构报告 |
+| 无同格重复生成数据 | 噪声带写 `unavailable` 并附原因（`src/ard/core/acceptance.py:49-52`；`src/ard/pipeline.py:724-725` 把原因并入 warnings） |
 
 ## 7. 已知边界：指标层的分辨力上限
 
@@ -118,5 +119,5 @@ flowchart TD
 
 - `results/coverage.json`：`AcceptanceReport` 的完整机器可读序列化（`report_schema = "ard-acceptance-1"`），
   含 `structure` / `metrics`（`space` / `quantiles` / `extent` / `epsilon_band` / `noise`）/ `warnings`。
-- `results/coverage.md`：同一报告的人读版渲染（`src/ard/core/acceptance.py:510-600`），
+- `results/coverage.md`：同一报告的人读版渲染（`src/ard/core/acceptance.py:520-610`），
   结构读数表、Conventions（`MULTI_TURN_DEFAULT` 与轮数映射）、空间声明、分位/覆盖读数、噪声带、warnings。
