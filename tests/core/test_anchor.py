@@ -1,41 +1,11 @@
-"""Tests for ARD — core types, ontology, config, sampling ids, CLI."""
+"""Tests for ARD — core types, config, sampling ids, CLI."""
 
-import json
 from pathlib import Path
 
 import pytest
 
-from ard.core.ontology import load_ontology
 from ard.core.sampling import generate_anchor_id
 from ard.core.types import AnchorGenerationConfig, GeneratedAnchor
-
-# ── Helpers ─────────────────────────────────────────────────────────────────
-
-
-def _minimal_ontology_payload() -> dict:
-    return {
-        "languages": ["English"],
-        "knowledge_domains": {
-            "domain_a": {"topic": ["alpha"]},
-            "domain_b": {"topic": ["beta"]},
-            "domain_c": {"topic": ["gamma"]},
-        },
-        "capabilities": {
-            "knowledge_response": ["qa"],
-            "reasoning": ["reasoning"],
-            "coding_and_data": ["coding"],
-        },
-        "conversation_types": {"single_turn": ["single_turn"]},
-        "language_features": {
-            "style": ["concise"],
-            "format": ["paragraph"],
-            "difficulty": ["basic"],
-            "context_length": ["short"],
-            "noise": ["clean"],
-            "answer_expectation": ["direct_answer"],
-        },
-    }
-
 
 # ── Types ───────────────────────────────────────────────────────────────────
 
@@ -84,33 +54,6 @@ def test_anchor_generation_config_custom():
     c = AnchorGenerationConfig(seed=7, concurrency=8)
     assert c.seed == 7
     assert c.concurrency == 8
-
-
-# ── Ontology ────────────────────────────────────────────────────────────────
-
-
-def test_ontology_loads_valid(tmp_path):
-    """load_ontology returns parsed dict for valid JSON."""
-    path = tmp_path / "ontology.json"
-    path.write_text(json.dumps(_minimal_ontology_payload()), encoding="utf-8")
-    result = load_ontology(path)
-    assert result["languages"] == ["English"]
-    assert "domain_a" in result["knowledge_domains"]
-
-
-def test_ontology_loads_real_file():
-    """load_ontology loads the real anchor_ontology.json."""
-    ontology = load_ontology(Path("ontology/anchor_ontology.json"))
-    assert isinstance(ontology, dict)
-    assert "languages" in ontology
-    assert "knowledge_domains" in ontology
-    assert "capabilities" in ontology
-
-
-def test_ontology_file_not_found():
-    """load_ontology raises FileNotFoundError for missing file."""
-    with pytest.raises(FileNotFoundError):
-        load_ontology("nonexistent.json")
 
 
 # ── Anchor ids ──────────────────────────────────────────────────────────────

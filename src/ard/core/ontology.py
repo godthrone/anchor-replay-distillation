@@ -6,9 +6,7 @@ typed access to axis value sets.  A file that does not match the v4 schema raise
 :class:`OntologySchemaError` naming the offending field, the expectation and the
 received value — it never degrades into an empty result set.
 
-The legacy :func:`load_ontology` (raw ``json.load`` dict, v3 semantics) is still
-present for the v3 call-sites that exist during the v4 migration; new code must
-use :func:`load_ontology_v4`.
+The single loader is :func:`load_ontology_v4`.
 """
 
 import json
@@ -520,23 +518,3 @@ def load_ontology_v4(path: str | Path) -> OntologyV4:
         return OntologyV4.model_validate(raw)
     except ValidationError as exc:
         raise OntologySchemaError(source, _format_validation_error(exc)) from exc
-
-
-def load_ontology(path: str | Path) -> dict[str, Any]:
-    """Load an ontology file as a raw dict (legacy v3 semantics).
-
-    Kept for the v3 call-sites that still exist during the v4 migration; it does
-    no schema validation.  New code must use :func:`load_ontology_v4`.
-
-    Args:
-        path: Path to the ontology JSON file.
-
-    Returns:
-        The parsed JSON object, unchanged.
-
-    Raises:
-        FileNotFoundError: If the file does not exist.
-        json.JSONDecodeError: If the file is not valid JSON.
-    """
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)

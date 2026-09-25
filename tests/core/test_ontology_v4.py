@@ -12,7 +12,6 @@ import pytest
 from ard.core.ontology import (
     OntologySchemaError,
     OntologyV4,
-    load_ontology,
     load_ontology_v4,
 )
 
@@ -228,15 +227,3 @@ def test_v3_file_is_rejected_by_v4_loader() -> None:
     with pytest.raises(OntologySchemaError) as excinfo:
         load_ontology_v4(ONTOLOGY_V3_PATH)
     assert "languages" in str(excinfo.value)
-
-
-# ── Migration compatibility ─────────────────────────────────────────────────
-
-
-def test_legacy_loader_keeps_raw_dict_semantics() -> None:
-    """The transitional loader still returns the raw v3 dict unchanged."""
-    legacy = load_ontology(ONTOLOGY_V3_PATH)
-    assert isinstance(legacy, dict)
-    assert "languages" in legacy
-    assert "knowledge_domains" in legacy
-    assert "capabilities" in legacy
