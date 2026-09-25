@@ -8,7 +8,6 @@ from __future__ import annotations
 import itertools
 import logging
 import random
-from typing import Any
 
 from ard.core.types import AnchorSpec
 
