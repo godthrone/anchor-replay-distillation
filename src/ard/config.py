@@ -251,6 +251,134 @@ class OutputConfig(BaseModel):
     overwrite: bool = False
 
 
+class CoverageEmbeddingConfig(BaseModel):
+    """``[coverage.embedding]`` — how to embed the acceptance readout's texts.
+
+    Every value is handed to :class:`ard.backends.embedding_client.EmbeddingClient`
+    at construction time; a ``None`` means "not provided", which selects that
+    client's documented default (``normalize`` is the one field with a semantic
+    default here — the acceptance ruler needs unit-norm rows).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    api_base: str | None = None
+    """Endpoint base including ``/v1``. A location, not a credential."""
+    api_key: str | None = None
+    """Secret — the base config leaves it empty; never logged or snapshotted."""
+    model: str | None = None
+    dimension: int | None = Field(default=None, gt=0)
+    batch_size: int | None = Field(default=None, gt=0)
+    connect_timeout: float | None = Field(default=None, gt=0)
+    read_timeout: float | None = Field(default=None, gt=0)
+    max_retries: int | None = Field(default=None, ge=0)
+    normalize: bool = True
+    """Must stay ``True``: ``coverage.VectorSet`` requires L2-normalised rows."""
+
+    @field_validator("api_base", "api_key", "model", mode="before")
+    @classmethod
+    def _empty_string_means_unset(cls, value: object) -> object:
+        """Normalize the TOML "left blank" placeholder to ``None`` (§2.2)."""
+        if value == "":
+            return None
+        return value
+
+
+class CoverageEmbedding(BaseModel):
+    """The non-optional view of ``[coverage.embedding]`` for a configured run.
+
+    :meth:`CoverageConfig.resolved_embedding` builds this after checking the
+    fields the metric readout cannot run without, so the wiring layer sees plain
+    ``str`` / ``int`` instead of re-testing ``None`` at the client call site
+    (§2.1 契约即防呆).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    api_base: str
+    model: str
+    dimension: int
+    api_key: str | None = None
+    """Secret — never logged, never part of the acceptance report."""
+    batch_size: int | None = None
+    connect_timeout: float | None = None
+    read_timeout: float | None = None
+    max_retries: int | None = None
+    normalize: bool = True
+
+
+class CoverageConfig(BaseModel):
+    """``[coverage]`` — the acceptance phase of a run.
+
+    The phase is config-driven on purpose (§10.1): there is no CLI flag for it.
+    ``target_set_path`` unset (``None``, written as ``""`` in TOML) means "no
+    target set provided" — the run still publishes the structure readout, but
+    must announce in a WARNING that no metric readout was measured (§3.2).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    """When ``False`` the acceptance phase is skipped entirely."""
+    target_set_path: str | None = None
+    """Target-set JSON / JSONL file. Unset = structure readout only."""
+    embedding: CoverageEmbeddingConfig = Field(default_factory=CoverageEmbeddingConfig)
+
+    def resolved_embedding(self) -> CoverageEmbedding | None:
+        """Return the embedder for the metric readout, or ``None`` when it does not apply.
+
+        Returns:
+            ``None`` when the phase is disabled or no target set is configured
+            (the structure-only path); otherwise the resolved embedder.
+
+        Raises:
+            ConfigError: If a target set is configured but ``api_base`` /
+                ``model`` / ``dimension`` is unset, or ``normalize`` is false.
+                Raised at config load (§7.2 加载即校验), before the pipeline
+                creates its output directory.
+        """
+        if not self.enabled or self.target_set_path is None:
+            return None
+
+        embedding = self.embedding
+        api_base, model, dimension = embedding.api_base, embedding.model, embedding.dimension
+        if api_base is None or model is None or dimension is None:
+            missing = [
+                name
+                for name, value in (
+                    ("api_base", api_base),
+                    ("model", model),
+                    ("dimension", dimension),
+                )
+                if value is None
+            ]
+            listed = ", ".join(f"`{name}`" for name in missing)
+            raise ConfigError(
+                f"[coverage.embedding] is missing {listed} while `coverage.target_set_path` "
+                f"is set ({self.target_set_path!r}). The metric readout needs an embedding "
+                "endpoint: set the missing field(s) in the override file "
+                "([coverage.embedding] in config.override.toml), or clear "
+                "coverage.target_set_path to publish the structure readout only."
+            )
+        if not embedding.normalize:
+            raise ConfigError(
+                "[coverage.embedding] normalize must be true: the acceptance ruler "
+                "(coverage.VectorSet) requires L2-normalised rows so that dot == cos. "
+                "Set normalize = true or clear coverage.target_set_path."
+            )
+        return CoverageEmbedding(
+            api_base=api_base,
+            model=model,
+            dimension=dimension,
+            api_key=embedding.api_key,
+            batch_size=embedding.batch_size,
+            connect_timeout=embedding.connect_timeout,
+            read_timeout=embedding.read_timeout,
+            max_retries=embedding.max_retries,
+            normalize=embedding.normalize,
+        )
+
+
 # ── Top-level config ──────────────────────────────────────────────────────
 
 
@@ -267,6 +395,7 @@ class ARDConfig(BaseModel):
     generation: GenerationConfig = Field(default_factory=GenerationConfig)
     ontology: OntologyConfig = Field(default_factory=OntologyConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
+    coverage: CoverageConfig = Field(default_factory=CoverageConfig)
 
 
 # Resolve forward references — required because of `from __future__ import annotations`.
@@ -357,7 +486,12 @@ def load_config(
 
     # 4. Validate
     try:
-        return ARDConfig.model_validate(merged_dict)
+        config = ARDConfig.model_validate(merged_dict)
+        # §7.2 加载即校验: a configured acceptance metric readout without a usable
+        # embedder is refused here — at load, not in the middle of a run whose
+        # anchors have already been generated.
+        config.coverage.resolved_embedding()
+        return config
     except Exception as exc:
         raise ValueError(
             f"Configuration validation failed. "

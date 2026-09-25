@@ -57,15 +57,24 @@ def _write_config(tmp_path: Path, output_dir: Path) -> Path:
     return config_path
 
 
-def _toml_dump(data: dict) -> str:
-    """Minimal nested-dict TOML writer (str/int/float/bool/list leaves)."""
+def _toml_dump(data: dict, prefix: str = "") -> str:
+    """Minimal nested-dict TOML writer (str/int/float/bool/list leaves).
+
+    Supports nested sections (``[coverage.embedding]``): a table's own leaves are
+    emitted before its sub-tables, which is what TOML requires.
+    """
     lines: list[str] = []
+    nested: list[tuple[str, dict]] = []
     for key, value in data.items():
         if isinstance(value, dict):
-            lines.append(f"[{key}]")
-            for sub_key, sub_value in value.items():
-                lines.append(f"{sub_key} = {_toml_value(sub_value)}")
-            lines.append("")
+            nested.append((key, value))
+        else:
+            lines.append(f"{key} = {_toml_value(value)}")
+    for key, value in nested:
+        section = f"{prefix}{key}"
+        lines.append("")
+        lines.append(f"[{section}]")
+        lines.append(_toml_dump(value, prefix=f"{section}."))
     return "\n".join(lines)
 
 

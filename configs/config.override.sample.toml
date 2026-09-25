@@ -79,3 +79,35 @@ path = "ontology/anchor_ontology.v4.json"
 directory = ""
 # Whether to overwrite existing output directory
 overwrite = false
+
+[coverage]
+# Whether to run the acceptance phase (structure readout + optional metric
+# readout). Default: true.
+# enabled = true
+# Target-set file for the metric readout (q95 / Extent(epsilon) / epsilon band).
+# Empty (the default) = structure readout only, announced with a WARNING.
+# Relative paths resolve against the working directory, like ontology.path.
+# Format: JSON (array, or object with a "targets" array) or JSONL; each entry is
+# a non-empty string or an object with a non-empty "text" field; an optional
+# object header may declare "expected_count", "dimension" and "epsilon".
+# target_set_path = "path/to/target_set.jsonl"
+
+[coverage.embedding]
+# Base URL for the OpenAI-compatible embeddings endpoint (including /v1)
+# api_base = "http://localhost:8000/v1"
+# API key (leave commented if the server needs none) — never commit a real key
+# api_key = ""
+# Embedding model name
+# model = "your-embedding-model"
+# Expected vector length (required when target_set_path is set)
+# dimension = 384
+# Texts per HTTP request
+# batch_size = 32
+# TCP connect + TLS handshake timeout
+# connect_timeout = 10.0
+# Whole-response read budget
+# read_timeout = 60.0
+# Retries after the first attempt (0 = exactly one attempt)
+# max_retries = 2
+# Must stay true: coverage.VectorSet requires L2-normalised rows
+# normalize = true

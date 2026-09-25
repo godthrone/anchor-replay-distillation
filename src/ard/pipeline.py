@@ -13,6 +13,7 @@ import re
 import sys
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,9 @@ from ard.backends.api_client import (
     ChatAPIConfig,
     reasoning_stats as api_client_reasoning_stats,
 )
-from ard.config import ARDConfig
+from ard.backends.coverage_wiring import TargetSet, build_metric_readout, load_target_set
+from ard.config import ARDConfig, ConfigError, CoverageEmbedding
+from ard.core import acceptance
 from ard.core.ontology import OntologyV4, load_ontology_v4
 from ard.core.quota import allocate_images
 from ard.core.sampling import sample_anchors
@@ -294,6 +297,167 @@ def sample_specs(config: ARDConfig) -> list[AnchorSpec]:
     return sample_anchors(ontology, gen_config)
 
 
+@dataclass(frozen=True, slots=True)
+class _CoverageInputs:
+    """The acceptance phase's validated inputs, prepared before any side effect.
+
+    The target set is parsed and checked *before* the output directory exists
+    (§2.3 边界校验即防呆): a missing / malformed / dimension-mismatched target
+    set is a config-side mistake, and refusing it up front costs nothing while
+    discovering it after 1,826 paid generations costs the whole run.
+    """
+
+    embedding: CoverageEmbedding
+    target_set: TargetSet
+
+
+def _prepare_coverage(config: ARDConfig) -> _CoverageInputs | None:
+    """Validate the acceptance phase's inputs, or return ``None`` for no metric readout.
+
+    Returns:
+        The resolved embedder and target set when a metric readout is
+        configured; ``None`` when the phase is disabled or no target set is
+        provided (the structure-only path, announced in a WARNING).
+
+    Raises:
+        ConfigError: If a target set is configured but the embedder is unusable
+            (also checked at config load — this is the run-side boundary).
+        CoverageWiringError: If the target-set file cannot be read or violates
+            its declared count / dimension / epsilon.
+    """
+    coverage = config.coverage
+    if not coverage.enabled:
+        logger.info("Acceptance phase disabled: coverage.enabled = false.")
+        return None
+    target_set_path = coverage.target_set_path
+    if target_set_path is None:
+        logger.warning(
+            "Acceptance metric readout not measured: coverage.target_set_path is unset. "
+            "Only the structure readout (plan counts vs the construction rule) is "
+            "published under results/. Set coverage.target_set_path to measure q95."
+        )
+        return None
+    embedding = coverage.resolved_embedding()
+    if embedding is None:
+        # ``resolved_embedding`` returns None only for "disabled" or "no target
+        # set", and both are handled above; reaching this means the two checks
+        # disagree, which must not silently skip the metric readout (§3.2).
+        raise ConfigError(
+            "coverage.resolved_embedding() returned None although the acceptance phase is "
+            f"enabled and coverage.target_set_path is set ({target_set_path!r})"
+        )
+    target_set = load_target_set(target_set_path, expected_dimension=embedding.dimension)
+    logger.info(
+        "Acceptance phase: target set %s (%d entries) will be measured after generation.",
+        target_set.path,
+        len(target_set.texts),
+    )
+    return _CoverageInputs(embedding=embedding, target_set=target_set)
+
+
+def _write_coverage_report(report: acceptance.AcceptanceReport, results_dir: Path) -> Path:
+    """Write ``coverage.json`` + ``coverage.md`` into *results_dir*; return the JSON path."""
+    coverage_json = results_dir / "coverage.json"
+    coverage_json.write_text(
+        json.dumps(report.model_dump(mode="json"), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (results_dir / "coverage.md").write_text(
+        acceptance.render_markdown(report), encoding="utf-8"
+    )
+    return coverage_json
+
+
+def _run_acceptance(
+    config: ARDConfig,
+    coverage_inputs: _CoverageInputs | None,
+    plan: list[AnchorSpec],
+    records: list[dict[str, Any]],
+    output_path: Path,
+) -> dict[str, Any] | None:
+    """Write ``results/coverage.json`` + ``coverage.md`` and return the manifest pointer.
+
+    Runs after generation and before the manifest is written.  The structure
+    readout is published first and always (zero model calls, so the artifact
+    exists even if the embedding step below fails); the metric readout is
+    produced only when :func:`_prepare_coverage` resolved an embedding endpoint
+    and a target set — otherwise the report carries an explicit WARNING instead
+    of a silently missing number (§3.2 透明退化).
+
+    Returns:
+        The manifest's ``acceptance`` section, or ``None`` when the phase is
+        disabled (nothing was written).
+    """
+    if not config.coverage.enabled:
+        return None
+
+    output_dir = output_path.parent
+    results_dir = output_dir / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    structure = acceptance.structure_readout([spec.anchor_meta for spec in plan])
+    warnings: list[str] = []
+    mismatch = acceptance.structure_mismatch(structure)
+    if mismatch is not None:
+        warnings.append(mismatch)
+
+    if coverage_inputs is None:
+        report = acceptance.AcceptanceReport(
+            structure=structure,
+            metrics=None,
+            warnings=[
+                *warnings,
+                "metric readout not measured: coverage.target_set_path is unset, so only "
+                "the structure readout was produced",
+            ],
+        )
+        coverage_json = _write_coverage_report(report, results_dir)
+        logger.warning(
+            "Acceptance readout written to %s: structure only, no metric readout "
+            "(coverage.target_set_path is unset).",
+            coverage_json,
+        )
+        return {
+            "coverage_json": "results/coverage.json",
+            "coverage_md": "results/coverage.md",
+            "metric_readout": False,
+            "q95": None,
+        }
+
+    # Publish the structure readout before the embedding call: an embedding
+    # failure must abort the run loudly (the client's own exception type), but it
+    # must not be able to erase the zero-cost artifact that already describes
+    # what the plan covers.
+    _write_coverage_report(
+        acceptance.AcceptanceReport(structure=structure, metrics=None, warnings=warnings),
+        results_dir,
+    )
+    metrics = build_metric_readout(
+        embedding=coverage_inputs.embedding,
+        records=records,
+        anchors_source=str(output_path),
+        target_set=coverage_inputs.target_set,
+    )
+    if not metrics.noise.available:
+        warnings.append(f"noise band unavailable: {metrics.noise.reason}")
+    coverage_json = _write_coverage_report(
+        acceptance.AcceptanceReport(structure=structure, metrics=metrics, warnings=warnings),
+        results_dir,
+    )
+    logger.info(
+        "Acceptance readout written to %s: q95 = %.6f over |T| = %d.",
+        coverage_json,
+        metrics.quantiles.q95,
+        metrics.space.n_target,
+    )
+    return {
+        "coverage_json": "results/coverage.json",
+        "coverage_md": "results/coverage.md",
+        "metric_readout": True,
+        "q95": metrics.quantiles.q95,
+    }
+
+
 def run(
     config: ARDConfig,
     *,
@@ -322,8 +486,14 @@ def run(
 
     Raises:
         ConfigError: If a required LLM endpoint field (``api_base`` /
-            ``model_name``) is unset.  Checked before the output directory is
-            created, so a refused config leaves no side effect behind (§2.3).
+            ``model_name``) is unset, or the acceptance phase is configured
+            without a usable embedder.  Both are checked before the output
+            directory is created, so a refused config leaves no side effect
+            behind (§2.3).
+        CoverageWiringError: If ``coverage.target_set_path`` names a file that
+            is missing, unreadable, unparsable, empty, or whose declared count
+            / dimension contradicts the file or the config — also before any
+            side effect.
     """
     spec_sampler: SpecSampler = generate_specs if generate_specs is not None else sample_specs
     # ── Credential boundary check (§2.3 边界校验即防呆) ─────────────────────
@@ -345,6 +515,12 @@ def run(
     # restructure the side-effect order — do not move this guard down.
     input_endpoint = config.input_generator.resolved_endpoint()
     target_endpoint = config.target_model.resolved_endpoint()
+
+    # ── Acceptance inputs (also before the output directory exists) ────────
+    # A target set that is missing, malformed or dimension-mismatched is a
+    # config-side mistake: refusing it here costs nothing, while finding it after
+    # the run paid for every anchor costs the run (§2.3).
+    coverage_inputs = _prepare_coverage(config)
 
     # ── Output directory ──────────────────────────────────────────────────
     timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -413,6 +589,11 @@ def run(
         # No generation happened, so there are no run counters to report: the
         # previous run's manifest is left as it is rather than overwritten with
         # a clean-looking one (§3.2 — a missing field must not read as "healthy").
+        acceptance_pointer = _run_acceptance(
+            config, coverage_inputs, plan, all_records, output_path
+        )
+        if acceptance_pointer is not None:
+            manifest["acceptance"] = acceptance_pointer
         write_manifest(manifest, output_dir / "manifest.json")
         logger.info("Done! Output: %s", output_dir)
         logger.info("  Total anchors: %d", len(all_records))
@@ -554,6 +735,9 @@ def run(
         stats=generation_stats.to_manifest_dict(),
         failures=reasoning_delta,
     )
+    acceptance_pointer = _run_acceptance(config, coverage_inputs, plan, all_records, output_path)
+    if acceptance_pointer is not None:
+        manifest["acceptance"] = acceptance_pointer
     write_manifest(manifest, output_dir / "manifest.json")
 
     total = len(all_records)
