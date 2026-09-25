@@ -62,10 +62,10 @@ EmbeddingRow: TypeAlias = list[float]
 EmbeddingMatrix: TypeAlias = list[EmbeddingRow]
 """One batch of embedding rows — one row per requested text, in input order.
 
-Named rather than written out as ``list[list[float]]``: the shape *is* a
-contract (one row per text, input order, ``dimension`` long — §2.1), and a name
-states it once instead of at every signature (§12.1 forbids anonymous nested
-container types).
+Named instead of written out inline as an anonymous nested container type: the
+shape *is* a contract (one row per text, input order, ``dimension`` long —
+§2.1), and a name states it once instead of at every signature (§12.1 forbids
+anonymous nested container types).
 """
 
 

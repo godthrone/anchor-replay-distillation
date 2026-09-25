@@ -39,7 +39,13 @@ from ard.core.sampling import (
     PlanScale,
     sample_anchors,
 )
-from ard.core.types import AnchorGenerationConfig, AnchorSpec
+from ard.core.types import (
+    AnchorGenerationConfig,
+    AnchorSpec,
+    AnchorSpecList,
+    JsonObjectList,
+    StringList,
+)
 from ard.domain.bank import (
     build_manifest_from_records,
     count_existing_anchors,
@@ -437,7 +443,7 @@ def _declare_images(
     image_dir: str,
     config: ARDConfig,
     resolution: DomainImageResolution | None,
-    skipped: dict[str, list[str]],
+    skipped: dict[str, StringList],
 ) -> None:
     """Declare the run's image addressing and any skipped anchors (§3.2/§3.3).
 
@@ -471,7 +477,7 @@ def _assign_images_by_domain(
     coordinate names no visual domain, so an image would be the same
     coordinate/content mismatch the addressing exists to prevent.
     """
-    groups: dict[str, list[AnchorSpec]] = {}
+    groups: dict[str, AnchorSpecList] = {}
     for spec in specs:
         domain = spec.anchor_meta.get("visual_domain")
         if isinstance(domain, str) and domain in rel_by_domain:
@@ -591,7 +597,7 @@ def _run_acceptance(
     config: ARDConfig,
     coverage_inputs: _CoverageInputs | None,
     plan: list[AnchorSpec],
-    records: list[dict[str, Any]],
+    records: JsonObjectList,
     output_path: Path,
 ) -> dict[str, Any] | None:
     """Write ``results/coverage.json`` + ``coverage.md`` and return the manifest pointer.
@@ -836,7 +842,7 @@ def run(
     # rather than from a CLI flag (§10.1: one source of truth per parameter).
     image_extensions = CONVERTABLE_EXTENSIONS if config.images.convert else SUPPORTED_EXTENSIONS
     image_resolution: DomainImageResolution | None = None
-    skipped_domains: dict[str, list[str]] = {}
+    skipped_domains: dict[str, StringList] = {}
     if image_dir is not None and pending_specs:
         image_root = Path(image_dir)
         image_specs = sum(

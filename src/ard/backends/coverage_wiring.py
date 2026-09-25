@@ -25,10 +25,10 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeAlias
 
 import numpy as np
 
@@ -36,6 +36,7 @@ from ard.backends.embedding_client import EmbeddingClient
 from ard.config import CoverageEmbedding
 from ard.core import acceptance
 from ard.core import coverage as ruler
+from ard.core.types import JsonObject, JsonObjectSequence
 
 
 class CoverageWiringError(Exception):
@@ -135,7 +136,7 @@ def load_target_set(path: str | Path, *, expected_dimension: int | None) -> Targ
 def build_metric_readout(
     *,
     embedding: CoverageEmbedding,
-    records: Sequence[Mapping[str, Any]],
+    records: JsonObjectSequence,
     anchors_source: str,
     target_set: TargetSet,
 ) -> acceptance.MetricReadout:
@@ -209,7 +210,15 @@ def build_metric_readout(
     )
 
 
-def _parse_document(raw: str, path: Path) -> tuple[list[Any], dict[str, Any]]:
+#: The entries of one target-set source, in file order.
+RawJsonEntries: TypeAlias = list[Any]
+
+#: One parsed target-set source: its entries plus the header keys that are not
+#: the entries themselves (empty for the bare-array form).
+ParsedTargetDocument: TypeAlias = tuple[RawJsonEntries, JsonObject]
+
+
+def _parse_document(raw: str, path: Path) -> ParsedTargetDocument:
     """Parse *raw* as one JSON document or as JSONL; return entries and header."""
     if not raw.strip():
         raise CoverageWiringError(f"target set file {path} is empty")
@@ -234,7 +243,7 @@ def _parse_document(raw: str, path: Path) -> tuple[list[Any], dict[str, Any]]:
     )
 
 
-def _parse_jsonl(raw: str, path: Path) -> tuple[list[Any], dict[str, Any]]:
+def _parse_jsonl(raw: str, path: Path) -> ParsedTargetDocument:
     """Parse *raw* line by line; a line that is not JSON is a named error."""
     entries: list[Any] = []
     for number, line in enumerate(raw.splitlines(), start=1):
