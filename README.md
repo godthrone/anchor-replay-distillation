@@ -61,10 +61,9 @@ ERROR: [input_generator] is missing `api_base`, `model_name`.
 ### 3. Run the smoke test
 
 ```bash
-bash run.sh --config configs/config.toml --smoke --image-dir examples/images
+./run.sh --config configs/config.toml --smoke --image-dir examples/images
 ```
 
-(`run.sh` is committed without the executable bit, so invoke it through `bash`.)
 It builds the Docker image on first use (needs PyPI access once) and runs
 `python -m ard` inside it, with `configs/`, `ontology/`, `examples/` and `.local/` mounted
 read-only and `outputs/` writable. Without Docker, the environment from step 1 runs the same
@@ -98,7 +97,7 @@ set `[output] directory` in config to pin the name). After a few minutes you sho
 laid out as `<image_dir>/<visual_domain>/<image file>` with all 21 visual domains present:
 
 ```bash
-bash run.sh --config configs/config.toml --image-dir /path/to/images
+./run.sh --config configs/config.toml --image-dir /path/to/images
 ```
 
 A full run costs hours of endpoint time; run the smoke test first to validate the setup.

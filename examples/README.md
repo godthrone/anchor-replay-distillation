@@ -17,7 +17,7 @@ wrote, with a handful of environment-specific fields normalised (listed below).
 
 ```bash
 # from the repository root
-bash run.sh --config configs/config.toml --smoke --image-dir examples/images
+./run.sh --config configs/config.toml --smoke --image-dir examples/images
 ```
 
 `--smoke` is the standard construction rule at reduced scale: **8 of the 1,826 anchors**

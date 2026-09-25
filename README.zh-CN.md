@@ -53,10 +53,9 @@ ERROR: [input_generator] is missing `api_base`, `model_name`.
 ### 3. 跑冒烟
 
 ```bash
-bash run.sh --config configs/config.toml --smoke --image-dir examples/images
+./run.sh --config configs/config.toml --smoke --image-dir examples/images
 ```
 
-（`run.sh` 入库时未带可执行位，所以用 `bash` 调用。）
 `run.sh` 在首次使用时构建 Docker 镜像（需要一次 PyPI 访问），随后在容器里运行
 `python -m ard`：`configs/`、`ontology/`、`examples/`、`.local/` 以只读方式挂载，
 `outputs/` 可写。没有 Docker 时，用第 1 步装好的环境跑同一个入口：
@@ -85,7 +84,7 @@ uv run python -m ard --config configs/config.toml --smoke --image-dir examples/i
 `<image_dir>/<visual_domain>/<图片文件>` 布局，且 **21 个视觉域齐备**：
 
 ```bash
-bash run.sh --config configs/config.toml --image-dir /path/to/images
+./run.sh --config configs/config.toml --image-dir /path/to/images
 ```
 
 完整运行要花掉数小时的端点时间；先用冒烟验证配置是否正确。
