@@ -21,7 +21,9 @@ uv sync
 ```
 
 需要 [uv](https://docs.astral.sh/uv/) 与 Python 3.11（由 `.python-version` 锁定）；
-`uv.lock` 锁定了全部依赖版本。
+`uv.lock` 锁定了全部依赖版本。包版本由 `setuptools_scm` 从 git 标签推导：`git clone` 得到
+标签对应的确切版本；而不带 `.git` 的源码归档（GitHub 的 "Download ZIP"、`git archive`）
+回退到固定版本 `1.0.0`——与 `run.sh`、`docker/build.sh` 在没有可描述标签时使用的值一致。
 
 ### 2. 准备端点凭证
 

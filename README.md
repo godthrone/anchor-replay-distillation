@@ -26,7 +26,10 @@ uv sync
 ```
 
 Requires [uv](https://docs.astral.sh/uv/) and Python 3.11 (pinned in `.python-version`);
-`uv.lock` pins every dependency.
+`uv.lock` pins every dependency. The package version is derived from git tags by
+`setuptools_scm`: a `git clone` reports the exact tag-derived version, while a source archive
+that carries no `.git` (GitHub "Download ZIP", `git archive`) falls back to the fixed version
+`1.0.0` — the same value `run.sh` and `docker/build.sh` use when there is no tag to describe.
 
 ### 2. Provide endpoint credentials
 
