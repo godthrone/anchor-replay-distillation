@@ -11,7 +11,7 @@ import logging
 import random
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -44,6 +44,7 @@ from ard.core.types import (
     AnchorGenerationConfig,
     AnchorSpec,
     AnchorSpecList,
+    JsonObject,
     JsonObjectList,
     StringList,
 )
@@ -1108,6 +1109,68 @@ def run(
     return output_dir
 
 
+def _relative_image_path(raw: str, output_dir: Path) -> str | None:
+    """Address *raw* as a posix path relative to *output_dir*, or ``None``.
+
+    Two shapes meet in :func:`_prune_abandoned_images`: a spec carries an
+    absolute path stamped by :func:`_assign_images_by_domain`, while a bank
+    record carries the relative ``images/<domain>/<file>`` form written by
+    :func:`ard.domain.text_anchor._convert_images_to_paths`.  Both must key the
+    same file for the ownership lookup to protect it, so the normalisation
+    lives here instead of at each call site.
+
+    A path that does not address a file inside *output_dir* returns ``None``:
+    this run must never reason about a file it did not put there.
+
+    Args:
+        raw: The stored image reference (absolute or output-relative).
+        output_dir: The run directory the reference is addressed against.
+
+    Returns:
+        The posix path relative to *output_dir*, or ``None`` when *raw* does
+        not address a file inside it.
+    """
+    path = Path(raw)
+    try:
+        return path.relative_to(output_dir).as_posix()
+    except ValueError:
+        pass
+    if path.is_absolute():  # pragma: no cover - not addressed inside this run
+        return None
+    return path.as_posix()
+
+
+def _record_image_paths(record: JsonObject, output_dir: Path) -> Iterator[str]:
+    """Every image file one bank record references, as paths under *output_dir*.
+
+    The persisted image part is ``{"type": "image", "image":
+    "images/<domain>/<file>"}``; the inline ``image_url`` form holds a base64
+    data URI, which names no file and is therefore not a reference.  The walk
+    follows the parsed record rather than a fixed message schema, so a record
+    shape the current writer did not produce cannot silently drop out of the
+    protection the way a hand-kept list of fields would.
+
+    Args:
+        record: One parsed ``anchor_bank.jsonl`` record.
+        output_dir: The run directory the references are addressed against.
+
+    Yields:
+        Each referenced file, normalised by :func:`_relative_image_path`.
+    """
+    stack: list[Any] = [record]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, dict):
+            image = value.get("image")
+            if isinstance(image, str):
+                rel = _relative_image_path(image, output_dir)
+                if rel is not None:
+                    yield rel
+            stack.extend(value.values())
+        elif isinstance(value, list):
+            stack.extend(value)
+
+
 def _prune_abandoned_images(
     specs: list[AnchorSpec],
     output_dir: Path,
@@ -1122,18 +1185,32 @@ def _prune_abandoned_images(
     with nothing in ``anchor_bank.jsonl`` pointing at it, so the artifact's
     image count would no longer match its anchor count.  Reconcile the two here.
 
-    A file is removed only when **no** surviving record references it: a picture
-    shared by a domain's other anchors is therefore never touched.  Only files
-    this run placed are considered, because the map is built from the specs'
-    own ``image_path`` — and every one of those was stamped with *output_dir*.
+    **When is a file deletable?** Only when both hold:
 
-    A failed unlink is a WARNING, never a run failure (§3.2 透明退路: announce
-    the degradation, do not crash the run over housekeeping).
+    * **this run placed or reused it.**  The candidate set is built from the
+      pending specs' own ``image_path``, and every one of those was stamped
+      with *output_dir* — a file the run never touched is never a candidate;
+    * **no record of the final bank references it.**  The final bank is the
+      pre-existing records *plus* the records this run wrote, and the ownership
+      map is built from all of them, so an anchor written by an earlier run
+      protects its picture exactly like one written now.
+
+    The second half is what keeps a **resume** run safe: a pending anchor
+    reuses the picture an earlier run placed (``force=False`` skips the copy)
+    and is then abandoned, while the pre-existing record still points at that
+    file.  Reading ownership from the pending specs alone would delete a file
+    the artifact still references and leave a dangling path in the bank.
+
+    A picture shared by a domain's other anchors is therefore never touched:
+    those anchors are records too.  A failed unlink is a WARNING, never a run
+    failure (§3.2 透明退路: announce the degradation, do not crash the run over
+    housekeeping).
 
     Args:
         specs: The run's pending specs, after image assignment.
         output_dir: The run directory; the specs' image paths are relative to it.
-        records: The anchors actually present in the bank after generation.
+        records: Every anchor in the bank after generation — the pre-existing
+            ones read back from disk plus this run's new records.
 
     Returns:
         How many files were removed.
@@ -1143,19 +1220,32 @@ def _prune_abandoned_images(
         for turn in spec.turns:
             if not turn.image_path:
                 continue
-            try:
-                rel = Path(turn.image_path).relative_to(output_dir).as_posix()
-            except ValueError:  # pragma: no cover - not addressed inside this run
+            rel = _relative_image_path(turn.image_path, output_dir)
+            if rel is None:  # pragma: no cover - not addressed inside this run
                 continue
             usage.setdefault(rel, set()).add(spec.id)
     if not usage:
         return 0
 
+    # Ownership of a candidate file: the pending spec ids that asked for it ...
+    owners = {rel: set(ids) for rel, ids in usage.items()}
+    # ... plus the id of every record of the final bank that references it.  A
+    # pre-existing record has no spec in *specs*, so its id can only come from
+    # the record itself — without this pass it could never protect the picture
+    # it points at (the resume defect this function must not reintroduce).
+    for record in records:
+        record_id = record.get("id")
+        if not isinstance(record_id, str):
+            continue
+        for rel in _record_image_paths(record, output_dir):
+            if rel in owners:
+                owners[rel].add(record_id)
+
     kept = {record["id"] for record in records if isinstance(record.get("id"), str)}
     removed = 0
-    for rel, owners in sorted(usage.items()):
-        if owners & kept:
-            continue  # a surviving anchor of the same domain still uses this file
+    for rel, referencing in sorted(owners.items()):
+        if referencing & kept:
+            continue  # a surviving record of the final bank still uses this file
         try:
             (output_dir / rel).unlink()
         except FileNotFoundError:
@@ -1166,7 +1256,7 @@ def _prune_abandoned_images(
                 "It is no longer referenced; delete it by hand if the run "
                 "directory must match anchor_bank.jsonl.",
                 rel,
-                ", ".join(sorted(owners)),
+                ", ".join(sorted(referencing)),
                 exc,
             )
             continue
@@ -1174,6 +1264,6 @@ def _prune_abandoned_images(
         logger.info(
             "Removed image %s: every anchor that referenced it was abandoned (%s).",
             rel,
-            ", ".join(sorted(owners)),
+            ", ".join(sorted(referencing)),
         )
     return removed
