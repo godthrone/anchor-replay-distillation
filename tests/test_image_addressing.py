@@ -24,6 +24,7 @@ import hashlib
 import json
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -387,6 +388,68 @@ class _AbandoningGeneratorSpy(_GeneratorSpy):
         return written
 
 
+def _bank_image_reference(abs_path: str) -> str:
+    """The bank's persisted form of *abs_path*: ``images/<domain>/<file>``."""
+    index = abs_path.rfind("/images/")
+    return abs_path[index + 1 :]
+
+
+class _ImagePartGeneratorSpy(_GeneratorSpy):
+    """Writes records that reference their picture the way the bank really does.
+
+    ``_GeneratorSpy`` stores plain-string content, which cannot express "this
+    record references ``images/<domain>/<file>``" — the exact input the prune
+    ownership rule reads.  Content here mirrors
+    ``text_anchor._convert_images_to_paths``: the persisted part is
+    ``{"type": "image", "image": "<output-relative path>"}``.
+    """
+
+    def __init__(self, abandoned: set[str] | None = None) -> None:
+        super().__init__()
+        self.abandoned = set(abandoned or ())
+        self.seen_plan: StringList = []
+
+    def __call__(self, **kwargs: object) -> list[GeneratedAnchor]:
+        specs = kwargs["specs"]
+        output_path = kwargs["output_path"]
+        stats = kwargs["stats"]
+        assert isinstance(specs, list)
+        assert isinstance(output_path, Path)
+        assert isinstance(stats, AnchorGenerationStats)
+        self.seen_plan = [spec.id for spec in specs if isinstance(spec, AnchorSpec)]
+        kept = [
+            spec for spec in specs if isinstance(spec, AnchorSpec) and spec.id not in self.abandoned
+        ]
+        written: list[GeneratedAnchor] = []
+        for spec in kept:
+            rel = next(
+                (_bank_image_reference(turn.image_path) for turn in spec.turns if turn.image_path),
+                None,
+            )
+            content: list[dict[str, Any]] = [{"type": "text", "text": f"question {spec.id}"}]
+            if rel is not None:
+                content.append({"type": "image", "image": rel})
+            anchor = GeneratedAnchor(
+                id=spec.id,
+                messages=[{"role": "user", "content": content}],
+                target_answer=f"answer {spec.id}",
+                target_model="target-model",
+                input_generator_model="input-model",
+                anchor_meta=dict(spec.anchor_meta),
+                data_source=DataSource.ARD_MULTI if rel else DataSource.ARD_TEXT,
+            )
+            assert append_anchor(anchor, output_path).value == "appended"
+            written.append(anchor)
+        stats.abandoned_total = len(self.abandoned)
+        stats.abandoned_by_reason = (
+            {"transport_error": len(self.abandoned)} if self.abandoned else {}
+        )
+        stats.requested = len(specs)
+        stats.written = len(written)
+        stats.succeeded = len(written)
+        return written
+
+
 def test_an_abandoned_anchor_has_its_image_removed_but_shared_files_survive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -454,3 +517,105 @@ def test_a_failed_image_cleanup_is_a_warning_not_a_run_failure(
     assert (output_dir / "images" / "plants" / "img_0.png").exists()
     assert "Could not remove image images/plants/img_0.png" in caplog.text
     assert (output_dir / "anchor_bank.jsonl").exists()
+
+
+# ── 5. resume: a picture a pre-existing record references is not prunable ────
+
+
+def test_resuming_reuses_a_picture_that_stays_referenced_by_the_old_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Run 2 resumes: the pending anchor reuses the file and is then dropped.
+
+    Run 1 writes ``a1`` and its picture.  Run 2 has only ``p1`` pending, in the
+    same domain (so the same file); the copy is skipped because the file
+    already exists and ``p1`` is abandoned.  ``a1``'s record still references
+    the file, so deleting it leaves a dangling path in ``anchor_bank.jsonl``.
+    """
+    from ard import pipeline
+    from ard.pipeline import run
+
+    images = _image_dir(tmp_path, {"animals": 1})
+    specs = [_spec("a1", "animals"), _spec("p1", "animals")]
+    output_dir, _spy, _plan = _rig(tmp_path, monkeypatch, specs)
+    config = load_config(tmp_path / "config.toml")
+
+    monkeypatch.setattr(pipeline, "generate_text_anchors", _ImagePartGeneratorSpy())
+    run(config, image_dir=str(images), generate_specs=lambda _config: [copy.deepcopy(specs[0])])
+    picture = output_dir / "images" / "animals" / "img_0.png"
+    assert picture.exists(), "precondition: run 1 leaves the picture behind"
+
+    monkeypatch.setattr(pipeline, "generate_text_anchors", _ImagePartGeneratorSpy({"p1"}))
+    with caplog.at_level("INFO"):
+        run(config, image_dir=str(images), generate_specs=lambda _config: copy.deepcopy(specs))
+
+    assert "Skipping img_0.png (already exists)" in caplog.text, (
+        "precondition: the resume must reuse the existing file, not rewrite it"
+    )
+    assert picture.exists(), "the picture a1 still references must survive the resume run"
+    assert "Removed image images/animals/img_0.png" not in caplog.text
+
+    records = [
+        json.loads(line)
+        for line in (output_dir / "anchor_bank.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [record["id"] for record in records] == ["a1"]
+    references = [
+        part["image"]
+        for message in records[0]["messages"]
+        for part in message["content"]
+        if isinstance(part, dict) and part.get("type") == "image"
+    ]
+    assert references == ["images/animals/img_0.png"]
+    assert (output_dir / references[0]).exists(), "no reference in the bank may dangle"
+
+
+def test_a_picture_no_record_references_is_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The rule must stay a rule: nothing references the file → it is removed."""
+    from ard import pipeline
+    from ard.pipeline import run
+
+    images = _image_dir(tmp_path, {"animals": 1, "plants": 1})
+    specs = [_spec("a1", "animals"), _spec("p1", "plants")]
+    output_dir, _spy, plan = _rig(tmp_path, monkeypatch, specs)
+    monkeypatch.setattr(pipeline, "generate_text_anchors", _ImagePartGeneratorSpy({"p1"}))
+
+    with caplog.at_level("INFO"):
+        run(load_config(tmp_path / "config.toml"), image_dir=str(images), generate_specs=plan)
+
+    assert not list((output_dir / "images" / "plants").glob("*")), (
+        "a picture whose only owner was abandoned, and which no record references, must be removed"
+    )
+    assert "Removed image images/plants/img_0.png" in caplog.text
+    assert (output_dir / "images" / "animals" / "img_0.png").exists()
+
+
+def test_a_picture_shared_by_a_surviving_record_is_not_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Shared protection across a resume: p1 drops, p2 and the old a1 keep X."""
+    from ard import pipeline
+    from ard.pipeline import run
+
+    images = _image_dir(tmp_path, {"animals": 1})
+    specs = [_spec("a1", "animals"), _spec("p1", "animals"), _spec("p2", "animals")]
+    output_dir, _spy, _plan = _rig(tmp_path, monkeypatch, specs)
+    config = load_config(tmp_path / "config.toml")
+
+    monkeypatch.setattr(pipeline, "generate_text_anchors", _ImagePartGeneratorSpy())
+    run(config, image_dir=str(images), generate_specs=lambda _config: [copy.deepcopy(specs[0])])
+
+    monkeypatch.setattr(pipeline, "generate_text_anchors", _ImagePartGeneratorSpy({"p1"}))
+    with caplog.at_level("INFO"):
+        run(config, image_dir=str(images), generate_specs=lambda _config: copy.deepcopy(specs))
+
+    picture = output_dir / "images" / "animals" / "img_0.png"
+    assert picture.exists(), "one file shared by several anchors must never be pruned"
+    assert "Removed image" not in caplog.text
+    ids = [
+        json.loads(line)["id"]
+        for line in (output_dir / "anchor_bank.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert ids == ["a1", "p2"]
