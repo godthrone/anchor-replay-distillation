@@ -1,7 +1,7 @@
 {
   "ontology_id": "ard-anchor-ontology",
   "version": "4.0.0",
-  "supersedes": "ontology/anchor_ontology.json (left untouched; this file is a parallel v4 artifact)",
+  "supersedes": "ontology/anchor_ontology.json (v3, removed; this file is now the single ontology)",
   "scope_note": "Coordinates only. No prompt wording, no sampling/weighting/experiment policy.",
   "axis_order": [
     "language",

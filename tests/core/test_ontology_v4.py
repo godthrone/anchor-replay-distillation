@@ -16,7 +16,19 @@ from ard.core.ontology import (
 )
 
 ONTOLOGY_V4_PATH = Path("ontology/anchor_ontology.v4.json")
-ONTOLOGY_V3_PATH = Path("ontology/anchor_ontology.json")
+
+#: A minimal *v3-shaped* ontology: the top-level keys the pre-v4 loader read and
+#: the v4 schema does not declare.  Inlined on purpose — the v4 loader must
+#: reject it on shape alone, without depending on a v3 file that no longer ships
+#: (§18.1: the old asset is gone, so nothing may reference it backwards).
+V3_SHAPED_ONTOLOGY: dict[str, Any] = {
+    "languages": ["English"],
+    "knowledge_domains": {"science": {"sub": ["physics"]}},
+    "capabilities": {"knowledge_response": ["qa"]},
+    "system_prompt_presence": ["none", "present"],
+    "system_prompt_style": {"minimal_persona": {"description": "one sentence"}},
+    "conversation_types": {"single_turn": ["single_turn"]},
+}
 
 
 def _raw_v4() -> dict[str, Any]:
@@ -222,8 +234,10 @@ def test_non_object_json_is_rejected(tmp_path: Path) -> None:
     assert "expected object" in str(excinfo.value)
 
 
-def test_v3_file_is_rejected_by_v4_loader() -> None:
-    """The real defect: feeding v3 to the v4 path errors instead of yielding 0."""
+def test_v3_shaped_payload_is_rejected_by_v4_loader(tmp_path: Path) -> None:
+    """The real defect: feeding a v3 shape to the v4 path errors instead of yielding 0."""
+    path = tmp_path / "v3_shaped.json"
+    path.write_text(json.dumps(V3_SHAPED_ONTOLOGY), encoding="utf-8")
     with pytest.raises(OntologySchemaError) as excinfo:
-        load_ontology_v4(ONTOLOGY_V3_PATH)
+        load_ontology_v4(path)
     assert "languages" in str(excinfo.value)
