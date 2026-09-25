@@ -43,9 +43,9 @@ import json
 import logging
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeAlias
 
-from ard.core.types import DataSource, GeneratedAnchor
+from ard.core.types import DataSource, GeneratedAnchor, JsonObjectList
 from ard.domain.anchor_shape import message_shape_error
 from ard.domain.append_outcome import AppendOutcome
 
@@ -59,11 +59,17 @@ logger = logging.getLogger(__name__)
 SCHEMA_VERSION = "4.0.0"
 
 
-# Ids already present per bank file.  The value is ``(fingerprint, ids)`` where
-# the fingerprint is the file's ``(st_mtime_ns, st_size)`` at read time, so an
-# externally truncated/rewritten bank invalidates the cache instead of silently
-# suppressing legitimate anchors.
-_seen_ids_cache: dict[str, tuple[tuple[int, int] | None, set[str]]] = {}
+#: A bank file's identity at read time: ``(st_mtime_ns, st_size)``, or ``None``
+#: when the file did not exist yet.
+FileFingerprint: TypeAlias = tuple[int, int]
+
+#: One bank file's cache entry: the fingerprint it was read at, plus its ids.
+BankIdCacheEntry: TypeAlias = tuple[FileFingerprint | None, set[str]]
+
+# Ids already present per bank file.  The fingerprint makes an externally
+# truncated/rewritten bank invalidate the cache instead of silently suppressing
+# legitimate anchors.
+_seen_ids_cache: dict[str, BankIdCacheEntry] = {}
 _seen_ids_lock = threading.Lock()
 
 
@@ -76,7 +82,7 @@ def _bank_fingerprint(path: Path) -> tuple[int, int] | None:
     return (stat.st_mtime_ns, stat.st_size)
 
 
-def _parsed_records(path: Path) -> list[dict[str, Any]]:
+def _parsed_records(path: Path) -> JsonObjectList:
     """Return every parseable record in *path*, in file order.
 
     One unreadable line must not condemn the whole bank: this file is written
@@ -93,7 +99,7 @@ def _parsed_records(path: Path) -> list[dict[str, Any]]:
     same definition of "a record" drives :func:`count_existing_anchors`, so the
     resume counter can never count a line that the reader would refuse.
     """
-    records: list[dict[str, Any]] = []
+    records: JsonObjectList = []
     if not path.exists():
         return records
     with open(path, encoding="utf-8") as f:
@@ -417,7 +423,7 @@ def write_anchor_bank(anchors: list[GeneratedAnchor], output_path: str | Path) -
             f.write(json.dumps(anchor_to_dict(anchor), ensure_ascii=False) + "\n")
 
 
-def read_anchor_bank(path: str | Path) -> list[dict[str, Any]]:
+def read_anchor_bank(path: str | Path) -> JsonObjectList:
     """Read the records of a JSONL anchor bank, in file order.
 
     Unreadable lines are skipped with a warning instead of raising, so an
@@ -452,9 +458,17 @@ def _manifest_breakdown(
     )
 
 
+#: One record's manifest breakdown: domain, language, capability, prompt mode,
+#: and OPD routing key.
+AnchorBreakdown: TypeAlias = tuple[str, str, str, str, str]
+
+#: The number of records behind one value of a breakdown position.
+CountsByValue: TypeAlias = dict[str, int]
+
+
 def _tally(
-    breakdowns: list[tuple[str, str, str, str, str]],
-) -> tuple[dict[str, int], dict[str, int], dict[str, int], dict[str, int], dict[str, int]]:
+    breakdowns: list[AnchorBreakdown],
+) -> tuple[CountsByValue, CountsByValue, CountsByValue, CountsByValue, CountsByValue]:
     """Count every position of the breakdown over all records."""
     domains: dict[str, int] = {}
     languages: dict[str, int] = {}
@@ -494,7 +508,7 @@ def build_manifest(
 
 
 def build_manifest_from_records(
-    records: list[dict[str, Any]],
+    records: JsonObjectList,
     output_dir: str | Path,
     config_info: dict[str, Any] | None = None,
 ) -> dict[str, Any]:

@@ -51,7 +51,15 @@ from ard.core.system_prompt import (
     SYSTEM_PROMPT_NONE,
     build_system_prompt_prompt,
 )
-from ard.core.types import AnchorSpec, DataSource, GeneratedAnchor, TurnSpec
+from ard.core.types import (
+    AnchorSpec,
+    ChatContentParts,
+    ChatMessageList,
+    DataSource,
+    GeneratedAnchor,
+    StringPair,
+    TurnSpec,
+)
 from ard.domain.anchor_shape import expected_message_roles, message_shape_error
 from ard.domain.append_outcome import AppendOutcome
 from ard.domain.bank import append_anchor, data_source_error
@@ -189,11 +197,11 @@ def build_target_prompt(meta: dict[str, Any]) -> str:
 
 def _build_user_prompt(
     turn: TurnSpec,
-    messages: list[dict[str, Any]],
+    messages: ChatMessageList,
     anchor_meta: dict[str, Any],
     image_path: str | None = None,
     image_data_url: str | None = None,
-) -> list[dict[str, Any]]:
+) -> ChatMessageList:
     """Build prompt messages for the input generator to produce the next user turn.
 
     When an image is provided via *image_data_url*, the image is included as a
@@ -274,7 +282,7 @@ def _build_user_prompt(
 
     # Build user message content (may include image)
     if image_data_url is not None:
-        user_content_parts: list[dict[str, Any]] = [
+        user_content_parts: ChatContentParts = [
             {"type": "image_url", "image_url": {"url": image_data_url}},
         ]
         if history_text:
@@ -291,7 +299,7 @@ def _build_user_prompt(
             user_content_parts.append(
                 {"type": "text", "text": "Generate a user message as instructed."}
             )
-        user_content: str | list[dict[str, Any]] = user_content_parts
+        user_content: str | ChatContentParts = user_content_parts
     else:
         if history_text:
             user_content = (
@@ -308,9 +316,9 @@ def _build_user_prompt(
 
 
 def _convert_images_to_paths(
-    messages: list[dict[str, Any]],
+    messages: ChatMessageList,
     spec: AnchorSpec,
-) -> list[dict[str, Any]]:
+) -> ChatMessageList:
     """Convert base64 image_url to image type with relative path for output.
 
     API calls need base64-encoded images, but the output JSONL should use
@@ -335,13 +343,13 @@ def _convert_images_to_paths(
     # ``message_shape_error`` (the single shape contract) allows a system
     # message only at position 0, so a one-message prefix check is exact.
     turn_offset = 1 if messages and messages[0].get("role") == "system" else 0
-    result: list[dict[str, Any]] = []
+    result: ChatMessageList = []
     for msg_idx, raw_msg in enumerate(messages):
         msg = dict(raw_msg)  # shallow copy
         turn_idx = msg_idx - turn_offset
         turn = spec.turns[turn_idx] if 0 <= turn_idx < len(spec.turns) else None
         if turn is not None and turn.image_path and isinstance(msg.get("content"), list):
-            new_content: list[dict[str, Any]] = []
+            new_content: ChatContentParts = []
             for item in msg["content"]:
                 if item.get("type") == "image_url":
                     rel = _abs_to_rel_path(turn.image_path)
@@ -386,7 +394,7 @@ def _abs_to_rel_path(abs_path: str) -> str:
 IMAGE_PART_TYPES: frozenset[str] = frozenset({"image", "image_url"})
 
 
-def anchor_data_source(messages: list[dict[str, Any]]) -> DataSource:
+def anchor_data_source(messages: ChatMessageList) -> DataSource:
     """Derive the OPD routing key from the anchor's own message content.
 
     ``data_source`` splits the ARD corpus into the sub-corpora the training side
@@ -599,7 +607,7 @@ def _generate_one_anchor(
     """
     if stats is None:
         stats = AnchorGenerationStats()
-    messages: list[dict[str, Any]] = []
+    messages: ChatMessageList = []
     expected_roles = expected_message_roles(spec)
 
     system_message = _generate_system_message(spec, input_client)
@@ -918,8 +926,8 @@ def generate_text_anchors(
 
     # Persistence-gate tallies (exit-boundary defence, §2.3 / §3.2).
     written = 0
-    invalid_shape: list[tuple[str, str]] = []
-    invalid_data_source: list[tuple[str, str]] = []
+    invalid_shape: list[StringPair] = []
+    invalid_data_source: list[StringPair] = []
     duplicate_ids: list[str] = []
 
     pbar = tqdm(total=target_count, desc="Text anchors", unit="anchor", disable=disable_progress)

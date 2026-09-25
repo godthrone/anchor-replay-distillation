@@ -23,7 +23,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from ard.core.types import AnchorSpec
+from ard.core.types import AnchorSpec, StringList
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +205,7 @@ class DomainImageResolution:
     """
 
     selected: dict[str, Path]
-    missing: dict[str, list[str]]
+    missing: dict[str, StringList]
 
 
 def resolve_domain_images(
@@ -232,7 +232,7 @@ def resolve_domain_images(
         A :class:`DomainImageResolution`; never raises for a missing domain —
         refusing (or skipping) is the caller's decision at the boundary.
     """
-    required: dict[str, list[str]] = {}
+    required: dict[str, StringList] = {}
     for spec in specs:
         domain = spec.anchor_meta.get("visual_domain")
         if not isinstance(domain, str):
@@ -240,7 +240,7 @@ def resolve_domain_images(
         required.setdefault(domain, []).append(spec.id)
 
     selected: dict[str, Path] = {}
-    missing: dict[str, list[str]] = {}
+    missing: dict[str, StringList] = {}
     for domain, anchor_ids in required.items():
         candidates = list_domain_images(image_dir, domain, extensions=extensions)
         if candidates:
