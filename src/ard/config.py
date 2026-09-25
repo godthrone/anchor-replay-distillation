@@ -196,7 +196,7 @@ class GenerationConfig(BaseModel):
 
         Resolving here — instead of forwarding ``None`` downstream — keeps
         exactly one authoritative seed per run: it is the value the pipeline
-        snapshots into ``<output_dir>/config.json``, so even a randomised run
+        snapshots into ``<output_dir>/config.toml``, so even a randomised run
         stays replicable after the fact, and the core layer keeps its plain
         ``int`` contract.
         """
@@ -211,7 +211,7 @@ class GenerationConfig(BaseModel):
         This is the strongly typed view of :attr:`seed` for downstream code
         that cannot handle "unset": :meth:`_resolve_seed` has already drawn a
         value whenever the user left ``seed`` unset, and it is this value that
-        the pipeline snapshots into ``<output_dir>/config.json``.
+        the pipeline snapshots into ``<output_dir>/config.toml``.
 
         The ``None`` branch below is therefore unreachable for any normally
         validated config, and it raises instead of quietly passing ``None`` on:

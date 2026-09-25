@@ -57,7 +57,7 @@
 # from the ontology (935 text-only + 891 image-capable = 1,826 anchors).
 # Sampling seed (optional). Omit — the default — and every run draws a fresh
 # seed from the system random source; set an integer to pin this run's sampling
-# order. The seed actually used is recorded in <output_dir>/config.json.
+# order. The seed actually used is recorded in <output_dir>/config.toml.
 # seed = 42
 # Number of concurrent API requests (higher = faster, but may hit rate limits)
 concurrency = 4

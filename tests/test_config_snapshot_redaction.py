@@ -1,10 +1,14 @@
 """Output-snapshot secret redaction (R7).
 
 The merged config carries API credentials, and the pipeline writes it into the
-output directory (``config.json`` and the manifest's ``config`` section).
+output directory (``config.toml`` and the manifest's ``config`` section).
 Output directories get shared and packed, so those credentials must never be
 written verbatim — constitution §2.3 (boundary check before data lands on
 disk).
+
+The archived file is the project's own config format on purpose: it must be
+feedable back to ``--config`` (§8.5).  The test therefore parses it with
+``tomllib`` instead of ``json``.
 
 Every credential used here is a fake literal; no real key appears anywhere.
 """
@@ -22,6 +26,7 @@ from ard.pipeline import (
     NOT_SECRET_KEY_WORDS,
     REDACTED_KEY_WORDS,
     REDACTED_PLACEHOLDER,
+    _config_snapshot_toml,
     _is_secret_key,
     _redact_secrets,
     run,
@@ -92,7 +97,7 @@ class TestSnapshotRedactionOnRealWritePath:
     """End-to-end: run the pipeline and inspect the artefacts on disk."""
 
     def test_config_snapshot_does_not_contain_the_api_keys(self, tmp_path: Path) -> None:
-        """A real ``run()`` must not write the fake keys into ``config.json``.
+        """A real ``run()`` must not write the fake keys into ``config.toml``.
 
         An empty plan with an empty bank takes the early-return branch, which
         writes the snapshot and the manifest without generating anchors or
@@ -103,10 +108,10 @@ class TestSnapshotRedactionOnRealWritePath:
 
         result_dir = run(config, generate_specs=lambda cfg: [])
 
-        snapshot_text = (result_dir / "config.json").read_text(encoding="utf-8")
+        snapshot_text = (result_dir / "config.toml").read_text(encoding="utf-8")
         for marker in FORBIDDEN_MARKERS:
             assert marker not in snapshot_text, (
-                f"{marker} leaked into config.json — the snapshot is not redacted"
+                f"{marker} leaked into config.toml — the snapshot is not redacted"
             )
         assert REDACTED_PLACEHOLDER in snapshot_text, (
             "the masked placeholder is missing, so redaction cannot be confirmed "
@@ -119,12 +124,13 @@ class TestSnapshotRedactionOnRealWritePath:
         config = load_config(str(_write_config(tmp_path, output_dir)))
 
         result_dir = run(config, generate_specs=lambda cfg: [])
-        snapshot = json.loads((result_dir / "config.json").read_text(encoding="utf-8"))
+        snapshot = tomllib.loads((result_dir / "config.toml").read_text(encoding="utf-8"))
 
-        # File name, location and indentation are unchanged; other fields keep
-        # their real values, so the snapshot still reproduces the run.
+        # Location and shape are unchanged; other fields keep their real values,
+        # so the snapshot still reproduces the run.
         assert snapshot["output"]["directory"] == str(output_dir)
         assert snapshot["input_generator"]["model_name"] == "input_generator-model"
+        assert snapshot["input_generator"]["api_base"] == "http://127.0.0.1:9/v1"
         assert snapshot["generation"]["concurrency"] == 4
         assert snapshot["input_generator"]["api_key"] == REDACTED_PLACEHOLDER
         assert snapshot["target_model"]["api_key"] == REDACTED_PLACEHOLDER
@@ -144,6 +150,48 @@ class TestSnapshotRedactionOnRealWritePath:
         assert manifest_text.count(REDACTED_PLACEHOLDER) >= 2, (
             "both credentials should be masked in the manifest config section"
         )
+
+
+class TestArchivedSnapshotIsFeedable:
+    """§8.5: the archived config must work as a ``--config`` on its own."""
+
+    def test_archived_snapshot_loads_as_a_base_config(self, tmp_path: Path) -> None:
+        """``load_config(snapshot, override)`` accepts what the run archived.
+
+        This is what ``python -m ard --config outputs/<run>/config.toml
+        --override <creds>.toml`` does to the file, without running the
+        pipeline.
+        """
+        output_dir = tmp_path / "out"
+        config = load_config(str(_write_config(tmp_path, output_dir)))
+        result_dir = run(config, generate_specs=lambda cfg: [])
+
+        snapshot_path = result_dir / "config.toml"
+        override = tmp_path / "full.override.toml"
+        override.write_text(
+            '[input_generator]\napi_key = "sk-fed-back"\n[target_model]\napi_key = "sk-fed-back"\n',
+            encoding="utf-8",
+        )
+
+        reloaded = load_config(snapshot_path, override)
+
+        assert reloaded.output.directory == str(output_dir)
+        assert reloaded.generation.seed == config.generation.seed
+        assert reloaded.generation.concurrency == config.generation.concurrency
+        assert reloaded.images.convert is config.images.convert
+        # Endpoints survive verbatim (environment field, §7.1) — only the
+        # credentials need the override.
+        assert reloaded.input_generator.resolved_endpoint().api_base == "http://127.0.0.1:9/v1"
+        assert reloaded.input_generator.api_key == "sk-fed-back"
+
+    def test_unset_leaves_are_serialised_as_empty_strings(self) -> None:
+        """TOML has no null literal: ``None`` is archived as ``""`` (§2.2)."""
+        text = _config_snapshot_toml({"output": {"directory": None}, "generation": {"seed": 7}})
+
+        parsed = tomllib.loads(text)
+
+        assert parsed["output"]["directory"] == ""
+        assert parsed["generation"]["seed"] == 7
 
 
 class TestRedactSecretsRecursion:

@@ -132,7 +132,7 @@ def test_config_explicit_seed_is_pinned(tmp_path):
 
 
 def test_config_resolved_seed_is_the_effective_int():
-    """`resolved_seed` 是 config 层的强类型生效值（即落盘 config.json 的值）。
+    """`resolved_seed` 是 config 层的强类型生效值（即落盘 config.toml 的值）。
 
     核心层取的是 `resolved_seed` 而不是 `seed`（后者的静态类型是
     `int | None`），因此它必须返回 int；而绕过校验的 config 不得静默把

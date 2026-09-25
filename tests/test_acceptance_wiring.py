@@ -373,7 +373,7 @@ def test_metric_run_writes_q95_and_declares_the_space(
     # §15: neither the key nor the endpoint reaches the artifacts.
     assert API_KEY not in report_text
     assert API_BASE not in report_text
-    assert API_KEY not in (result_dir / "config.json").read_text(encoding="utf-8")
+    assert API_KEY not in (result_dir / "config.toml").read_text(encoding="utf-8")
 
 
 def test_embedding_failure_keeps_the_structure_readout_on_disk(

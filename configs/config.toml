@@ -52,7 +52,7 @@ enable_thinking = false
 # package; the plan is 935 text-only + 891 image-capable = 1,826 anchors.
 # Sampling seed. Omit (the default) = draw a fresh seed from the system random
 # source on every run; set an integer to pin one run's sampling order and make
-# it reproducible. The seed actually used is recorded in <output_dir>/config.json.
+# it reproducible. The seed actually used is recorded in <output_dir>/config.toml.
 # seed = 42
 # Number of concurrent API requests (higher = faster, but may hit rate limits)
 concurrency = 4

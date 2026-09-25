@@ -151,7 +151,7 @@ sample carries no deployment details; everything else is verbatim:
 | `images.image_dir` | `examples/images` | The real value is an absolute path on the machine that ran it |
 
 `config.*.api_key` already reads `***REDACTED***`: the pipeline redacts credentials before
-writing any manifest or `config.json`, so no key has ever been written to an output
+writing any manifest or `config.toml`, so no key has ever been written to an output
 directory. There is no separate sample config file in this directory on purpose — the
 configuration template is `configs/config.override.sample.toml`, and duplicating it here
 would create a second source of truth that could drift.

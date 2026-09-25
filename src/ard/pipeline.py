@@ -17,6 +17,8 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+import tomli_w
+
 from ard.backends.api_client import (
     ChatAPIClient,
     ChatAPIConfig,
@@ -66,8 +68,13 @@ logger = logging.getLogger(__name__)
 # ``target_model.api_key``).  Those values must never reach the output
 # directory: users share/pack output dirs, so a snapshot written verbatim
 # leaks the keys.  Redaction is applied once, to the single ``config_info``
-# dict that feeds **both** ``config.json`` and the manifest's ``config``
-# section — one definition, both sinks (§1.4).
+# dict that feeds **both** the archived ``config.toml`` and the manifest's
+# ``config`` section — one definition, both sinks (§1.4).
+#
+# Endpoints (``api_base``) and model names are **not** masked: §7.1 classes
+# them as environment fields, not secrets, and they are part of what the
+# snapshot exists to record.  The accepted residual risk (sharing an output
+# directory also shares the endpoint) is documented in the R7 report.
 
 REDACTED_PLACEHOLDER = "***REDACTED***"
 """Stand-in written in place of any secret value in an output snapshot."""
@@ -209,6 +216,63 @@ def _redact_secrets(config_info: dict[str, Any]) -> dict[str, Any]:
             REDACTED_PLACEHOLDER,
         )
     return redacted_info
+
+
+CONFIG_SNAPSHOT_HEADER = """\
+# Run configuration snapshot (§8.5).  This file is the merged base + override
+# configuration that produced the artifact next to it, so the run can be
+# described (and repeated) after the fact.
+#
+# Credential values are masked as ***REDACTED***; the run's log names the
+# masked fields.  Endpoints and model names are kept verbatim: they are
+# environment fields, not secrets (§7.1), and the snapshot exists to record
+# where the run pointed.
+#
+# Feed this file back as the base config, supplying the real credentials in an
+# override (§7.1), e.g.:
+#   python -m ard --config <this file> --override config.override.toml
+"""
+"""Explanatory header prepended to the archived config snapshot."""
+
+
+def _none_as_empty_string_mapping(mapping: dict[str, Any]) -> dict[str, Any]:
+    """Return *mapping* rebuilt with every ``None`` replaced by ``""`` for TOML.
+
+    The mapping case is its own function for the same reason as
+    :func:`_redact_mapping`: :func:`_none_as_empty_string` must accept and
+    return ``object`` to recurse into arbitrary JSON, so a caller that knows it
+    holds a mapping should not have to re-assert the result's type (§2.2).
+    """
+    return {key: _none_as_empty_string(item) for key, item in mapping.items()}
+
+
+def _none_as_empty_string(value: object) -> object:
+    """Return *value* with every ``None`` replaced by ``""`` for TOML.
+
+    TOML has no null literal.  ``""`` is the serialisation of "not provided"
+    and :func:`ard.config.load_config` normalises it straight back to ``None``
+    (§2.2 serialization-boundary exception, the same rule the shipped
+    ``configs/config.toml`` uses).  Without this the snapshot of a run that
+    leaves e.g. ``output.directory`` unset could not be written at all.
+    """
+    if isinstance(value, dict):
+        return _none_as_empty_string_mapping(value)
+    if isinstance(value, list):
+        return [_none_as_empty_string(item) for item in value]
+    if value is None:
+        return ""
+    return value
+
+
+def _config_snapshot_toml(config_info: dict[str, Any]) -> str:
+    """Render the merged config as a TOML document ``--config`` can read back.
+
+    The archive is written in the project's own config format so §8.5's
+    promise ("the output directory describes the run by itself") holds
+    literally: the file can be passed to ``--config`` again, which a JSON
+    snapshot could not, because the loader reads TOML only (§10.1).
+    """
+    return CONFIG_SNAPSHOT_HEADER + tomli_w.dumps(_none_as_empty_string_mapping(config_info))
 
 
 def _counter_delta(after: dict[str, int], before: dict[str, int]) -> dict[str, int]:
@@ -691,9 +755,10 @@ def run(
     # though that path would never have contacted an endpoint.  That is a
     # deliberate behaviour change: fail before touching anything, with a
     # field-level actionable message, rather than create the directory first and
-    # die later (the old order left an empty ``out/config.json`` and ``logs/``
-    # behind).  If "re-run a finished bank without credentials" is ever needed,
-    # restructure the side-effect order — do not move this guard down.
+    # die later (the old order left a half-built output directory with a config
+    # snapshot and ``logs/`` behind).  If "re-run a finished bank without
+    # credentials" is ever needed, restructure the side-effect order — do not
+    # move this guard down.
     input_endpoint = config.input_generator.resolved_endpoint()
     target_endpoint = config.target_model.resolved_endpoint()
 
@@ -823,17 +888,17 @@ def run(
         output_path.unlink()
         logger.info("Overwrite mode: cleared existing anchor bank at %s", output_path)
 
-    # Backup merged config to output directory for reproducibility.
+    # Archive the merged config in the output directory for reproducibility.
+    # It is written in the project's own config format (§8.5) so the snapshot
+    # is itself a usable ``--config`` — the output directory then describes the
+    # run without the user having to find the original config back (§10.1).
     # Credentials are masked first (§2.3 — the output directory is a boundary
     # users share); the same redacted dict feeds the manifest's `config`
     # section below, so both sinks are covered by this single definition.
     config_info = _redact_secrets(config.model_dump(mode="json"))
-    config_json_path = output_dir / "config.json"
-    config_json_path.write_text(
-        json.dumps(config_info, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    logger.info("Merged config snapshot written to %s", config_json_path)
+    config_snapshot_path = output_dir / "config.toml"
+    config_snapshot_path.write_text(_config_snapshot_toml(config_info), encoding="utf-8")
+    logger.info("Merged config snapshot written to %s", config_snapshot_path)
 
     # Skipping is a §3.2 透明退化: one WARNING per dropped anchor (which domain,
     # which sample) — declared again, in aggregate, in manifest.json below.

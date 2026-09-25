@@ -16,6 +16,7 @@ dependencies = [
   "Pillow>=10.0",
   "pydantic>=2.0",
   "rawpy>=0.24",
+  "tomli-w>=1.2",
   "tqdm>=4.0",
 ]
 

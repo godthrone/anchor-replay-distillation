@@ -178,7 +178,7 @@ def select_domain_image(candidates: list[Path], visual_domain: str, seed: int) -
     Args:
         candidates: Non-empty list from :func:`list_domain_images`.
         visual_domain: The leaf, mixed into the seed.
-        seed: The run's generation seed (recorded in ``<output_dir>/config.json``).
+        seed: The run's generation seed (recorded in ``<output_dir>/config.toml``).
 
     Raises:
         ValueError: If *candidates* is empty — a caller must have refused the
