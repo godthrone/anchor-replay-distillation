@@ -34,7 +34,7 @@ import logging
 import math
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeAlias
 
 import httpx
 
@@ -52,6 +52,21 @@ DEFAULT_MAX_RETRIES = 2
 MAX_BACKOFF_SECONDS = 30.0
 #: Substituted for the API key wherever diagnostic text is built.
 _REDACTED = "<redacted>"
+
+
+# ── Shared types ────────────────────────────────────────────────────────────
+
+EmbeddingRow: TypeAlias = list[float]
+"""One embedding vector: ``dimension`` floats, in model order."""
+
+EmbeddingMatrix: TypeAlias = list[EmbeddingRow]
+"""One batch of embedding rows — one row per requested text, in input order.
+
+Named rather than written out as ``list[list[float]]``: the shape *is* a
+contract (one row per text, input order, ``dimension`` long — §2.1), and a name
+states it once instead of at every signature (§12.1 forbids anonymous nested
+container types).
+"""
 
 
 # ── Exception types ─────────────────────────────────────────────────────────
@@ -152,7 +167,7 @@ class EmbeddingBatch:
             wiring layer can assert it instead of guessing (§2.2 显式即防呆).
     """
 
-    vectors: list[list[float]]
+    vectors: EmbeddingMatrix
     model: str
     dimension: int
     normalized: bool
@@ -294,7 +309,7 @@ class EmbeddingClient:
             if not isinstance(text, str):
                 raise TypeError(f"texts[{position}] must be str, got {type(text).__name__}")
 
-        vectors: list[list[float]] = []
+        vectors: EmbeddingMatrix = []
         for start in range(0, len(texts), self._batch_size):
             chunk = texts[start : start + self._batch_size]
             batch_index = start // self._batch_size
@@ -317,7 +332,7 @@ class EmbeddingClient:
 
     # ── One batch with retries ─────────────────────────────────────────────
 
-    def _embed_batch(self, texts: list[str], batch_index: int) -> list[list[float]]:
+    def _embed_batch(self, texts: list[str], batch_index: int) -> EmbeddingMatrix:
         """Send one batch, retrying the retryable failures only.
 
         The retry policy mirrors :meth:`ard.backends.api_client.ChatAPIClient.chat`:
@@ -374,7 +389,7 @@ class EmbeddingClient:
 
     # ── One HTTP request ───────────────────────────────────────────────────
 
-    def _post_embeddings(self, texts: list[str], batch_index: int) -> list[list[float]]:
+    def _post_embeddings(self, texts: list[str], batch_index: int) -> EmbeddingMatrix:
         """POST one batch and validate the 200 response body.
 
         Raises:
@@ -413,7 +428,7 @@ class EmbeddingClient:
 
     def _parse_embeddings(
         self, response: httpx.Response, batch_index: int, expected_count: int
-    ) -> list[list[float]]:
+    ) -> EmbeddingMatrix:
         """Turn a 200 body into validated rows; raise on any contract violation."""
         try:
             payload = response.json()
@@ -440,7 +455,7 @@ class EmbeddingClient:
                 batch_index=batch_index,
             )
 
-        vectors: list[list[float]] = []
+        vectors: EmbeddingMatrix = []
         for position, item in enumerate(items):
             if not isinstance(item, dict):
                 raise EmbeddingResponseError(
@@ -463,9 +478,9 @@ class EmbeddingClient:
             vectors.append(self._to_unit_vector(raw, batch_index, position))
         return vectors
 
-    def _to_unit_vector(self, raw: list[Any], batch_index: int, position: int) -> list[float]:
+    def _to_unit_vector(self, raw: list[Any], batch_index: int, position: int) -> EmbeddingRow:
         """Validate one raw row and optionally L2-normalise it."""
-        values: list[float] = []
+        values: EmbeddingRow = []
         for value in raw:
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise EmbeddingResponseError(

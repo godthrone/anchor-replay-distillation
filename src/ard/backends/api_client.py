@@ -40,7 +40,7 @@ from collections.abc import Generator
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeAlias
 
 import httpx
 
@@ -59,6 +59,25 @@ _READER_GRACE_TIMEOUT = 0.25
 #: ``first_token_timeout=300`` into 305 s and pinning a thread/connection slot
 #: for 5 extra seconds per timed-out request.
 _READER_JOIN_TIMEOUT = 0.5
+
+
+# ── Shared types ────────────────────────────────────────────────────────────
+
+ChatMessage: TypeAlias = dict[str, Any]
+"""One OpenAI-compatible chat message: a ``role`` plus its ``content``.
+
+The content is either a plain string or, for multimodal turns, a list of typed
+parts (``{"type": "text", "text": ...}`` / ``{"type": "image_url", ...}``).
+It stays a dict on purpose: this is the provider's **wire format**, serialised
+verbatim by :func:`_build_payload` and parsed straight out of the response, so
+the shape is owned by the endpoint rather than by this project.  §12.1's ban on
+anonymous nested types is satisfied by naming the shape; wrapping it in a
+pydantic model would add a translation layer whose only possible behaviour is
+to drift from the format it mirrors.
+"""
+
+ChatMessageList: TypeAlias = list[ChatMessage]
+"""A conversation: the messages of one request, in turn order."""
 
 
 # ── Exception types ─────────────────────────────────────────────────────────
@@ -259,7 +278,7 @@ class ChatAPIConfig:
 class ChatRequest:
     """A single chat request to be sent to the API."""
 
-    messages: list[dict[str, Any]]
+    messages: ChatMessageList
     temperature: float | None = None
 
 
@@ -422,7 +441,7 @@ def _assert_enable_thinking_is_bool(value: Any, *, where: str) -> bool:
 
 def _build_payload(
     config: ChatAPIConfig,
-    messages: list[dict[str, Any]],
+    messages: ChatMessageList,
     temperature: float | None,
     *,
     stream: bool = True,
@@ -859,7 +878,7 @@ class ChatAPIClient:
 
     def chat(
         self,
-        messages: list[dict[str, Any]],
+        messages: ChatMessageList,
         temperature: float | None = None,
     ) -> ChatResponse:
         """Send a single streaming chat request and return a :class:`ChatResponse`.
