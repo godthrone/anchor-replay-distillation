@@ -42,7 +42,7 @@ class MockEmbeddings:
     def __init__(
         self,
         monkeypatch: pytest.MonkeyPatch,
-        vectors: dict[str, list[float]],
+        vectors: dict[str, ec.EmbeddingRow],
         *,
         status: int | None = None,
     ) -> None:

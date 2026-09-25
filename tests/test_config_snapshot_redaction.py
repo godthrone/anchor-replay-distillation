@@ -18,10 +18,12 @@ from __future__ import annotations
 import json
 import tomllib
 from pathlib import Path
+from typing import TypeAlias
 
 import pytest
 
 from ard.config import load_config
+from ard.core.types import JsonObject
 from ard.pipeline import (
     NOT_SECRET_KEY_WORDS,
     REDACTED_KEY_WORDS,
@@ -62,6 +64,10 @@ def _write_config(tmp_path: Path, output_dir: Path) -> Path:
     return config_path
 
 
+#: One sub-table of a nested TOML section: its name and its own leaves.
+NestedSection: TypeAlias = tuple[str, JsonObject]
+
+
 def _toml_dump(data: dict, prefix: str = "") -> str:
     """Minimal nested-dict TOML writer (str/int/float/bool/list leaves).
 
@@ -69,7 +75,7 @@ def _toml_dump(data: dict, prefix: str = "") -> str:
     emitted before its sub-tables, which is what TOML requires.
     """
     lines: list[str] = []
-    nested: list[tuple[str, dict]] = []
+    nested: list[NestedSection] = []
     for key, value in data.items():
         if isinstance(value, dict):
             nested.append((key, value))

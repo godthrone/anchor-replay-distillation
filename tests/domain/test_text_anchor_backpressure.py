@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import TypeAlias
 
 import httpx
 import pytest
@@ -27,7 +28,7 @@ from ard.backends.api_client import (
     ChatAPIStats,
     ChatResponse,
 )
-from ard.core.types import AnchorSpec, GeneratedAnchor, TurnSpec
+from ard.core.types import AnchorSpec, GeneratedAnchor, JsonObject, TurnSpec
 from ard.domain.append_outcome import AppendOutcome
 from ard.domain.bank import (
     append_anchor,
@@ -40,6 +41,10 @@ from ard.domain.text_anchor import (
     generate_text_anchors,
     is_server_instability,
 )
+
+#: One recorded request: the endpoint kind and the JSON payload it carried.
+RecordedCall: TypeAlias = tuple[str, JsonObject]
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -55,7 +60,7 @@ class _ScriptedClient:
 
     def __init__(self, outcomes: list[object]) -> None:
         self._outcomes = list(outcomes)
-        self.calls: list[tuple[str, dict]] = []
+        self.calls: list[RecordedCall] = []
 
     def _next(self, kind: str) -> object:
         if not self._outcomes:

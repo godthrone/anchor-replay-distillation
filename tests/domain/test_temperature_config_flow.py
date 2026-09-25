@@ -26,7 +26,7 @@ import pytest
 from ard.backends import api_client as api_module
 from ard.backends.api_client import ChatAPIClient, ChatAPIConfig
 from ard.config import InputGeneratorConfig, TargetModelConfig, load_config
-from ard.core.types import AnchorSpec, TurnSpec
+from ard.core.types import AnchorSpec, JsonObjectList, TurnSpec
 from ard.domain.text_anchor import _generate_one_anchor
 
 _CONFIGS = Path(__file__).resolve().parents[2] / "configs" / "config.toml"
@@ -124,7 +124,7 @@ def _recording_transport(recorder: list[dict], content: str) -> httpx.MockTransp
 
 
 @pytest.fixture
-def recording_clients(monkeypatch) -> tuple[list[dict], Callable[..., None]]:
+def recording_clients(monkeypatch) -> tuple[JsonObjectList, Callable[..., None]]:
     """Monkeypatch ``httpx.Client`` so every client records its request payloads.
 
     Returns ``(recorder, run)`` where ``run(input_temp, target_temp, ...)``

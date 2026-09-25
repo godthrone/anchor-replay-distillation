@@ -17,6 +17,7 @@ import re
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
+from typing import TypeAlias
 
 import httpx
 import pytest
@@ -164,7 +165,7 @@ class _MockEmbeddings:
     def __init__(
         self,
         monkeypatch: pytest.MonkeyPatch,
-        vectors: Mapping[str, list[float]],
+        vectors: Mapping[str, ec.EmbeddingRow],
         *,
         status: int | None = None,
     ) -> None:
@@ -292,12 +293,16 @@ def test_smoke_run_is_marked_in_all_three_places_and_costs_no_model_call(
     assert len(pipeline.sample_specs(load_config(config_path))) == 1826
 
 
+#: The two report artefacts of one run, in ``coverage.json`` / ``coverage.md`` order.
+ReportBytes: TypeAlias = tuple[bytes, bytes]
+
+
 def test_two_smoke_runs_with_the_same_seed_are_byte_identical(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Same seed, two smoke runs → the readouts are byte-for-byte the same."""
     _install_offline_generator(monkeypatch)
-    reports: list[tuple[bytes, bytes]] = []
+    reports: list[ReportBytes] = []
     for index in (1, 2):
         output_dir = tmp_path / f"deliverable{index}"
         config_path = tmp_path / f"config{index}.toml"

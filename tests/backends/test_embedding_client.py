@@ -92,7 +92,7 @@ def make_client(**overrides: object) -> ec.EmbeddingClient:
     return ec.EmbeddingClient(**params)  # type: ignore[arg-type]
 
 
-def embeddings_response(vectors: list[list[float]], *, status: int = 200) -> httpx.Response:
+def embeddings_response(vectors: ec.EmbeddingMatrix, *, status: int = 200) -> httpx.Response:
     """A well-formed OpenAI-compatible embeddings body for *vectors*.
 
     ``json.dumps`` is used with ``allow_nan=True`` so the non-finite cases can

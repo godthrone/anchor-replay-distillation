@@ -28,7 +28,7 @@ from pathlib import Path
 import pytest
 
 from ard.config import ARDConfig, ConfigError, load_config
-from ard.core.types import AnchorSpec, DataSource, GeneratedAnchor, TurnSpec
+from ard.core.types import AnchorSpec, DataSource, GeneratedAnchor, StringList, TurnSpec
 from ard.domain.bank import append_anchor
 from ard.domain.text_anchor import AnchorGenerationStats
 
@@ -50,7 +50,7 @@ class _GeneratorSpy:
     """Appends one records-valid anchor per spec; records the plans it saw."""
 
     def __init__(self) -> None:
-        self.requested: list[list[str]] = []
+        self.requested: list[StringList] = []
         self.image_paths: list[str | None] = []
 
     def __call__(self, **kwargs: object) -> list[GeneratedAnchor]:

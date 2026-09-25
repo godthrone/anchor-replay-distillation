@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import pytest
 
+from ard.backends.embedding_client import EmbeddingMatrix
 from ard.core import acceptance, sampling
 from ard.core import coverage as ruler
 from ard.core.ontology import OntologyV4
@@ -14,7 +15,7 @@ from ard.core.sampling import sample_anchors
 from ard.core.types import AnchorGenerationConfig
 
 
-def _vector_set(name: str, rows: list[list[float]]) -> ruler.VectorSet:
+def _vector_set(name: str, rows: EmbeddingMatrix) -> ruler.VectorSet:
     return ruler.VectorSet(name=name, vectors=rows)
 
 
