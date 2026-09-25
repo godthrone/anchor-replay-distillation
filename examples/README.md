@@ -1,44 +1,50 @@
 # Examples
 
-Everything in this directory is **real pipeline output** — nothing here is
-hand-written or re-worded. `anchor_bank.sample.jsonl` is a representative subset
-of the records written by two real v3.0.0 runs (every line is copied from those
-banks byte for byte), and `manifest.sample.json` is the manifest format each run
-writes next to its own bank. They are checked in so you can understand what ARD
-produces without spending GPU time or needing an API endpoint.
-
-## Contents
+Everything in this directory is **real pipeline output**, checked in so you can see what ARD
+produces without spending endpoint time. `anchor_bank.sample.jsonl` is the complete anchor
+bank of one real `--smoke` run — every line is that run's own output, copied byte for byte,
+nothing trimmed, reordered or re-worded. `manifest.sample.json` is the manifest that same run
+wrote, with a handful of environment-specific fields normalised (listed below).
 
 | Path | What it is |
 |------|------------|
-| `anchor_bank.sample.jsonl` | 6 real anchors, one JSON object per line |
-| `manifest.sample.json` | The manifest a real run writes next to the anchor bank |
-| `images/` | 10 small JPEGs (400 px wide); the sample records reference `sample_04` / `sample_05` / `sample_10` |
+| `anchor_bank.sample.jsonl` | The 8 anchors of one real `--smoke` run, one JSON object per line (`schema_version 4.0.0`) |
+| `manifest.sample.json` | The manifest that run wrote next to its bank (smoke declaration included) |
+| `images/` | 10 small placeholder JPEGs, one subdirectory per `visual_domain` |
+| `images/README.md` | What those pictures are (placeholders) and the addressing convention |
 
-The six records are **verbatim lines** taken from **two real v3.0.0 runs**: the
-first run produced 60 text anchors, the second produced 40 multimodal anchors;
-this sample keeps three records from each bank (a selection made for this
-directory, not something a single run performs), picked to cover both
-`data_source` buckets, all four ontology languages and both legal `reasoning`
-forms:
+## What the run was
 
-| # | Record id | `data_source` | Language | Shape | Image | `reasoning` | Knowledge domain | Capability | System prompt |
-|---|-----------|---------------|----------|-------|:---:|-------------|------------------|------------|---------------|
-| 1 | `anchor_a99c98644ad956bd` | `ard_text` | 日本語 | `U` | – | `str` | art_aesthetics | translation | `none` |
-| 2 | `anchor_d72eae87804663f4` | `ard_text` | 简体中文 | `SU` | – | `str` | esoterica_belief_systems | uncertainty_handling | `task_constraint` |
-| 3 | `anchor_776f2287038b7d0b` | `ard_text` | English | `SU` | – | `null` | medicine_health | decision_analysis | `domain_style` |
-| 4 | `anchor_110374c8f9fd3138` | `ard_multi` | 日本語 | `U` | 1 | `str` | future_speculation | translation | `none` |
-| 5 | `anchor_da3b5e8e8c0a8e9e` | `ard_multi` | Español | `SU` | 1 | `str` | software_engineering | translation | `task_constraint` |
-| 6 | `anchor_bffd29da463224ed` | `ard_multi` | English | `SU` | 1 | `str` | agent_tool_use | decision_analysis | `domain_style` |
+```bash
+# from the repository root
+bash run.sh --config configs/config.toml --smoke --image-dir examples/images
+```
 
-`U` = one user turn; `SU` = a `system` persona turn followed by the user turn.
-This language / domain mix is simply **what those two runs happened to draw** —
-it was not steered, and the two banks were generated separately (one without
-`--image-dir`, one with it). The ontology holds far more combinations than six
-records can show (see [How the sample was drawn](#how-the-sample-was-drawn)).
-The three `ard_text` records carry **no** `has_image` key in `anchor_meta` at
-all, while the three `ard_multi` records carry `has_image` and `image_count` —
-a second, independent signal that these are two runs, not one bank.
+`--smoke` is the standard construction rule at reduced scale: **8 of the 1,826 anchors**
+(4 text-only + 4 image, evenly spaced over the block enumeration and including both ends).
+The run directory name carried the `_smoke` suffix, the log carried a WARNING, and the
+manifest below declares `smoke: true`. Generation is stochastic, so re-running that command
+reproduces the same *shape* — 8 anchors, 4 per modality, `schema_version 4.0.0`, the same
+addressing — but not the same questions or answers.
+
+| # | Record id | `data_source` | `modality` | `visual_domain` | Image | Messages (user turns) | Language | Knowledge domain | Capability | `system_prompt_mode` | `conversation_type` |
+|---|-----------|---------------|-----------|-----------------|-------|:---:|----------|------------------|------------|----------------------|---------------------|
+| 1 | `anchor_255e07584d699720` | `ard_text` | `text_only` | – | – | 1 (1) | 简体中文 | origin of the universe | qa | `none` | single_turn |
+| 2 | `anchor_13df63aeb8db8470` | `ard_text` | `text_only` | – | – | 8 (4) | English | dark matter hypotheses | structured_response | `task_constraint` | tool_assisted |
+| 3 | `anchor_0dc58134943a6cb7` | `ard_multi` | `image` | everyday_objects | `images/everyday_objects/sample_02.jpg` | 1 (1) | English | deep ocean unknowns | qa | `none` | single_turn |
+| 4 | `anchor_57b9053f9981fddc` | `ard_multi` | `image` | animals | `images/animals/sample_04.jpg` | 2 (1) | English | planetary habitability | reasoning | `detailed_persona` | single_turn |
+| 5 | `anchor_6e94bf911182bfa3` | `ard_multi` | `image` | plants | `images/plants/sample_08.jpg` | 2 (1) | 日本語 | complex systems emergence | debugging | `domain_style` | single_turn |
+| 6 | `anchor_94c11400295c9edc` | `ard_multi` | `image` | vehicles | `images/vehicles/sample_09.jpg` | 8 (4) | 日本語 | consciousness research | structured_response | `task_constraint` | tool_assisted |
+| 7 | `anchor_9ad04614f65c1e22` | `ard_text` | `text_only` | – | – | 6 (3) | 日本語 | origin of life | reasoning | `detailed_persona` | iterative_revision |
+| 8 | `anchor_07715d0d58a6eea7` | `ard_text` | `text_only` | – | – | 6 (3) | 日本語 | limits of scientific measurement | debugging | `domain_style` | iterative_revision |
+
+"Messages" counts every entry of `messages`, including an optional leading `system` turn, so
+it is `2n − 1` (or `2n`) for `n` user turns — see the shape invariant below. This mixture is
+simply what the smoke plan drew; nothing was steered. The language / domain / capability mix
+of a full run is much broader.
+
+All eight records ran with `enable_thinking = true`, so every `reasoning` here is a non-empty
+string. A record whose teacher ran without thinking carries `"reasoning": null` — never `""`.
 
 ## The record schema
 
@@ -46,10 +52,10 @@ Each line of `anchor_bank.sample.jsonl` is one anchor:
 
 ```jsonc
 {
-  "id": "anchor_a99c98644ad956bd",   // sha256 over the 5 sampled dimensions (see below)
-  "source": "ard",                   // dataset tag, matches the ARD anchor-bank format
-  "data_source": "ard_text",         // controlled vocabulary: ard_text | ard_multi
-  "schema_version": "3.0.0",         // the record format version — same for every record
+  "id": "anchor_255e07584d699720", // sha256 over the sampled axes
+  "source": "ard",                 // dataset tag of the ARD anchor-bank format
+  "data_source": "ard_text",       // controlled vocabulary: ard_text | ard_multi
+  "schema_version": "4.0.0",       // the record format version — same for every record
   "messages": [ /* the conversation, see below */ ],
   "targets": [
     {
@@ -60,51 +66,46 @@ Each line of `anchor_bank.sample.jsonl` is one anchor:
       }
     }
   ],
-  "anchor_meta": {
-    "language": "日本語",
-    "knowledge_domain": "art_aesthetics",
-    "capability": "translation",
-    "conversation_type": "constraint_update_4_turn",  // a style label, not a turn count
-    "system_prompt_presence": "none",                 // none | present
-    "system_prompt_style": "none",                    // none + 4 persona styles
-    "system_prompt_mode": "none",                     // the 5th sampled dimension
-    "has_image": true,                                // multimodal records only
-    "image_count": 1                                  // multimodal records only
-  },
-  "input_generator_model": "…",       // the generator that produced the user messages
-  "teacher_id": "…"                   // the teacher (target) model that answered
+  "anchor_meta": { /* the coordinate: one key per axis */ },
+  "input_generator_model": "…",    // the model that produced the user turns
+  "teacher_id": "…"                // the model whose output is the supervision target
 }
 ```
 
-`data_source` is **per record**, not per run: an `ard_multi` record is one whose
-conversation carries at least one image. (A single run writes only one value,
-but this sample draws from two runs, and a resumed run appends to an existing
-bank — so a file, and this sample, can hold both kinds side by side.) Downstream
-routes on this key, so it is a closed vocabulary rather than a free-form string.
+`anchor_meta` carries the sample field `modality` (`text_only` | `image`) and every axis
+value: `language`, `knowledge_domain`, `capability`, `system_prompt_mode`,
+`conversation_type`, `response_style`, `output_format`, `difficulty`, `context_length`,
+`input_condition`, `answer_mode`. An image-modality coordinate adds `visual_domain` and
+carries `has_image: true` / `image_count: 1`; a text-only coordinate omits `visual_domain`
+entirely — no `null` placeholder — and carries `has_image: false` / `image_count: 0`.
+
+`data_source` is **per record**, not per run: an `ard_multi` record is one whose conversation
+carries at least one image. Downstream routes on this key, so it is a closed vocabulary.
 
 ### `messages` — the shape invariant
 
-Once an optional leading `system` message is stripped, `messages` must **start
-with a `user` turn**, **end with a `user` turn**, and **alternate roles
-strictly**. Because only odd turn counts can satisfy that, the legal conversation
-shapes are:
+Once an optional leading `system` message is stripped, `messages` must **start with a `user`
+turn**, **end with a `user` turn**, and **alternate roles strictly**:
 
 ```
-U   UAU   UAUAU   UAUAUAU   …
+U   UAU   UAUAU   …          plus the system-prefixed form:  SU   SUAU   SUAUAU   …
 ```
 
-plus the `system`-prefixed form (at most one `system`, and only at position 0 —
-the array is the single source of truth for the persona prompt, which is what
-the `SU` entries in the table above are):
+Only odd turn counts can satisfy that, so `UAUAU` is *five* turns, not three. Anything else
+is rejected before it is written, so a malformed record never reaches the bank. All eight
+records here pass that gate. The `system` turn is the `system_prompt_mode` persona rendered
+from `configs/prompts/system_prompt/<mode>.md`; `mode = none` means there is no such turn.
 
-```
-SU   SUAU   SUAUAU   …
-```
+### `targets[0].output` — `content` and `reasoning`
 
-Anything else (`UAUAU` is *not* three turns — it is five, ending on a `user` turn
-with no answer) is rejected before it is written: the writer validates the shape
-and refuses to persist a malformed record, logging it instead. All six records
-here pass that gate.
+This is the point of the dataset: the teacher's **reasoning** kept beside its own answer, in
+two separate keys on purpose. `content` is the answer to the final user turn; `reasoning` is
+the thinking chain (`str | null`). Thinking is not the answer, so it is never merged into
+`content`. If a run cannot obtain the reasoning an anchor's configuration asked for, the
+anchor is discarded and counted in the run's `manifest.json` — it is never written with an
+empty value.
+
+### Images are addressed by `visual_domain`
 
 A multimodal user turn looks like this:
 
@@ -112,138 +113,60 @@ A multimodal user turn looks like this:
 {
   "role": "user",
   "content": [
-    { "type": "image", "image": "images/sample_04.jpg" },   // relative path
+    { "type": "image", "image": "images/everyday_objects/sample_02.jpg" },
     { "type": "text",  "text": "…the generated user question…" }
   ]
 }
 ```
 
-Note that images are referenced by **relative path**, not as inline base64, so
-the JSONL stays small. The paths are relative to the output directory, and the
-files are copied there during the run. The `images/` in this directory are the
-same files, so the paths above resolve if you point your own run at
-`--image-dir examples/images`.
-
-### `targets[0].output` — `content` and `reasoning`
-
-This is the point of the dataset: the teacher's **reasoning text**, kept beside
-its own answer. The two live in separate keys on purpose:
-
-- `content` — the teacher's answer to the final user turn.
-- `reasoning` — the teacher's thinking chain, a plain `str | null`. It is `null`
-  (never `""`) when the teacher did not think, i.e. when the target model ran
-  with `enable_thinking = false`; record #3 above is such a case, records #1, #2
-  and #4–#6 carry a non-empty string. Thinking is not the answer, so it is never
-  merged into `content`.
-
-If a run cannot obtain `reasoning` for an anchor whose configuration asked for
-it, **it does not silently write an empty value** — the anchor is discarded and
-counted (a real run's `<output_dir>/manifest.json` reports it under
-`generation.failures`; the sample manifest here omits that block, see below).
+The path is relative to the run directory, so `outputs/<run_name>/images/<visual_domain>/…`
+resolves directly; the run copies (and, unless `--no-convert`, converts) the picture there.
+It was drawn from `<image_dir>/<visual_domain>/<file>` — the anchor's own `visual_domain`
+coordinate, never a flat pool, because a flat pool cannot guarantee that the image matches
+the label attached to it. The four referenced files exist in this directory at exactly those
+paths, so pointing your own run at `--image-dir examples/images` resolves them.
 
 ## `manifest.sample.json`
 
-A real run also writes a manifest next to the anchor bank. Read it to answer
-"did this run actually produce healthy data?":
+A run also writes a manifest next to its bank. Read it to answer "did this run actually
+produce healthy data?":
 
-- `total_anchors`, `domains`, `languages`, `capabilities`,
-  `system_prompt_modes`, `data_sources` — the produced mix, tallied with the
-  same breakdown function the run itself uses.
-- `generation.counters` — what happened to every requested anchor:
-  `requested` / `succeeded` / `abandoned_total` / `abandoned_by_reason` /
-  `written` (plus `rejected_invalid_shape`, `rejected_invalid_data_source`,
-  `duplicate_ids` and `backpressure_events` when non-zero).
-- `generation.failures` — process-level failure counters, e.g. reasoning /
-  empty-content failures by reason (`responses`, `empty_content`,
-  `reasoning_only_responses`, `truncated_empty`) — the teacher spent its whole
-  token budget on reasoning and produced no answer.
+- `total_anchors`, `domains`, `languages`, `capabilities`, `system_prompt_modes`,
+  `data_sources` — the produced mix;
+- `generation.counters` — what happened to every requested anchor (`requested` / `succeeded`
+  / `written`, plus abandonment and rejection counters when non-zero);
+- `acceptance` — pointers to `results/coverage.{json,md}`, plus `metric_readout` and `q95`;
+- `images` — the addressing convention, the domains it resolved and any it skipped;
+- `smoke` / `smoke_plan` — the self-declaration of a `--smoke` run.
 
-The last two are documented here because they are what a reader of a **real**
-manifest should look for — they are **not present** in this sample (see below).
+**Normalised fields.** Five fields that identify the machine or the run were replaced so the
+sample carries no deployment details; everything else is verbatim:
 
-> **Zero-valued counters are dropped**, so a perfectly healthy run may omit
-> `generation` entirely. **An empty `generation: {}` is the anomaly, not the
-> absence of the key.**
+| Field | Sample value | Why |
+|-------|--------------|-----|
+| `config.input_generator.api_base` | `https://your-endpoint.example/v1` | The real endpoint is deployment-specific |
+| `config.target_model.api_base` | `https://your-endpoint.example/v1` | Same |
+| `config.output.directory` | `""` | Run location; the empty default means "auto-generate under `outputs/`" |
+| `output_dir` | `outputs/ard_dataset_<timestamp>_smoke` | Run location |
+| `images.image_dir` | `examples/images` | The real value is an absolute path on the machine that ran it |
 
-The sample's field set is a real manifest's, with **two deliberate omissions**:
-this file lists only the reproducible composition of the six records above and
-drops every deployment-specific or run-specific part.
+`config.*.api_key` already reads `***REDACTED***`: the pipeline redacts credentials before
+writing any manifest or `config.json`, so no key has ever been written to an output
+directory. There is no separate sample config file in this directory on purpose — the
+configuration template is `configs/config.override.sample.toml`, and duplicating it here
+would create a second source of truth that could drift.
 
-1. The merged runtime `config` (endpoints and model names) is left out so the
-   sample carries no deployment details.
-2. The `generation` block is **absent** — it is a *per-run execution account*,
-   and the six records here come from two different runs, so no single run's
-   counters describe this file. The sample is a hand-picked subset of two banks,
-   not the verbatim manifest of one run: do not read the absence as "the run was
-   unhealthy". A real manifest for a single run does carry `generation` whenever
-   any counter is non-zero.
+## Using these files
 
-Two numbers are scaled to this 6-record file, everything else is verbatim: the
-composition breakdown at the top (`total_anchors` and the five tallies) is
-recomputed over the six records here, and `output_dir` is the placeholder a real
-run replaces with its own output directory. The `generation` counters of the two
-underlying runs are intentionally **not** carried over — they account for runs
-that produced 100 records in total, not for this 6-record subset.
+- Read `anchor_bank.sample.jsonl` to see the record schema without running anything.
+- Validate your own tooling against a real `4.0.0` record.
+- Run the smoke command above with `--image-dir examples/images` to see the same shape
+  produced locally.
 
+`images/` covers exactly the four `visual_domain` directories a `--smoke` run requires
+(`everyday_objects`, `animals`, `plants`, `vehicles`). **A full run needs all 21 visual
+domains** — supply your own image directory and pass it with `--image-dir`.
 
-## How the sample was drawn
-
-```bash
-# from the repository root
-bash run.sh --config configs/config.toml \
-    --override .local/config.override.toml \
-    --image-dir examples/images
-```
-
-### The combination space
-
-An anchor is sampled on **5 dimensions** from `ontology/anchor_ontology.json`:
-`language` × `knowledge_domain` × `capability` × `conversation_type` ×
-`system_prompt_mode` (the system prompt became a sampling dimension in v3.0.0).
-For the ontology shipped in this release that is:
-
-**4 × 18 × 20 × 7 × 5 = 50,400 combinations** — and **100,800** when the
-multimodal form is counted separately for every combination (`ard_multi` /
-`ard_text`, i.e. whether the anchor carries an image).
-
-The sampler spreads `target_count` as far as it can across that space, so a run
-asking for 100 anchors and a run asking for 6 anchors draw **different**
-subsets: the budget decides where the sample lands, not just how much of it you
-see.
-
-### `seed` — what it does and does not pin
-
-`seed` is optional in `[generation]`:
-
-- **Omitted (the default) → every run draws a fresh seed** from the system
-  random source, so two runs of the same config sample independently.
-- **Set to an integer → that run's sampling order is pinned.** The value that
-  was actually used is recorded in `<output_dir>/config.json`, so a run can
-  always be traced back to the draw it used.
-
-An anchor **id**, by contrast, is a deterministic function of the sampled
-dimensions — it carries no seed and no run identity:
-
-```
-id = "anchor_" + sha256("<language>|<knowledge_domain>|<capability>|<conversation_type>|<system_prompt_mode>")[:16]
-```
-
-So the same combination always hashes to the same id, whenever it is drawn, and
-two runs can legitimately contain records with the same id but different
-conversations (the teacher's answers differ from run to run). The ids in the
-table above were re-derived from their own `anchor_meta` while writing this
-README, so they are a working example of that formula.
-
-### ⚠️ `conversation_type` is an ontology label, not the actual turn count
-
-Do not read the number in `anchor_meta.conversation_type` as the number of
-turns. It is a **sampling dimension** drawn from the ontology to describe a
-conversational *style* (e.g. `clarification_2_turn`, `constraint_update_4_turn`).
-The actual conversation length is decided separately by the turn-count
-distribution and is visible only in `messages` — for example record #1 above
-carries `conversation_type = "constraint_update_4_turn"` but its `messages`
-shape is `U` (a single turn).
-
-If you need the real turn count, count the `user` turns in `messages`.
-
-
+> The ten JPEGs are **placeholders**, not representatives of their domain, and their
+> provenance is not documented in this repository. See
+> [images/README.md](images/README.md) before using or redistributing them.

@@ -1,32 +1,133 @@
 {
-  "total_anchors": 6,
+  "total_anchors": 8,
   "domains": {
-    "art_aesthetics": 1,
-    "esoterica_belief_systems": 1,
-    "medicine_health": 1,
-    "future_speculation": 1,
-    "software_engineering": 1,
-    "agent_tool_use": 1
+    "origin of the universe": 1,
+    "dark matter hypotheses": 1,
+    "deep ocean unknowns": 1,
+    "planetary habitability": 1,
+    "complex systems emergence": 1,
+    "consciousness research": 1,
+    "origin of life": 1,
+    "limits of scientific measurement": 1
   },
   "languages": {
-    "日本語": 2,
     "简体中文": 1,
-    "English": 2,
-    "Español": 1
+    "English": 3,
+    "日本語": 4
   },
   "capabilities": {
-    "translation": 3,
-    "uncertainty_handling": 1,
-    "decision_analysis": 2
+    "qa": 2,
+    "structured_response": 2,
+    "reasoning": 2,
+    "debugging": 2
   },
   "system_prompt_modes": {
     "none": 2,
     "task_constraint": 2,
+    "detailed_persona": 2,
     "domain_style": 2
   },
   "data_sources": {
-    "ard_text": 3,
-    "ard_multi": 3
+    "ard_text": 4,
+    "ard_multi": 4
   },
-  "output_dir": "outputs/ard_dataset_<timestamp>"
+  "output_dir": "outputs/ard_dataset_<timestamp>_smoke",
+  "config": {
+    "input_generator": {
+      "api_base": "https://your-endpoint.example/v1",
+      "model_name": "AI/Qwen3.8-27B",
+      "api_key": "***REDACTED***",
+      "max_tokens": null,
+      "connect_timeout": 10.0,
+      "first_token_timeout": 300.0,
+      "inter_token_timeout": 15.0,
+      "max_retries": 3,
+      "retry_on_timeout": false,
+      "temperature": 0.8
+    },
+    "target_model": {
+      "api_base": "https://your-endpoint.example/v1",
+      "model_name": "AI/Qwen3.8-27B",
+      "api_key": "***REDACTED***",
+      "max_tokens": null,
+      "connect_timeout": 10.0,
+      "first_token_timeout": 300.0,
+      "inter_token_timeout": 15.0,
+      "max_retries": 3,
+      "retry_on_timeout": false,
+      "temperature": 0.1,
+      "enable_thinking": true
+    },
+    "generation": {
+      "seed": 3028740997,
+      "concurrency": 4,
+      "backpressure_threshold": 3,
+      "backpressure_cooldown": 60.0
+    },
+    "ontology": {
+      "path": "ontology/anchor_ontology.v4.json"
+    },
+    "output": {
+      "directory": "",
+      "overwrite": false
+    },
+    "images": {
+      "skip_missing_images": false
+    },
+    "coverage": {
+      "enabled": true,
+      "target_set_path": null,
+      "embedding": {
+        "api_base": null,
+        "api_key": null,
+        "model": null,
+        "dimension": null,
+        "batch_size": 32,
+        "connect_timeout": 10.0,
+        "read_timeout": 60.0,
+        "max_retries": 2,
+        "normalize": true
+      }
+    }
+  },
+  "generation": {
+    "counters": {
+      "requested": 8,
+      "succeeded": 8,
+      "written": 8
+    },
+    "failures": {
+      "reasoning_responses": 18,
+      "reasoning_chars": 178416,
+      "responses": 42
+    }
+  },
+  "acceptance": {
+    "coverage_json": "results/coverage.json",
+    "coverage_md": "results/coverage.md",
+    "metric_readout": false,
+    "q95": null
+  },
+  "smoke": true,
+  "smoke_plan": {
+    "run_name": "test-qwen_smoke",
+    "planned_anchors": 8,
+    "full_expected_anchors": 1826,
+    "text_blocks": 4,
+    "image_blocks": 4,
+    "note": "SMOKE RUN — deliberately incomplete; not a deliverable."
+  },
+  "images": {
+    "image_dir": "examples/images",
+    "addressing": "<image_dir>/<visual_domain>/<image file>",
+    "skip_missing_images": false,
+    "resolved_visual_domains": [
+      "animals",
+      "everyday_objects",
+      "plants",
+      "vehicles"
+    ],
+    "skipped_anchor_count": 0,
+    "skipped_visual_domains": []
+  }
 }
