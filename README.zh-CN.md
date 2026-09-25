@@ -196,6 +196,39 @@ outputs/<run_name>/          # 默认 ard_dataset_<YYYYmmdd_HHMMSS>；--smoke �
 manifest 里 `metric_readout: false`、`q95: null`——绝不产出一份"看起来干净"的报告。
 尺子的定义与分辨力边界见 [docs/measurement.md](docs/measurement.md)。
 
+指标空间**只含文本**：图像模态锚点以其最终 user 轮的**文本部分**参与，**图像像素不进该空间**，
+所以读数把锚点字段声明为 `messages[last].content(text parts only)`。
+
+### 自己复跑指标读数（三步）
+
+指标读数由配置驱动，没有 CLI 开关：
+
+1. 在 `.local/config.override.toml`（被 gitignore 的本机覆写文件）里配 `[coverage.embedding]`。
+   下面只给**字段名与占位符**，绝不要把真实端点、模型名或密钥写进仓库：
+
+   ```toml
+   [coverage.embedding]
+   api_base = "<OpenAI 兼容的 /embeddings 基址，含 /v1>"
+   model = "<嵌入模型名>"
+   dimension = <该模型的向量维度>
+   # api_key = "<服务端需要时填>"
+   # normalize = true      # 必须为 true：尺子要求 L2 归一化行
+   ```
+2. 用 `coverage.target_set_path` 指向目标集。仓库自带一个小而确定的样例
+   `examples/target_set.sample.jsonl`（32 条；构造规则写在其文件头与
+   [docs/measurement.md](docs/measurement.md)），开箱可用：
+
+   ```toml
+   [coverage]
+   target_set_path = "examples/target_set.sample.jsonl"
+   ```
+3. 跑 `--smoke`（8 条锚点，几分钟）或完整运行。读数落在
+   `<output_dir>/results/coverage.{json,md}`。
+
+三种配置组合是**契约**，不是建议：**两者都未设** ⇒ 结构读数 + WARNING；**只设
+`target_set_path`、`[coverage.embedding]` 不全** ⇒ 在 `load_config` 即被拒，报文列出缺失字段，
+且早于创建任何输出目录；**两者都设** ⇒ 产出指标读数。
+
 ## 开发指南
 
 ```bash

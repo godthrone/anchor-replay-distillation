@@ -222,6 +222,41 @@ Without them the run writes the structure readout only and announces the gap in 
 manifest — never a silently clean report. The definitions of the ruler and its resolution
 limits are in [docs/measurement.md](docs/measurement.md).
 
+The metric space holds **text only**: an image-modality anchor takes part through the text
+parts of its final user turn, and its image pixels never enter the space, so the readout
+declares the anchor field as `messages[last].content(text parts only)`.
+
+### Re-run the metric readout yourself (three steps)
+
+The metric readout is config-driven — there is no CLI flag for it:
+
+1. Put an embeddings endpoint in `.local/config.override.toml` (the gitignored override).
+   Field names and placeholders only — never commit a real endpoint, model name or key:
+
+   ```toml
+   [coverage.embedding]
+   api_base = "<OpenAI-compatible base URL, including /v1>"
+   model = "<embedding model name>"
+   dimension = <vector length>
+   # api_key = "<only if the server needs one>"
+   # normalize = true        # must stay true: the ruler needs unit-norm rows
+   ```
+2. Point `coverage.target_set_path` at a target set. The small, deterministic sample
+   `examples/target_set.sample.jsonl` (32 entries; the construction rule is declared in its
+   file header and in [docs/measurement.md](docs/measurement.md)) works as is:
+
+   ```toml
+   [coverage]
+   target_set_path = "examples/target_set.sample.jsonl"
+   ```
+3. Run `--smoke` (8 anchors, minutes) or a full run. The readout lands in
+   `<output_dir>/results/coverage.{json,md}`.
+
+The three configuration combinations are a contract, not a suggestion: **neither** set →
+structure readout + a WARNING; `target_set_path` set but `[coverage.embedding]` incomplete →
+the run is refused at config load with the missing field(s) named, before any output
+directory exists; **both** set → the metric readout.
+
 ## Development
 
 ```bash
