@@ -1,35 +1,35 @@
 {
-  "total_anchors": 7,
+  "total_anchors": 8,
   "domains": {
     "origin of the universe": 1,
     "deep ocean unknowns": 1,
-    "dark matter hypotheses": 1,
+    "planetary habitability": 1,
     "complex systems emergence": 1,
+    "dark matter hypotheses": 1,
+    "origin of life": 1,
     "consciousness research": 1,
-    "limits of scientific measurement": 1,
-    "origin of life": 1
+    "limits of scientific measurement": 1
   },
   "languages": {
     "Español": 2,
-    "简体中文": 1,
-    "日本語": 1,
-    "English": 3
+    "简体中文": 2,
+    "日本語": 4
   },
   "capabilities": {
     "qa": 2,
-    "structured_response": 2,
+    "reasoning": 2,
     "debugging": 2,
-    "reasoning": 1
+    "structured_response": 2
   },
   "system_prompt_modes": {
     "none": 2,
-    "task_constraint": 2,
+    "detailed_persona": 2,
     "domain_style": 2,
-    "detailed_persona": 1
+    "task_constraint": 2
   },
   "data_sources": {
     "ard_text": 4,
-    "ard_multi": 3
+    "ard_multi": 4
   },
   "output_dir": "outputs/ard_dataset_<timestamp>_smoke",
   "config": {
@@ -59,7 +59,7 @@
       "enable_thinking": true
     },
     "generation": {
-      "seed": 3188911139,
+      "seed": 121684216,
       "concurrency": 4,
       "backpressure_threshold": 3,
       "backpressure_cooldown": 60.0
@@ -68,7 +68,7 @@
       "path": "ontology/anchor_ontology.v4.json"
     },
     "output": {
-      "directory": null,
+      "directory": "outputs/ard_dataset_<timestamp>",
       "overwrite": false
     },
     "images": {
@@ -77,12 +77,12 @@
     },
     "coverage": {
       "enabled": true,
-      "target_set_path": null,
+      "target_set_path": "/path/to/your/target_set.jsonl",
       "embedding": {
-        "api_base": null,
-        "api_key": null,
-        "model": null,
-        "dimension": null,
+        "api_base": "https://your-endpoint.example/v1",
+        "api_key": "***REDACTED***",
+        "model": "your-model-name",
+        "dimension": 4096,
         "batch_size": 32,
         "connect_timeout": 10.0,
         "read_timeout": 60.0,
@@ -95,29 +95,25 @@
     "algorithm": "sha256",
     "version": 1,
     "plan_size": 8,
-    "digest": "ea3884f20b46210a7c5b9464e27b76e7a082d6e51e97436f63bae64cfab1732f"
+    "digest": "3f5424395d78d8a16bb87a41163043d387569880bbf3032755fcde74beb50d06"
   },
   "generation": {
     "counters": {
       "requested": 8,
-      "succeeded": 7,
-      "abandoned_total": 1,
-      "abandoned_by_reason": {
-        "transport_error": 1
-      },
-      "written": 7
+      "succeeded": 8,
+      "written": 8
     },
     "failures": {
-      "reasoning_responses": 17,
-      "reasoning_chars": 112310,
-      "responses": 39
+      "responses": 42,
+      "reasoning_responses": 18,
+      "reasoning_chars": 179583
     }
   },
   "acceptance": {
     "coverage_json": "results/coverage.json",
     "coverage_md": "results/coverage.md",
-    "metric_readout": false,
-    "q95": null
+    "metric_readout": true,
+    "q95": 0.8320091814348234
   },
   "smoke": true,
   "smoke_plan": {
@@ -140,5 +136,6 @@
     ],
     "skipped_anchor_count": 0,
     "skipped_visual_domains": []
-  }
+  },
+  "status": "complete"
 }
