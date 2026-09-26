@@ -14,7 +14,6 @@ dependencies = [
     { name = "numpy" },
     { name = "pillow" },
     { name = "pydantic" },
-    { name = "rawpy" },
     { name = "tomli-w" },
     { name = "tqdm" },
 ]
@@ -28,6 +27,9 @@ dev = [
 hf = [
     { name = "transformers" },
 ]
+raw = [
+    { name = "rawpy" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -37,13 +39,13 @@ requires-dist = [
     { name = "pillow", specifier = ">=10.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
-    { name = "rawpy", specifier = ">=0.24" },
+    { name = "rawpy", marker = "extra == 'raw'", specifier = ">=0.24" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6.0" },
     { name = "tomli-w", specifier = ">=1.2" },
     { name = "tqdm", specifier = ">=4.0" },
     { name = "transformers", marker = "extra == 'hf'", specifier = ">=4.53.0" },
 ]
-provides-extras = ["hf", "dev"]
+provides-extras = ["hf", "raw", "dev"]
 
 [[package]]
 name = "annotated-doc"

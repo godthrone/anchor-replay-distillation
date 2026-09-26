@@ -15,7 +15,6 @@ dependencies = [
   "numpy>=1.26.0",
   "Pillow>=10.0",
   "pydantic>=2.0",
-  "rawpy>=0.24",
   "tomli-w>=1.2",
   "tqdm>=4.0",
 ]
@@ -23,6 +22,11 @@ dependencies = [
 [project.optional-dependencies]
 hf = [
   "transformers>=4.53.0",
+]
+# RAW camera formats (.cr2/.nef/.arw/.dng, ...) only.  The rawpy wheel bundles
+# LibRaw (LGPL-2.1 / CDDL-1.0), so it is opt-in rather than a default dependency.
+raw = [
+  "rawpy>=0.24",
 ]
 dev = [
   "mypy>=1.11.0",
