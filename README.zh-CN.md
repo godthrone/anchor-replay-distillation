@@ -27,16 +27,20 @@ uv sync
 标签对应的确切版本；而不带 `.git` 的源码归档（GitHub 的 "Download ZIP"、`git archive`）
 回退到固定版本 `1.0.0`——与 `run.sh`、`docker/build.sh` 在没有可描述标签时使用的值一致。
 
-**默认安装不含 RAW 支持。** 默认依赖集只有 MIT/Apache 许可证；RAW 相机格式（`.cr2`、`.nef`、
-`.arw`、`.dng` 等）需要 `rawpy`，而它的 wheel 捆绑了 LibRaw（LGPL-2.1 / CDDL-1.0）。要处理
-RAW 文件，请显式安装该 extra：
+**默认安装不含 RAW 支持。** 一次普通 `uv sync` 不会装上 `rawpy`——它在 `raw` extra 里——所以默认
+安装不含 LibRaw。默认依赖闭包以宽松许可证为主（MIT / BSD / MIT-CMU / PSF-2.0），但**并非只有
+MIT/Apache**：`certifi` 是 **MPL-2.0**（由 `httpx` 传递引入）、`tqdm` 是 **`MPL-2.0 AND MIT`**
+（双许可，可按 MIT 选用）、`typing-extensions` 是 **PSF-2.0**。RAW 相机格式（`.cr2`、`.nef`、
+`.arw`、`.dng` 等）需要 `rawpy`，而它的 wheel 捆绑了 LibRaw（LGPL-2.1 / CDDL-1.0）——这正是 RAW
+支持做成可选 extra 的原因。要处理 RAW 文件，请显式安装该 extra：
 
 ```bash
 uv sync --extra raw
 ```
 
 未安装时，RAW 输入会以一条点名该文件的 WARNING 被跳过，而不会让运行崩溃——原因（许可证）
-与细节见下面的 FAQ。
+与细节见下面的 FAQ。完整逐包清单与"如何从自己装好的环境复现它"见
+[`docs/licenses.md`](docs/licenses.md)；那里只陈述事实，不作合规判定。
 
 ### 2. 准备端点凭证
 
@@ -269,9 +273,13 @@ uv run mypy src/ard/
 
 **RAW 相机文件为什么要装 `.[raw]`？**
 RAW 解码走 `rawpy`，而它的 wheel 捆绑了 LibRaw 解码器（LGPL-2.1 / CDDL-1.0）。一次普通
-`uv sync` 装上的依赖都是 MIT 或 Apache 许可证，所以 RAW 解码器做成可选 extra，而不进默认依赖集：
-`uv sync --extra raw`（见上面的安装步骤）。默认安装遇到 RAW 输入不会崩——它打一条点名该文件的
-WARNING（"`rawpy not installed, cannot convert RAW image: …`"），丢掉这张图，其余运行照常继续。
+`uv sync` 完全不装 LibRaw——`raw` extra 只新增 `rawpy` 这一个包——所以 RAW 解码器做成可选
+extra，而不进默认依赖集：`uv sync --extra raw`（见上面的安装步骤）。默认依赖闭包并非清一色
+MIT/Apache：`certifi` 是 MPL-2.0、`tqdm` 是 `MPL-2.0 AND MIT`、`typing-extensions` 是
+PSF-2.0，其余为 MIT / BSD-3-Clause / MIT-CMU。完整清单与读取它的命令见
+[`docs/licenses.md`](docs/licenses.md)；本仓库只陈述这些事实，合规判断留给你。默认安装遇到 RAW
+输入不会崩——它打一条点名该文件的 WARNING（"`rawpy not installed, cannot convert RAW image:
+…`"），丢掉这张图，其余运行照常继续。
 
 **为什么 q95 是主尺子而覆盖率只作参考？**
 `q95` 是每个目标点到其最近锚点距离的 95 分位（Hyndman–Fan type-7）：一个尾部统计量，读作

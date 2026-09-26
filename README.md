@@ -34,16 +34,23 @@ Requires [uv](https://docs.astral.sh/uv/) and Python 3.11 (pinned in `.python-ve
 that carries no `.git` (GitHub "Download ZIP", `git archive`) falls back to the fixed version
 `1.0.0` — the same value `run.sh` and `docker/build.sh` use when there is no tag to describe.
 
-**RAW support is not installed by default.** The default dependency set is MIT/Apache only; RAW
-camera formats (`.cr2`, `.nef`, `.arw`, `.dng`, …) need `rawpy`, whose wheels bundle LibRaw
-(LGPL-2.1 / CDDL-1.0). Install that extra explicitly when you feed RAW files:
+**RAW support is not installed by default.** A plain `uv sync` installs no `rawpy` — it lives in
+the `raw` extra — so the default install carries no LibRaw. The default dependency closure is
+mostly permissive (MIT / BSD / MIT-CMU / PSF-2.0), but it is **not** MIT/Apache only: `certifi`
+is **MPL-2.0** (pulled in transitively by `httpx`), `tqdm` is **`MPL-2.0 AND MIT`** (a dual
+licence, so the MIT option can be taken) and `typing-extensions` is **PSF-2.0**. RAW camera
+formats (`.cr2`, `.nef`, `.arw`, `.dng`, …) need `rawpy`, whose wheels bundle LibRaw
+(LGPL-2.1 / CDDL-1.0) — which is why RAW support is an opt-in extra. Install it explicitly when
+you feed RAW files:
 
 ```bash
 uv sync --extra raw
 ```
 
 Without it a RAW input is reported and skipped (a WARNING naming the file) rather than crashing
-the run — the FAQ entry below has the detail and the licence reason.
+the run — the FAQ entry below has the detail and the licence reason. The complete
+package-by-package list, and how to reproduce it from your own install, is in
+[`docs/licenses.md`](docs/licenses.md); it is stated as fact, not as a compliance verdict.
 
 ### 2. Provide endpoint credentials
 
@@ -304,11 +311,15 @@ generated, as text conversations, while keeping their `visual_domain` coordinate
 
 **Why do RAW camera files need `.[raw]`?**
 RAW decoding goes through `rawpy`, whose wheels bundle the LibRaw decoder (LGPL-2.1 /
-CDDL-1.0). Every dependency installed by a plain `uv sync` is MIT- or Apache-licensed, so the
-RAW decoder is an opt-in extra rather than part of the default set: `uv sync --extra raw` (see
-the install step above). A default install does not break on a RAW input — it logs a WARNING
-naming the file ("`rawpy not installed, cannot convert RAW image: …`") and drops that picture
-while the rest of the run proceeds.
+CDDL-1.0). A plain `uv sync` installs no LibRaw at all — `rawpy` is the only package the `raw`
+extra adds — so the RAW decoder is an opt-in extra rather than part of the default set: `uv sync
+--extra raw` (see the install step above). The default dependency closure is not uniformly
+MIT/Apache: `certifi` is MPL-2.0, `tqdm` is `MPL-2.0 AND MIT`, `typing-extensions` is PSF-2.0,
+and the rest are MIT / BSD-3-Clause / MIT-CMU. [`docs/licenses.md`](docs/licenses.md) carries the
+full list together with the command that reads it out of an installed environment; this
+repository states those facts only and leaves any compliance judgement to you. A default install
+does not break on a RAW input — it logs a WARNING naming the file ("`rawpy not installed, cannot
+convert RAW image: …`") and drops that picture while the rest of the run proceeds.
 
 **Why is `q95` the main ruler while coverage is only a reference?**
 `q95` is the 95th percentile (Hyndman–Fan type 7) of each target point's distance to its
