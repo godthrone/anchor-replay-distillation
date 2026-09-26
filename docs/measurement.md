@@ -72,7 +72,7 @@
   六个 instruction 轴（`src/ard/domain/text_anchor.py:242-243` → `src/ard/backends/axis_instruction_loader.py:96-97`）、
   `visual_domain`（`src/ard/domain/image_store.py:128-130` 选图目录，即请求里带哪张图）。
 - **不在**签名里的是计划记账字段 `modality` / `has_image` / `image_count`：它们不改变发给生成器的请求文本。
-  `image_count = min(用户轮数, IMAGES_PER_ANCHOR)` 且 `IMAGES_PER_ANCHOR = 1`（`src/ard/pipeline.py:356`），
+  `image_count = min(用户轮数, IMAGES_PER_ANCHOR)` 且 `IMAGES_PER_ANCHOR = 1`（`src/ard/pipeline.py:357`），
   信息量为零；契约测试 `tests/core/test_acceptance_prompt_signature.py` 双向渲染两遍（列出轴必须改变渲染、
   未列字段必须不改变渲染）来守住这个集合，轴一旦变成"吉祥物"即失败。
 - **判据没有放宽**：仍然只在"同一签名出现 **≥2** 条"时才标定噪声带。v4 计划里每条签名都只出现一次，
@@ -109,7 +109,7 @@
 静默跳过会让 `q95` 落在一个比运行产物更小的锚点集上，空串占位则是在空间里伪造一个点——两者都是伪读数。
 
 **不含密钥**：空间声明只写 model 与 dimension，不写 `api_base`、不写任何 key；输出目录里的配置快照另有脱敏
-（`src/ard/pipeline.py:202`，`_redact_secrets`）。
+（`src/ard/pipeline.py:203`，`_redact_secrets`）。
 
 ## 6. 读数流水线与退化行为
 
@@ -129,22 +129,22 @@ flowchart TD
     W --> R
 ```
 
-**三种配置组合的契约**（`src/ard/config.py:352-404`，`resolved_embedding`；`src/ard/pipeline.py:605-647`，`_prepare_coverage`）。
+**三种配置组合的契约**（`src/ard/config.py:352-404`，`resolved_embedding`；`src/ard/pipeline.py:656-698`，`_prepare_coverage`）。
 
 | `coverage.target_set_path` | `[coverage.embedding]` | 行为 |
 |---|---|---|
-| **两者都未设** | 任意 | **结构读数 + 明确 WARNING**：`metric readout not measured …`（`src/ard/pipeline.py:623-629`）；报告 `metrics: null`、manifest `metric_readout: false` / `q95: null`。不静默、不崩溃 |
+| **两者都未设** | 任意 | **结构读数 + 明确 WARNING**：`metric readout not measured …`（`src/ard/pipeline.py:674-680`）；报告 `metrics: null`、manifest `metric_readout: false` / `q95: null`。不静默、不崩溃 |
 | **已设** | **缺** `api_base` / `model` / `dimension`（或全空） | **fail-fast 报错**（`ConfigError`），报文逐项列出缺失字段并要求"补齐或清空 `target_set_path`"；在 `load_config` 即触发（`src/ard/config.py:381-387`），**早于创建任何输出目录**。这是**刻意严格**的行为：目标集已声明要测指标，却没有可用嵌入器，属于配置错误而非可退化的缺省 |
 | **已设** | 完备，`normalize = true` | 产出**指标读数**（`q95` / `Extent(ε)` / ε 带 / 噪声带）；`normalize = false` 同样 fail-fast（尺子要求 L2 归一化，`src/ard/config.py:389-393`） |
 
-其余退化行为（都**显式**、绝不静默，`src/ard/pipeline.py:696-793`，`_run_acceptance`）：
+其余退化行为（都**显式**、绝不静默，`src/ard/pipeline.py:747-844`，`_run_acceptance`）：
 
 | 情形 | 行为 |
 |---|---|
-| 目标集缺失/不可解析/计数或维度与配置矛盾 | 在**创建输出目录之前**拒绝整个运行（`src/ard/pipeline.py:605-647`，`CoverageWiringError`；`:891` 在输出目录存在之前调用），不产生半成品产物 |
-| 嵌入调用失败 | 结构性读数**先已落盘**（`src/ard/pipeline.py:762-769`），失败照常抛出，但不会抹掉零成本的结构报告 |
-| 无同格重复生成数据 | 噪声带写 `unavailable` 并附原因（`src/ard/core/acceptance.py:85-87`；`src/ard/pipeline.py:776-777` 把原因并入 warnings） |
-| 库比计划少一条计划坐标 | 结构读数仍描述计划，但读数被如实改为 `within_rule: false`，并在 warnings 里**列出缺失坐标**（`src/ard/pipeline.py:665-694`；一条计划坐标没落库时，计划再合规也不算"产物合规"） |
+| 目标集缺失/不可解析/计数或维度与配置矛盾 | 在**创建输出目录之前**拒绝整个运行（`src/ard/pipeline.py:656-698`，`CoverageWiringError`；`:941` 在输出目录存在之前调用），不产生半成品产物 |
+| 嵌入调用失败 | 结构性读数**先已落盘**（`src/ard/pipeline.py:813-820`），失败照常抛出，但不会抹掉零成本的结构报告 |
+| 无同格重复生成数据 | 噪声带写 `unavailable` 并附原因（`src/ard/core/acceptance.py:85-87`；`src/ard/pipeline.py:827-828` 把原因并入 warnings） |
+| 库比计划少一条计划坐标 | 结构读数仍描述计划，但读数被如实改为 `within_rule: false`，并在 warnings 里**列出缺失坐标**（`src/ard/pipeline.py:716-745`；一条计划坐标没落库时，计划再合规也不算"产物合规"） |
 
 ## 7. 已知边界：指标层的分辨力上限
 
@@ -173,6 +173,9 @@ flowchart TD
 - `results/coverage.md`：同一报告的人读版渲染（`src/ard/core/acceptance.py:815-934`），
   结构读数表、Diversity declaration（两个 distinct 读数的定义）、Conventions（`MULTI_TURN_DEFAULT` 与轮数映射）、
   空间声明、分位/覆盖读数、噪声带、warnings。
+- `manifest.json` → `plan_identity`：**这份读数描述的是哪个计划**。`{algorithm, version, plan_size, digest}`，
+  其中 `digest` 是有序坐标列表的 sha256（`src/ard/core/sampling.py:677-726`）。它是续跑守卫的键（§12），
+  也是"读数绑定到哪个计划"的锚点；`manifest.json` 的 `config` 段里的 `seed` **不是**这个锚点。
 
 **`ard-acceptance-1` → `ard-acceptance-2`（WP-S18，字段语义变更 ⇒ 版本号递增）。** 两处变化：
 `structure` 新增 `prompt_signature_distinct` / `effective_projection_distinct` / `diversity`（§11），
@@ -210,7 +213,7 @@ flowchart TD
 
 三种配置组合的行为见 §6 的契约表：都没设 ⇒ 结构读数 + WARNING；只设目标集不配嵌入器 ⇒ fail-fast 报错；
 两者都设 ⇒ 指标读数。只想验证接线、不想调用生成端点时，可以对**已有的** `anchor_bank.jsonl` 直接调用
-`pipeline._prepare_coverage` + `pipeline._run_acceptance`（`src/ard/pipeline.py:605-647` / `:696-793`）。
+`pipeline._prepare_coverage` + `pipeline._run_acceptance`（`src/ard/pipeline.py:656-698` / `:747-844`）。
 
 ## 10. 目标集样例的构造规则
 
@@ -274,3 +277,27 @@ WP-S17 把这六个 instruction 轴的措辞真的渲染进 prompt 之后，"有
 
 **复算**：前三个数都是零成本的纯结构计数，`acceptance.structure_readout(plan)` 即可复得；
 本机既有产物上重跑读数的做法见 §9 结尾，不需要任何生成调用。
+
+## 12. 计划身份：读数必须绑定到它，而不是绑定到 seed
+
+**问题**：`manifest.json` 的 `config.generation.seed` 是**进程级配置值**，不是计划的身份。输出目录的
+`config.toml` 快照**每次运行都被覆盖**（`src/ard/pipeline.py:1109`），包括什么都没生成的空转续跑；
+不钉 seed 时每个进程还会现抽一个新 seed（`src/ard/config.py:204-205`）。所以"记录 seed + 代码"**不能**
+复现历史产物里的自由轴分配——历史冒烟库被调用 3 次，后两次空转覆盖了真正采样那次的 seed，
+用记录值复算自由轴只有 11/32 相同。
+**结论：计划本身由 `(本体, seed, 代码)` 唯一决定，所以"钉 seed ⇒ 计划可复现"成立；但"产物里记录的 seed
+⇒ 计划可复现"不成立**，因为记录值可能属于另一次调用。
+
+**做法**：每次运行把 `plan_identity`（有序坐标列表 sha256 + `plan_size` + `algorithm` + `version`）写进
+`manifest.json`（`src/ard/pipeline.py:490-496`）。同一计划在任何进程、任何 `PYTHONHASHSEED` 下得到同一摘要
+（S22 实测：7 个进程、1,826 条全量计划，摘要逐字节相同）。
+
+**绑定规则（全量 1,826 运行时）**：
+
+1. **产品级读数（`q95` / `Extent` / 覆盖与多样性）只能绑定到 `plan_identity.digest`**：写报告时引用该摘要，
+   而不是引用 seed；两个摘要相同才允许把两次读数并列比较。
+2. **续跑守卫比为计划身份**（`src/ard/pipeline.py:420-487`）：摘要不同 ⇒ 拒绝续跑（明确报错"holds a different
+   plan"），绝不把两份计划的锚点写进同一份 `anchor_bank.jsonl`；摘要相同 ⇒ 允许。旧库（无 `plan_identity`）
+   走结构校验：库里存在不属于本次计划的 anchor id 即拒绝，绝不静默混合。
+3. **`plan_identity` 没有被记录的老产物**（本字段引入之前的库）不能凭 seed 断言其计划身份，只能按结构校验
+   （库里所有 id ⊆ 本次计划）续跑；若要做产品级读数，先重新采样并记录摘要。

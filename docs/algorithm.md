@@ -20,15 +20,15 @@
 |---|---:|---|
 | 自由轴积 `free_axis_product` | **52,668** | `ontology/anchor_ontology.v4.json:1340`（4 × 209 × 7 × 3 × 3） |
 | 受限轴原始组合 `raw_restricted_block` | 100,800 | `:1341` |
-| 文本态合法受限块 | **935** | `:1342`；`src/ard/core/sampling.py:87` |
-| 影像态合法受限块（18 个 image-capable capability） | **891** | `:1343`；`src/ard/core/sampling.py:90` |
+| 文本态合法受限块 | **935** | `:1342`；`src/ard/core/sampling.py:88` |
+| 影像态合法受限块（18 个 image-capable capability） | **891** | `:1343`；`src/ard/core/sampling.py:91` |
 | `knowledge_domain` 叶 | **209**（18 domain / 36 subdomain） | `:63-67` |
 | `visual_domain` 叶 | **21** | `:307-311` |
-| **一轮计划总数** | **1,826**（935 + 891） | `src/ard/core/sampling.py:99` |
+| **一轮计划总数** | **1,826**（935 + 891） | `src/ard/core/sampling.py:100` |
 
 **总数不是配置项**：它由构造规则与本体唯一推导。`configs/config.toml` 中没有 `target_count` 一类字段，
 `sampling.sample_anchors` 的返回长度就是计划长度；本体计数一旦与规则不符，采样器**报错退出**而不是产出更短/更长的计划
-（`src/ard/core/sampling.py:254-276`）。
+（`src/ard/core/sampling.py:255-277`）。
 
 ## 2. 构造规则
 
@@ -50,14 +50,14 @@ flowchart TD
 
 | 轴 | 取值方式 | 证据 |
 |---|---|---|
-| 6 个受限轴（`capability`/`system_prompt_mode`/`conversation_type`/`output_format`/`input_condition`/`answer_mode`） | **穷举合法受限块，每块恰好 1 条** | `src/ard/core/sampling.py:372-452`；`src/ard/core/constraints.py:212-264` |
-| `knowledge_domain` | **轮转**：第 i 条取 `leaves[i % 209]` | `src/ard/core/sampling.py:78`、`:419-421` |
-| `visual_domain` | **轮转**：第 i 条取 `leaves[i % 21]`（仅影像态；文本态缺席） | `src/ard/core/sampling.py:78`、`:419-421` |
-| `language` / `response_style` / `difficulty` / `context_length` | **按 run seed 随机抽取** | `src/ard/core/sampling.py:80-85`、`:417-418`；`_draw` `src/ard/core/sampling.py:325-328` |
-| `modality` | 采样字段（非轴）：前 935 条 `text_only`，后 891 条 `image` | `src/ard/core/sampling.py:428-448`；本体 `ontology/anchor_ontology.v4.json:1303-1309` |
+| 6 个受限轴（`capability`/`system_prompt_mode`/`conversation_type`/`output_format`/`input_condition`/`answer_mode`） | **穷举合法受限块，每块恰好 1 条** | `src/ard/core/sampling.py:373-453`；`src/ard/core/constraints.py:212-264` |
+| `knowledge_domain` | **轮转**：第 i 条取 `leaves[i % 209]` | `src/ard/core/sampling.py:79`、`:420-422` |
+| `visual_domain` | **轮转**：第 i 条取 `leaves[i % 21]`（仅影像态；文本态缺席） | `src/ard/core/sampling.py:79`、`:420-422` |
+| `language` / `response_style` / `difficulty` / `context_length` | **按 run seed 随机抽取** | `src/ard/core/sampling.py:81-86`、`:418-419`；`_draw` `src/ard/core/sampling.py:326-329` |
+| `modality` | 采样字段（非轴）：前 935 条 `text_only`，后 891 条 `image` | `src/ard/core/sampling.py:429-449`；本体 `ontology/anchor_ontology.v4.json:1303-1309` |
 
-已知的两个失败模式都做成**显式报错**而非静默降级：坐标重复（`src/ard/core/sampling.py:360-369`）、本体叶数与期望不符
-（`src/ard/core/sampling.py:254-276`，报文给出 `expected (received: …)`）。
+已知的两个失败模式都做成**显式报错**而非静默降级：坐标重复（`src/ard/core/sampling.py:361-370`）、本体叶数与期望不符
+（`src/ard/core/sampling.py:255-277`，报文给出 `expected (received: …)`）。
 
 **"每块恰好 1 条"的作用域是模态组内**：891 个影像态合法块是 935 个文本态合法块的子集，因此这 891 个
 受限坐标各出现**两次**——文本态组一次、影像态组一次——二者靠采样字段 `modality` 区分，而 `modality` 正是
@@ -81,9 +81,9 @@ flowchart TD
   因为**最后一轮必须是 user**——它的回答才是训练目标，不作为 spec 轮存在（`src/ard/core/types.py:62-75`）。
 
 例：`single_turn`(1) → 1 条消息；`clarification`(2) → 3 条；`constraint_update`(4) → 7 条。
-映射实现见 `src/ard/core/sampling.py:455-486`（`_spec_turns`）与 `:489-519`（`turn_counts_by_conversation_type`）。
+映射实现见 `src/ard/core/sampling.py:456-487`（`_spec_turns`）与 `:490-520`（`turn_counts_by_conversation_type`）。
 
-**`MULTI_TURN_DEFAULT = 4` 的取值依据与本体缺口**（`src/ard/core/sampling.py:162-175`）：
+**`MULTI_TURN_DEFAULT = 4` 的取值依据与本体缺口**（`src/ard/core/sampling.py:163-176`）：
 
 - 依据：本体对 `tool_assisted` 与 `source_review` 只写 `turns: "multi"`，**没有数值上界**；常量取本体自身声明的最大轮数
   `constraint_update = 4`，即"`multi` = 本体已声明的最长交换数"。
@@ -169,12 +169,12 @@ flowchart TD
 
 | 轴 | 取值仍被谁使用（非措辞） | 证据 |
 |---|---|---|
-| `visual_domain` | **决定影像态图片目录** `<image_dir>/<visual_domain>/`；进 manifest 分组标签 | `src/ard/domain/image_store.py:125-211`；调用点 `src/ard/pipeline.py:958-1018`；分组标签 `src/ard/domain/bank.py:453` |
+| `visual_domain` | **决定影像态图片目录** `<image_dir>/<visual_domain>/`；进 manifest 分组标签 | `src/ard/domain/image_store.py:125-211`；调用点 `src/ard/pipeline.py:1017-1077`；分组标签 `src/ard/domain/bank.py:453` |
 
 > 上表在 WP-S14 审计时还有 6 行（`response_style` / `difficulty` / `context_length` / `output_format` /
 > `input_condition` / `answer_mode`）：当时它们的取值只进采样坐标与约束求解，**一个字符都没进 prompt**。WP-S17 已为这 6 条
 > `layer = "instruction"` 的轴补齐措辞，故它们上移到"有措辞的轴"表。它们原先的非措辞用途不变：
-> 采样坐标（`src/ard/core/sampling.py:351-355`）与受限块合法性判定（`src/ard/core/constraints.py:34-36`、`:53-55`、`:228-237`）。
+> 采样坐标（`src/ard/core/sampling.py:352-356`）与受限块合法性判定（`src/ard/core/constraints.py:34-36`、`:53-55`、`:228-237`）。
 
 **边界声明**：12 轴中 **11 轴的取值改变发给模型的 prompt 文本**（4 条 base 轴 + `system_prompt_mode` + 本轮补齐的 6 条
 instruction 轴）；唯一例外是 `visual_domain`——它不进文本，而是经图片目录影响**输入图像的内容**，属内容而非措辞
@@ -224,7 +224,42 @@ v3 本体文件被删除后，原文 "left untouched" 已成假话，故改。�
 
 ⇒ 该改动是 provenance 文本修订，**不构成口径变更**：既有 `q95` 读数、计数与计划都不需要重算。
 
-## 6. 复现
+## 6. 复现与"计划身份"
+
+**计划由 `(本体, seed, 代码)` 唯一决定。** 采样只用显式的 `random.Random(seed)`（`src/ard/core/sampling.py:418`、`_draw` `:326-328`），
+自由轴取值来自本体的有序数组（`ontology/anchor_ontology.v4.json`），受限块按固定嵌套顺序枚举
+（`src/ard/core/constraints.py:212-241`）——没有未播种随机源，没有 `set`/`dict` 迭代顺序依赖。
+实测（S22）：同一 seed 的 1,826 条计划在 `PYTHONHASHSEED` 取 `0/1/42/12345/random/未设` 的 7 个进程里摘要逐字节相同。
 
 - 采样由 `generation.seed` 决定；不设该字段则每次运行从系统随机源抽新 seed，实际使用的 seed 记入输出目录的 `config.toml`（`configs/config.toml:53-56`）。
 - 同一 `(本体, seed)` 必然得到同一计划；构造规则本身无随机性，自由轴之外的取值完全确定。
+
+**但 `seed` 不是计划的名字。** `config.toml`/`manifest.json` 的 `config` 段**每次运行都被覆盖**（含什么都没生成的空转续跑），
+因此它记录的 seed 描述的是**最后一次调用**，不一定是产出 `anchor_bank.jsonl` 的那次计划——S22 定位到的正是这个
+"记录身份错位"：一个历史冒烟产物目录被调用 3 次、后两次空转，用记录 seed `1488279264` 复算该库自由轴仅 11/32 相同
+（同 seed 重算在本仓库是确定的，所以差异只可能来自"记录的不是采样那次"）。
+
+**计划身份是一等公民**：`PlanIdentity.of(plan)`（`src/ard/core/sampling.py:677-726`）对**有序坐标列表**做
+`sha256`，连同**计划条数**、**算法**与**版本**（`PLAN_IDENTITY_VERSION = 1`）写进每次运行的 `manifest.json` `plan_identity` 字段。
+下面是本仓库真实可复算的一例（`--smoke` 计划、`seed = 1488279264`、8 条）：
+
+```json
+"plan_identity": {"algorithm": "sha256", "version": 1, "plan_size": 8,
+                  "digest": "25dae0cd0112fa3a5bccde01f8fd279e0c6be6e53b2187acad23ca353ccc4b1a"}
+```
+
+**复算**（任意进程、任意 `PYTHONHASHSEED` 得到同一摘要；下面是上面那一例，1,826 条全量把 `scale` 去掉即可）：
+
+```bash
+uv run python -c "from ard.backends.ontology_loader import load_ontology_v4; \
+from ard.core.sampling import PlanIdentity, SMOKE_SCALE, sample_anchors; \
+from ard.core.types import AnchorGenerationConfig; \
+o = load_ontology_v4('ontology/anchor_ontology.v4.json'); \
+print(PlanIdentity.of(sample_anchors(o, AnchorGenerationConfig(seed=1488279264), scale=SMOKE_SCALE)).as_dict())"
+```
+
+**续跑判据**（`src/ard/pipeline.py:420-487`）：记录的 `plan_identity` 与本次不同 ⇒ 报错，绝不把两个计划写进同一份
+`anchor_bank.jsonl`；相同 ⇒ 允许续跑。同一计划的判据是摘要，不是 seed——**不同 seed 可以是同一计划，同一 seed 也可以是
+不同计划**（换本体/换 scale）。若产物没有记录 `plan_identity`（旧库），守卫退化为结构校验：库里出现不属于本次计划的
+anchor id 即拒绝，全部属于则允许并记 WARNING。
+
