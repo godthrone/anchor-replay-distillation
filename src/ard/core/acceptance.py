@@ -116,7 +116,7 @@ NOISE_UNAVAILABLE_REASON: Final[str] = (
 #: ``has_image`` / ``image_count`` are stamped by ``ard.core.quota.allocate_images`` /
 #: ``ard.pipeline._assign_images_by_domain``); ``image_count`` is ``min(#user turns,
 #: IMAGES_PER_ANCHOR)`` with ``IMAGES_PER_ANCHOR = 1``
-#: (``src/ard/pipeline.py:356``), so it carries no information the tuple does
+#: (``ard.pipeline.IMAGES_PER_ANCHOR``), so it carries no information the tuple does
 #: not already carry.  The contract test
 #: ``tests/core/test_acceptance_prompt_signature.py`` renders both sides and
 #: fails if any listed axis is a mascot or any unlisted field changes the render.
