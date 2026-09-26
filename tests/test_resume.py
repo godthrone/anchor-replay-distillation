@@ -612,3 +612,46 @@ def test_readout_reconciles_with_the_bank_and_names_the_missing_coordinate(
     assert coverage["structure"]["within_rule"] is True
     assert not any("planned coordinate" in warning for warning in coverage["warnings"])
     assert len(_records(bank)) == _PLAN_SIZE
+
+
+# ── 7. a resume that changes the seed is refused, not merged (B5) ────────────
+
+
+def test_resume_with_a_different_seed_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A different seed is a different plan: refusing beats silently mixing (B5)."""
+    from ard.config import ConfigError, load_config
+    from ard.pipeline import run
+
+    output_dir, bank, _spy, plan = _resume_rig(tmp_path, monkeypatch, existing=0)
+    run(load_config(tmp_path / "config.toml"), generate_specs=plan)
+    before = bank.read_text(encoding="utf-8")
+    snapshot = (output_dir / "config.toml").read_text(encoding="utf-8")
+    assert "seed = 7" in snapshot
+
+    # The user edits the seed and resumes the same output directory.
+    _write_config(tmp_path / "config.toml", output_dir, overwrite=False, seed=9)
+    with pytest.raises(ConfigError, match="different generation seed"):
+        run(load_config(tmp_path / "config.toml"), generate_specs=plan)
+
+    assert bank.read_text(encoding="utf-8") == before, (
+        "a refused resume must not append anything to the bank"
+    )
+    assert (output_dir / "config.toml").read_text(encoding="utf-8") == snapshot, (
+        "a refused resume must not overwrite the previous run's seed snapshot"
+    )
+
+
+def test_resume_with_the_same_seed_still_works(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refusal is specific to a *changed* seed, not to resuming at all."""
+    from ard.config import load_config
+    from ard.pipeline import run
+
+    _output_dir, bank, _spy, plan = _resume_rig(tmp_path, monkeypatch, existing=2)
+
+    run(load_config(tmp_path / "config.toml"), generate_specs=plan)
+
+    assert len(_records(bank)) == _TARGET_COUNT
