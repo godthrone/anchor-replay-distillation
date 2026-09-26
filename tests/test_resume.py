@@ -563,3 +563,52 @@ def test_resume_asks_for_a_middle_anchor_the_previous_run_abandoned(
         "so the bank is not re-sorted into plan order"
     )
     assert (output_dir / "results" / "coverage.json").is_file()
+
+
+def test_readout_reconciles_with_the_bank_and_names_the_missing_coordinate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F1: ``coverage.json`` must never read green while the bank is short.
+
+    The construction rule's expected counts are shrunk to the plan double's size
+    so that ``within_rule`` would otherwise be *true* — the test then measures
+    the bank reconciliation, not "the double is deliberately small".  Run 1
+    abandons a middle entry; the readout has to report ``within_rule=false`` and
+    name ``resumed-2``.  Run 2 fills it and the readout turns truthful again.
+    """
+    from ard.config import load_config
+    from ard.core import sampling as sampling_module
+    from ard.pipeline import run
+
+    monkeypatch.setattr(sampling_module, "EXPECTED_TOTAL", _PLAN_SIZE)
+    monkeypatch.setattr(sampling_module, "EXPECTED_TEXT_BLOCKS", 0)
+    monkeypatch.setattr(sampling_module, "EXPECTED_IMAGE_BLOCKS", 0)
+    monkeypatch.setattr(sampling_module, "EXPECTED_KNOWLEDGE_DOMAINS", _PLAN_SIZE)
+    monkeypatch.setattr(sampling_module, "EXPECTED_VISUAL_DOMAINS", 0)
+
+    def plan(_config: object) -> list[AnchorSpec]:
+        return _distinct_plan()
+
+    output_dir, bank, _spy, _ = _resume_rig(
+        tmp_path, monkeypatch, existing=0, abandoned={"resumed-2"}
+    )
+    run(load_config(tmp_path / "config.toml"), generate_specs=plan)
+
+    coverage = json.loads((output_dir / "results" / "coverage.json").read_text(encoding="utf-8"))
+    assert coverage["structure"]["within_rule"] is False, (
+        "a bank short a planned coordinate must not be reported as within the rule"
+    )
+    assert any(
+        "missing 1 planned coordinate" in warning and "resumed-2" in warning
+        for warning in coverage["warnings"]
+    ), "the readout must name the missing coordinate, not only flip the flag"
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["total_anchors"] == _PLAN_SIZE - 1
+
+    monkeypatch.setattr("ard.pipeline.generate_text_anchors", _RunSpy("resumed"))
+    run(load_config(tmp_path / "config.toml"), generate_specs=plan)
+
+    coverage = json.loads((output_dir / "results" / "coverage.json").read_text(encoding="utf-8"))
+    assert coverage["structure"]["within_rule"] is True
+    assert not any("planned coordinate" in warning for warning in coverage["warnings"])
+    assert len(_records(bank)) == _PLAN_SIZE

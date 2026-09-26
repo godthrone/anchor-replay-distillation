@@ -354,6 +354,11 @@ SpecSampler = Callable[[ARDConfig], list[AnchorSpec]]
 #: plan describes — it is not a configurable knob.
 IMAGES_PER_ANCHOR = 1
 
+#: How many missing coordinates the acceptance warning spells out before it
+#: summarises the rest (the count is always exact).  A wholly failed run must not
+#: paste 1,826 coordinates into the log.
+_MISSING_COORDINATE_LIMIT = 20
+
 SMOKE_RUN_SUFFIX = "_smoke"
 """Run-directory suffix that keeps a smoke artifact from looking like a delivery.
 
@@ -594,6 +599,42 @@ def _write_coverage_report(report: acceptance.AcceptanceReport, results_dir: Pat
     return coverage_json
 
 
+def _coordinate_label(meta: JsonObject) -> str:
+    """A stable, human-readable rendering of one anchor coordinate."""
+    return ", ".join(f"{key}={meta[key]!r}" for key in sorted(meta))
+
+
+def _missing_plan_coordinates(
+    plan: list[AnchorSpec],
+    records: JsonObjectList,
+) -> list[AnchorSpec]:
+    """The planned specs whose id is absent from *records*, in plan order.
+
+    Identity, not position: a bank missing a *middle* coordinate is not a short
+    prefix of the plan, and only the id says which coordinate is missing.
+    """
+    present = {record.get("id") for record in records}
+    return [spec for spec in plan if spec.id not in present]
+
+
+def _missing_coordinates_warning(missing: list[AnchorSpec]) -> str:
+    """One WARNING naming the planned coordinates the bank does not hold (F1).
+
+    The list is capped so a wholly failed run cannot paste 1,826 coordinates
+    into the log; the count is always exact.
+    """
+    shown = missing[:_MISSING_COORDINATE_LIMIT]
+    listed = "; ".join(f"{spec.id} ({_coordinate_label(spec.anchor_meta)})" for spec in shown)
+    if len(missing) > _MISSING_COORDINATE_LIMIT:
+        listed += f"; … and {len(missing) - _MISSING_COORDINATE_LIMIT} more"
+    return (
+        f"the bank is missing {len(missing)} planned coordinate(s), so within_rule is "
+        f"reported false: {listed}. results/coverage.json and manifest.json describe the "
+        "same artifact — rerun to fill them (a resume asks only for coordinates absent "
+        "from the bank)."
+    )
+
+
 def _run_acceptance(
     config: ARDConfig,
     coverage_inputs: _CoverageInputs | None,
@@ -623,6 +664,16 @@ def _run_acceptance(
 
     structure = acceptance.structure_readout([spec.anchor_meta for spec in plan])
     warnings: list[str] = []
+    # The structure readout describes the *plan*; it must not claim the artifact
+    # is within the rule while the bank is short a planned coordinate (F1).  A
+    # plan can be perfectly rule-conformant and still have an anchor that never
+    # reached the library (a failed generation the resume did not retry — the
+    # bug this fixes — or one that failed again).  Reconcile the two by identity
+    # and name what is missing instead of only flipping the flag.
+    missing = _missing_plan_coordinates(plan, records)
+    if missing:
+        structure = structure.model_copy(update={"within_rule": False})
+        warnings.append(_missing_coordinates_warning(missing))
     mismatch = acceptance.structure_mismatch(structure)
     if mismatch is not None:
         warnings.append(mismatch)
