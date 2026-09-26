@@ -27,6 +27,18 @@ or a key), the noise-band assembly, and the report rendering.
 The declared anchor field is the final user turn's **text parts only**
 (:data:`ANCHOR_TEXT_FIELD`): an image-modality anchor participates through the
 text of its request, and its image pixels never enter the metric space.
+
+Two readings exist so that a count of *planned blocks* cannot be mistaken for a
+count of *effective specifications* (WP-S14 audit, WP-S18):
+
+* :data:`PROMPT_SIGNATURE_AXES` names the ``anchor_meta`` fields the
+  generator-side prompt assembly actually reads.  Both the noise band's repeat
+  groups and the structure readout's ``prompt_signature_distinct`` are defined
+  on that tuple — grouping by the whole ``anchor_meta`` would split two records
+  that issue the identical request and therefore **understate** the noise;
+* ``effective_projection_distinct`` counts the distinct projections onto the
+  restricted axes that reach the prompt, so a block count that includes axes no
+  prompt consumer reads cannot be reported as "effective diversity".
 """
 
 from __future__ import annotations
@@ -37,12 +49,17 @@ from typing import Any, Final, TypeAlias
 import numpy as np
 from pydantic import BaseModel, ConfigDict
 
-from ard.core import constraints, sampling
+from ard.core import axis_instruction, constraints, sampling
 from ard.core import coverage as ruler
 from ard.core.types import JsonObjectSequence, StringPairs
 
 #: Version of the acceptance report schema — bumped when a field changes meaning.
-REPORT_SCHEMA: Final[str] = "ard-acceptance-1"
+#: ``ard-acceptance-2`` (WP-S18) adds ``structure.prompt_signature_distinct``,
+#: ``structure.effective_projection_distinct`` and ``structure.diversity``, and
+#: redefines the noise band's repeat groups from "whole ``anchor_meta``" to
+#: "prompt signature": a reader of an ``ard-acceptance-1`` report must not read
+#: ``noise.n_repeat_groups`` as the same quantity as here.
+REPORT_SCHEMA: Final[str] = "ard-acceptance-2"
 
 #: Which artifact field the anchor side embeds, declared in every report.
 #: The ``(text parts only)`` qualifier is load-bearing, not decoration: an
@@ -69,10 +86,85 @@ NOISE_UNAVAILABLE_REASON: Final[str] = (
     "noise band unavailable (no repeated generation data provided)"
 )
 
+#: The ``anchor_meta`` fields the generator-side prompt assembly **actually
+#: reads**, in signature order.  Two coordinates that agree on all of them issue
+#: the byte-identical generator-side request, so they are one cell for the noise
+#: band and one prompt for the diversity readout.
+#:
+#: Evidence in the current tree — one entry per consumer, no inference:
+#:
+#: * ``language`` / ``knowledge_domain`` / ``capability`` / ``conversation_type``
+#:   — ``src/ard/domain/text_anchor.py:233-236`` reads exactly these four from
+#:   ``anchor_meta``; ``:266-284`` turns them into the instruction (the image
+#:   branch at ``:270-276`` drops ``knowledge_domain``, which is why the four are
+#:   one group) and ``:286-291`` assembles the system string.
+#: * ``system_prompt_mode`` — chooses the wording file
+#:   (``src/ard/backends/prompt_loader.py:99-100``), and the mode's template is
+#:   filled from ``language`` / ``capability`` / ``knowledge_domain``
+#:   (``src/ard/core/system_prompt.py:83-87``).
+#: * the six instruction axes (:data:`ard.core.axis_instruction.INSTRUCTION_AXES`,
+#:   imported below, not re-listed) — ``src/ard/domain/text_anchor.py:242-243``
+#:   turns every one of them into a requirement clause; the per-axis read is
+#:   ``src/ard/backends/axis_instruction_loader.py:96-97``.
+#: * ``visual_domain`` — selects ``<image_dir>/<visual_domain>``
+#:   (``src/ard/domain/image_store.py:128-130``), i.e. *which* image the request
+#:   carries; for a text-only coordinate the axis is absent, which is itself the
+#:   distinction from an image coordinate.
+#:
+#: Deliberately **not** in the tuple: ``modality`` / ``has_image`` /
+#: ``image_count``.  They are plan bookkeeping (``modality`` selects the branch,
+#: ``has_image`` / ``image_count`` are stamped by
+#: ``src/ard/pipeline.py:550-553``); ``image_count`` is ``min(#user turns,
+#: IMAGES_PER_ANCHOR)`` with ``IMAGES_PER_ANCHOR = 1``
+#: (``src/ard/pipeline.py:356``), so it carries no information the tuple does
+#: not already carry.  The contract test
+#: ``tests/core/test_acceptance_prompt_signature.py`` renders both sides and
+#: fails if any listed axis is a mascot or any unlisted field changes the render.
+PROMPT_SIGNATURE_AXES: Final[tuple[str, ...]] = (
+    "language",
+    "knowledge_domain",
+    "capability",
+    "conversation_type",
+    "system_prompt_mode",
+    *axis_instruction.INSTRUCTION_AXES,
+    "visual_domain",
+)
+
+#: The restricted axes whose value reaches the prompt: the intersection of
+#: :data:`ard.core.constraints.RESTRICTED_AXES` with
+#: :data:`PROMPT_SIGNATURE_AXES`.  It is derived, not written down, so an axis
+#: that stops reaching the prompt leaves this projection on its own.
+EFFECTIVE_PROJECTION_AXES: Final[tuple[str, ...]] = tuple(
+    axis for axis in constraints.RESTRICTED_AXES if axis in PROMPT_SIGNATURE_AXES
+)
+
+#: The definition of the prompt signature, stated in every report.
+PROMPT_SIGNATURE_DEFINITION: Final[str] = (
+    "ordered tuple of the values of the axes listed here (a missing axis is None) "
+    "over one plan entry's anchor_meta; two entries share a signature iff the "
+    "generator-side request they fix is the same (input-generator system string, "
+    "system-message generation request, spec turn count, and the image the "
+    "coordinate carries)"
+)
+
+#: The definition of the effective restricted projection, stated in every report.
+EFFECTIVE_PROJECTION_DEFINITION: Final[str] = (
+    "ordered tuple of the values of the restricted axes (constraints.RESTRICTED_AXES) "
+    "that reach the prompt; it is the number of distinct restricted specifications "
+    "that can actually change what is generated, so it can never exceed the legal "
+    "block count and must equal it when no legal block is inert"
+)
+
+#: What the two distinct counts are counted over, stated in every report.
+DIVERSITY_COUNTED_OVER: Final[str] = (
+    "plan entries, split by their 'modality' value (text_only / image); an entry "
+    "of any other modality is counted in neither"
+)
+
 #: One restricted-axis value tuple: a sampled block's identity in the plan.
 BlockKey: TypeAlias = tuple[Any, ...]
 
-#: Record indices of anchors that share one coordinate.
+#: Record indices of anchors that share one prompt signature.
 IndexGroup: TypeAlias = list[int]
 
 #: One structure check: its label, the measured count, the expected count.
@@ -104,6 +196,39 @@ class Conventions(BaseModel):
     turn_count_mapping: str
 
 
+class ModalityDistinct(BaseModel):
+    """One distinct-class count per modality.
+
+    A ``ModalityDistinct`` is deliberately not a single integer: the plan's
+    blocks, signatures and projections are already reported per modality
+    (``plan_text_entries`` / ``plan_image_entries``,
+    ``text_block_count`` / ``image_block_count``), and a single pooled count
+    would hide a collapse that happens in only one of the two.
+    """
+
+    model_config = _STRICT
+
+    text_only: int
+    image: int
+
+
+class DiversityDeclaration(BaseModel):
+    """The definition behind the two distinct counts — stated, not implied.
+
+    A number called "distinct" is meaningless without the tuple it is distinct
+    over, so the readout carries the axes, the join rule and the population it
+    was counted on (``docs/measurement.md`` §11).
+    """
+
+    model_config = _STRICT
+
+    counted_over: str
+    prompt_signature_axes: tuple[str, ...]
+    prompt_signature_definition: str
+    effective_projection_axes: tuple[str, ...]
+    effective_projection_definition: str
+
+
 class StructureReadout(BaseModel):
     """What the plan covers, next to what the construction rule expects.
 
@@ -120,13 +245,26 @@ class StructureReadout(BaseModel):
             plan entries.
         image_block_count: distinct legal restricted blocks covered by the image
             plan entries.
+        prompt_signature_distinct: distinct prompt signatures
+            (:data:`PROMPT_SIGNATURE_AXES`), per modality — how many
+            *different generator-side requests* the plan's entries fix, as
+            opposed to how many entries it has.
+        effective_projection_distinct: distinct projections onto
+            :data:`EFFECTIVE_PROJECTION_AXES` (the restricted axes that reach the
+            prompt), per modality.  A legal block whose extra restricted axes no
+            prompt consumer reads collapses here; the count can never exceed
+            ``text_block_count`` / ``image_block_count``.
         knowledge_domain_leaves: distinct ``knowledge_domain`` leaves covered.
         visual_domain_leaves: distinct ``visual_domain`` leaves covered.
         duplicate_coordinates: plan entries sharing another entry's full
             coordinate identity.
         expected_*: the rule's own counts, read from :mod:`ard.core.sampling`.
         conventions: the ``MULTI_TURN_DEFAULT`` / turn-mapping statements.
-        within_rule: every measured count equals its expected count.
+        diversity: the definition of the two distinct counts above.
+        within_rule: every measured count equals its expected count — including
+            the two diversity counts, so a plan that covers 935 legal blocks
+            while two of them collapse into one prompt is reported as *not*
+            within the rule.
     """
 
     model_config = _STRICT
@@ -136,6 +274,8 @@ class StructureReadout(BaseModel):
     plan_image_entries: int
     text_block_count: int
     image_block_count: int
+    prompt_signature_distinct: ModalityDistinct
+    effective_projection_distinct: ModalityDistinct
     knowledge_domain_leaves: int
     visual_domain_leaves: int
     duplicate_coordinates: int
@@ -145,6 +285,7 @@ class StructureReadout(BaseModel):
     expected_knowledge_domains: int
     expected_visual_domains: int
     conventions: Conventions
+    diversity: DiversityDeclaration
     within_rule: bool
 
 
@@ -201,7 +342,7 @@ class NoiseSection(BaseModel):
         reason: the explicit unavailability statement when ``available`` is
             ``False`` — the band is never silently omitted (§3.2).
         band: ``[q50, max]`` of the repeat-generation pair distances.
-        n_repeat_groups: coordinates that appeared more than once.
+        n_repeat_groups: prompt signatures that appeared more than once.
         n_pairs: repeat-generation pairs measured.
     """
 
@@ -257,6 +398,21 @@ def conventions() -> Conventions:
     )
 
 
+def prompt_signature(meta: Mapping[str, Any]) -> tuple[Any, ...]:
+    """Return the prompt signature of one coordinate: the tuple of
+    :data:`PROMPT_SIGNATURE_AXES` values, in signature order.
+
+    Two coordinates with the same signature issue the same generator-side
+    request, so they are one cell for the noise band.  A missing axis becomes
+    ``None`` rather than a default: ``None`` is "the coordinate does not carry
+    the axis", which is not the same as carrying the axis' first value.
+
+    Pure tuple arithmetic — this module declares *which* fields matter; the
+    renderers remain the only place the prompts are built (§1.4 单一真相源).
+    """
+    return tuple(meta.get(axis) for axis in PROMPT_SIGNATURE_AXES)
+
+
 def structure_readout(plan: JsonObjectSequence) -> StructureReadout:
     """Summarise *plan*: plan coordinates in, coverage counts out.
 
@@ -270,6 +426,7 @@ def structure_readout(plan: JsonObjectSequence) -> StructureReadout:
         whether the plan matches them.
     """
     restricted_axes = constraints.RESTRICTED_AXES
+    effective_axes = EFFECTIVE_PROJECTION_AXES
     knowledge_axis, visual_axis = sampling.ROTATED_FREE_AXES
     text_modality = sampling.MODALITY_TEXT
     image_modality = sampling.MODALITY_IMAGE
@@ -278,6 +435,8 @@ def structure_readout(plan: JsonObjectSequence) -> StructureReadout:
     image_entries = 0
     text_blocks: set[BlockKey] = set()
     image_blocks: set[BlockKey] = set()
+    signatures: dict[str, set[tuple[Any, ...]]] = {text_modality: set(), image_modality: set()}
+    projections: dict[str, set[BlockKey]] = {text_modality: set(), image_modality: set()}
     knowledge_leaves: set[str] = set()
     visual_leaves: set[str] = set()
     identities: set[StringPairs] = set()
@@ -285,12 +444,15 @@ def structure_readout(plan: JsonObjectSequence) -> StructureReadout:
     for meta in plan:
         identities.add(tuple(sorted((str(key), str(value)) for key, value in meta.items())))
         modality = meta.get("modality")
-        if modality == text_modality:
-            text_entries += 1
-            text_blocks.add(tuple(meta.get(axis) for axis in restricted_axes))
-        elif modality == image_modality:
-            image_entries += 1
-            image_blocks.add(tuple(meta.get(axis) for axis in restricted_axes))
+        if modality in signatures:
+            signatures[modality].add(prompt_signature(meta))
+            projections[modality].add(tuple(meta.get(axis) for axis in effective_axes))
+            if modality == text_modality:
+                text_entries += 1
+                text_blocks.add(tuple(meta.get(axis) for axis in restricted_axes))
+            else:
+                image_entries += 1
+                image_blocks.add(tuple(meta.get(axis) for axis in restricted_axes))
         knowledge = meta.get(knowledge_axis)
         if knowledge is not None:
             knowledge_leaves.add(str(knowledge))
@@ -305,12 +467,27 @@ def structure_readout(plan: JsonObjectSequence) -> StructureReadout:
     expected_image = sampling.EXPECTED_IMAGE_BLOCKS
     expected_knowledge = sampling.EXPECTED_KNOWLEDGE_DOMAINS
     expected_visual = sampling.EXPECTED_VISUAL_DOMAINS
+    signature_distinct = ModalityDistinct(
+        text_only=len(signatures[text_modality]),
+        image=len(signatures[image_modality]),
+    )
+    projection_distinct = ModalityDistinct(
+        text_only=len(projections[text_modality]),
+        image=len(projections[image_modality]),
+    )
     within_rule = (
         plan_total == expected_total
         and text_entries == expected_text
         and image_entries == expected_image
         and len(text_blocks) == expected_text
         and len(image_blocks) == expected_image
+        # A plan can cover every legal block and still collapse two of them
+        # onto one prompt; that is not "the rule's plan", so both diversity
+        # counts are part of the conjunction (WP-S18).
+        and signature_distinct.text_only == expected_text
+        and signature_distinct.image == expected_image
+        and projection_distinct.text_only == expected_text
+        and projection_distinct.image == expected_image
         and len(knowledge_leaves) == expected_knowledge
         and len(visual_leaves) == expected_visual
         and duplicates == 0
@@ -321,6 +498,8 @@ def structure_readout(plan: JsonObjectSequence) -> StructureReadout:
         plan_image_entries=image_entries,
         text_block_count=len(text_blocks),
         image_block_count=len(image_blocks),
+        prompt_signature_distinct=signature_distinct,
+        effective_projection_distinct=projection_distinct,
         knowledge_domain_leaves=len(knowledge_leaves),
         visual_domain_leaves=len(visual_leaves),
         duplicate_coordinates=duplicates,
@@ -330,6 +509,13 @@ def structure_readout(plan: JsonObjectSequence) -> StructureReadout:
         expected_knowledge_domains=expected_knowledge,
         expected_visual_domains=expected_visual,
         conventions=conventions(),
+        diversity=DiversityDeclaration(
+            counted_over=DIVERSITY_COUNTED_OVER,
+            prompt_signature_axes=PROMPT_SIGNATURE_AXES,
+            prompt_signature_definition=PROMPT_SIGNATURE_DEFINITION,
+            effective_projection_axes=EFFECTIVE_PROJECTION_AXES,
+            effective_projection_definition=EFFECTIVE_PROJECTION_DEFINITION,
+        ),
         within_rule=within_rule,
     )
 
@@ -347,6 +533,26 @@ def structure_mismatch(structure: StructureReadout) -> str | None:
         ("image plan entries", structure.plan_image_entries, structure.expected_image_blocks),
         ("legal text blocks", structure.text_block_count, structure.expected_text_blocks),
         ("legal image blocks", structure.image_block_count, structure.expected_image_blocks),
+        (
+            "prompt signatures (text_only)",
+            structure.prompt_signature_distinct.text_only,
+            structure.expected_text_blocks,
+        ),
+        (
+            "prompt signatures (image)",
+            structure.prompt_signature_distinct.image,
+            structure.expected_image_blocks,
+        ),
+        (
+            "effective restricted projections (text_only)",
+            structure.effective_projection_distinct.text_only,
+            structure.expected_text_blocks,
+        ),
+        (
+            "effective restricted projections (image)",
+            structure.effective_projection_distinct.image,
+            structure.expected_image_blocks,
+        ),
         (
             "knowledge_domain leaves",
             structure.knowledge_domain_leaves,
@@ -468,24 +674,31 @@ def anchor_texts(records: JsonObjectSequence) -> list[str]:
 
 
 def repeat_groups(coordinates: JsonObjectSequence) -> list[IndexGroup]:
-    """Group record indices that carry the **same** full coordinate.
+    """Group record indices that carry the **same prompt signature**.
 
-    The v4 plan has no repeated coordinate, so this list is normally empty; it
-    becomes non-empty only when the bank holds repeated generations of one cell,
-    which is exactly what the noise band needs.
+    The noise band answers "how far apart do two generations of *the same
+    request* land?", so the grouping key is :func:`prompt_signature` — the fields
+    the generator-side assembly actually reads — and not the whole
+    ``anchor_meta``.  Grouping by the whole mapping would split two records whose
+    requests are byte-identical (they differ only in a field no consumer reads)
+    and would therefore **understate** the noise band (WP-S14 §3, WP-S18 ①).
+
+    The bar for measuring a band is unchanged and is deliberately not relaxed: a
+    signature must appear at least twice.  The v4 plan has no repeated signature,
+    so this list is normally empty and the band is reported ``unavailable``; it
+    becomes non-empty only when the bank holds repeated generations of one cell.
 
     Raises:
         AcceptanceError: if a record carries no ``anchor_meta`` mapping.
     """
-    groups: dict[StringPairs, IndexGroup] = {}
+    groups: dict[tuple[Any, ...], IndexGroup] = {}
     for index, meta in enumerate(coordinates):
         if not isinstance(meta, Mapping) or not meta:
             raise AcceptanceError(
                 f"anchor record {index} carries no 'anchor_meta' coordinate mapping, so "
                 "repeat-generation groups cannot be formed"
             )
-        key = tuple(sorted((str(axis), str(value)) for axis, value in meta.items()))
-        groups.setdefault(key, []).append(index)
+        groups.setdefault(prompt_signature(meta), []).append(index)
     return [indices for indices in groups.values() if len(indices) >= 2]
 
 
@@ -518,11 +731,11 @@ def noise_section(anchors: ruler.VectorSet, groups: Sequence[IndexGroup]) -> Noi
 
     Args:
         anchors: the embedded anchor set, indexed like the bank records.
-        groups: index groups of records sharing one coordinate.
+        groups: index groups of records sharing one prompt signature.
 
     Returns:
-        An available band when at least one coordinate has repeats, otherwise an
-        explicit :data:`NOISE_UNAVAILABLE_REASON` statement.
+        An available band when at least one prompt signature has repeats,
+        otherwise an explicit :data:`NOISE_UNAVAILABLE_REASON` statement.
     """
     if not groups:
         return NoiseSection(
@@ -602,6 +815,8 @@ def _status(measured: int, expected: int) -> str:
 def render_markdown(report: AcceptanceReport) -> str:
     """Render *report* as the human-readable ``coverage.md`` companion."""
     structure = report.structure
+    signature = structure.prompt_signature_distinct
+    projection = structure.effective_projection_distinct
     lines: list[str] = [
         "# ARD acceptance readout",
         "",
@@ -627,6 +842,18 @@ def render_markdown(report: AcceptanceReport) -> str:
         f"| legal restricted blocks (image) | {structure.image_block_count} | "
         f"{structure.expected_image_blocks} | "
         f"{_status(structure.image_block_count, structure.expected_image_blocks)} |",
+        f"| prompt signature distinct (text_only) | {signature.text_only} | "
+        f"{structure.expected_text_blocks} | "
+        f"{_status(signature.text_only, structure.expected_text_blocks)} |",
+        f"| prompt signature distinct (image) | {signature.image} | "
+        f"{structure.expected_image_blocks} | "
+        f"{_status(signature.image, structure.expected_image_blocks)} |",
+        f"| effective restricted projection distinct (text_only) | "
+        f"{projection.text_only} | {structure.expected_text_blocks} | "
+        f"{_status(projection.text_only, structure.expected_text_blocks)} |",
+        f"| effective restricted projection distinct (image) | "
+        f"{projection.image} | {structure.expected_image_blocks} | "
+        f"{_status(projection.image, structure.expected_image_blocks)} |",
         f"| knowledge_domain leaves | {structure.knowledge_domain_leaves} | "
         f"{structure.expected_knowledge_domains} | "
         f"{_status(structure.knowledge_domain_leaves, structure.expected_knowledge_domains)} |",
@@ -641,6 +868,20 @@ def render_markdown(report: AcceptanceReport) -> str:
         f"- constants read from `{structure.conventions.sampling_module}` at report time",
         f"- `MULTI_TURN_DEFAULT = {structure.conventions.multi_turn_default}`",
         f"- turn-count mapping: {structure.conventions.turn_count_mapping}",
+        "",
+        "## Diversity declaration (what the two distinct counts mean)",
+        "",
+        f"- counted over: {structure.diversity.counted_over}",
+        f"- prompt signature = {structure.diversity.prompt_signature_definition}",
+        f"  axes: `{'`, `'.join(structure.diversity.prompt_signature_axes)}`",
+        f"- effective restricted projection = "
+        f"{structure.diversity.effective_projection_definition}",
+        f"  axes: `{'`, `'.join(structure.diversity.effective_projection_axes)}`",
+        "- reading note: a *legal block count* is a count of planned cells; only "
+        "these two counts say how many of them are different specifications. "
+        "`MISMATCH` above means a planned cell does **not** produce its own "
+        "prompt, so the block count must not be read as effective diversity "
+        "(`docs/measurement.md` §11).",
         "",
     ]
     metrics = report.metrics
@@ -678,7 +919,8 @@ def render_markdown(report: AcceptanceReport) -> str:
         if noise.available and noise.band is not None:
             lines += [
                 f"- noise band `[{noise.band.lower:.6f}, {noise.band.upper:.6f}]` from "
-                f"{noise.n_repeat_groups} repeated coordinate(s), {noise.n_pairs} pair(s)",
+                f"{noise.n_repeat_groups} repeated prompt signature(s), "
+                f"{noise.n_pairs} pair(s)",
                 "",
             ]
         else:
