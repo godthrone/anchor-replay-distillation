@@ -47,6 +47,7 @@ from ard.backends.api_client import (
     ChatAPIClient,
     ChatAPIStats,
 )
+from ard.backends.axis_instruction_loader import build_axis_requirements
 from ard.backends.prompt_loader import build_system_prompt_prompt
 from ard.core.system_prompt import SYSTEM_PROMPT_NONE
 from ard.core.types import (
@@ -215,7 +216,10 @@ def _build_user_prompt(
     Args:
         turn: Current turn specification with generation instruction.
         messages: Conversation history so far.
-        anchor_meta: Anchor metadata (language, domain, capability, etc.).
+        anchor_meta: Anchor metadata (language, domain, capability, etc.), plus
+            the six instruction axes whose wording
+            :func:`~ard.backends.axis_instruction_loader.build_axis_requirements`
+            turns into a requirement clause.
         image_path: Optional path to an image file.  Kept for backward
             compatibility; image encoding is now handled by the caller.
             Ignored if *image_data_url* is provided.
@@ -230,6 +234,13 @@ def _build_user_prompt(
     domain = anchor_meta.get("knowledge_domain", "general")
     capability = anchor_meta.get("capability", "qa")
     conv_type = anchor_meta.get("conversation_type", "single_turn")
+
+    # The six instruction axes (response_style / output_format / difficulty /
+    # context_length / input_condition / answer_mode) are wording, not just
+    # coordinates: their values become a requirement clause here, at the single
+    # assembly point every generated user turn goes through.
+    axis_requirements = build_axis_requirements(anchor_meta)
+    requirement_clause = f"{axis_requirements} " if axis_requirements else ""
 
     # Build conversation history text
     history_text = ""
@@ -275,6 +286,7 @@ def _build_user_prompt(
     system_prompt = (
         f"You are a helpful assistant simulating a real user. "
         f"{instruction} "
+        f"{requirement_clause}"
         f"Only output the user message, nothing else."
     )
 
