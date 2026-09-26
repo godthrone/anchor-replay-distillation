@@ -103,7 +103,8 @@ uv run python -m ard --config configs/config.toml --smoke --image-dir examples/i
   零模型调用、恒产出；未配置目标集时它对完整计划报 `within_rule: false`、`metrics: null`，
   这正是冒烟运行该说的话——8 条不是 1,826 条计划，报告不假装它是；
 - `manifest.json`——库构成 + 冒烟申报；
-- `config.toml` 与 `logs/`。
+- `config.toml` 与 `logs/`。运行尚未结束时还会有一份 `plan_identity.in_progress.json`：
+  把目录绑定到计划的中间记录；运行完成后只保留 `manifest.json` 作为申报。
 
 **完整运行**——全部 1,826 条锚点，每一轮一次端点调用。请自备图片目录，按
 `<image_dir>/<visual_domain>/<图片文件>` 布局，且 **21 个视觉域齐备**：
@@ -197,12 +198,20 @@ uv run python -m ard --config configs/config.toml --smoke --image-dir examples/i
 outputs/<run_name>/          # 默认 ard_dataset_<YYYYmmdd_HHMMSS>；--smoke 追加 _smoke
 ├── anchor_bank.jsonl        # 每行一条记录，schema_version 4.0.0
 ├── config.toml              # 合并后的配置快照，凭证已脱敏
+├── plan_identity.in_progress.json  # 仅运行未结束时存在：中途的计划身份记录
 ├── logs/                    # ard.log / ard_debug.log / ard_error.log
 ├── results/
 │   ├── coverage.json        # 机器可读的验收读数
 │   └── coverage.md          # 同一份读数的人读版
-└── manifest.json            # 库构成、运行健康、配置、acceptance 指针
+└── manifest.json            # 库构成、运行健康、配置、acceptance 指针（权威申报）
 ```
+
+`manifest.json` 是**权威**申报：`status: "complete"`、库构成、运行健康计数器与 `acceptance` 指针。
+`plan_identity.in_progress.json` 是中间态记录：计划固定、第一次端点调用之前落盘，运行正常结束时删除。
+它带 `status: "in_progress"` 与本次的 `plan_identity`，**不含**运行健康（那时还不存在）。它让
+**中断的运行也能被审计**——1,826 条那条路本来就会被反复中断/续跑，这份记录把目录绑定到产出它的计划。
+它的 `counters` 只是快照，**不得**当作完成度或验收申报来读；其中的计划身份可以用 `PlanIdentity.of(plan)`
+独立复算、逐位比对摘要。见 [docs/architecture.md](docs/architecture.md) 第 4 节。
 
 `results/coverage.{json,md}` 是**验收读数，不是训练数据**：
 

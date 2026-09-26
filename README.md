@@ -123,7 +123,9 @@ set `[output] directory` in config to pin the name). After a few minutes you sho
   plan and `metrics: null`, which is exactly what a smoke run should say — 8 anchors are not
   the 1,826-anchor plan, and the report does not pretend otherwise;
 - `manifest.json` — composition plus the smoke declaration;
-- `config.toml` and `logs/`.
+- `config.toml` and `logs/`. While the run is still going there is also
+  `plan_identity.in_progress.json`, an intermediate record that binds the directory to the
+  plan; a finished run keeps only `manifest.json` as its declaration.
 
 **Full run** — all 1,826 anchors, one endpoint call per turn. Supply your own image directory
 laid out as `<image_dir>/<visual_domain>/<image file>` with all 21 visual domains present:
@@ -226,12 +228,23 @@ by the override.
 outputs/<run_name>/          # default ard_dataset_<YYYYmmdd_HHMMSS>; --smoke appends _smoke
 ├── anchor_bank.jsonl        # one record per line, schema_version 4.0.0
 ├── config.toml              # merged config snapshot, credentials redacted
+├── plan_identity.in_progress.json  # only while a run is unfinished: its plan-identity record
 ├── logs/                    # ard.log / ard_debug.log / ard_error.log
 ├── results/
 │   ├── coverage.json        # machine-readable acceptance readout
 │   └── coverage.md          # the same readout, human-readable
-└── manifest.json            # composition, run health, config, acceptance pointer
+└── manifest.json            # composition, run health, config, acceptance pointer (the authoritative one)
 ```
+
+`manifest.json` is the **authoritative** declaration: `status: "complete"`, the bank's composition, the
+run-health counters and the `acceptance` pointer. `plan_identity.in_progress.json` is an intermediate
+record, written once the plan exists and before the first endpoint call, and deleted when the run
+finishes. It carries `status: "in_progress"` and the run's `plan_identity` — **not** run health, because
+none exists yet. It is what makes an interrupted run auditable: the 1,826-anchor path is routinely
+stopped and resumed, and this record binds such a directory to the plan that produced it. Its `counters`
+are a snapshot, so it must never be read as a completion or acceptance claim; the plan identity in it can
+be verified by recomputing `PlanIdentity.of(plan)` and comparing digests. See
+[docs/architecture.md](docs/architecture.md) section 4.
 
 `results/coverage.{json,md}` is the acceptance readout, not training data:
 
