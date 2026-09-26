@@ -2,9 +2,10 @@
 
 > 职责：说明 ARD 的模块边界、数据流、入口链路、输出目录布局与配置分层。本文件只写结构级的"为什么"与模块职责；
 > 实现细节、算法口径、验收尺子分别见 `docs/algorithm.md` 与 `docs/measurement.md`，代码级细节见各模块 docstring（宪法 §17.2 / §12.4）。
-> 基线：本页所有 `文件:行` 已按提交 `70af65e`（S11c resume 修复系列）的树重核——指向
-> `src/ard/pipeline.py` 的 28 条逐条按符号内容核对并重定位（其后代码提交仍可能使其漂移，届时按符号名重核）；
-> 其余引用由 `tests/test_doc_line_references.py` 守卫检查"文件存在 / 行号在范围内 / 引用行非空"。
+> 基线：本页原按提交 `70af65e`（S11c resume 修复系列）的树重核——指向 `src/ard/pipeline.py` 的 28 条逐条按符号内容核对并重定位。
+> WP-S25（运行中途的计划身份记录）在 `pipeline.py` 上部插入约 200 行，本页**逐条按符号重核并重定位**了全部 `pipeline.py` 行号；
+> 其余非 pipeline 引用沿用原基线；其后代码提交仍可能使其漂移，届时按符号名重核。其余引用由
+> `tests/test_doc_line_references.py` 守卫检查"文件存在 / 行号在范围内 / 引用行非空"。
 > 该守卫**不能**发现引用错位到另一条非空行上的情况（那种只能靠人对照行内容）。
 
 ARD（Anchor Replay Distillation）从本体 v4 的坐标空间中构造一轮锚点计划，调用输入生成模型产出用户轮、
@@ -94,8 +95,8 @@ flowchart TD
 - **入库是唯一持久化入口**：形状门、`data_source` 门、id 去重都在 `bank.append_anchor` 内完成（`src/ard/domain/bank.py:219` 起），manifest 与验收读数都从落盘的记录重建。
 - **影像按坐标寻址**：影像态锚点按自己的 `visual_domain` 到 `<image_dir>/<visual_domain>/` 取图；
   缺图的域在**创建输出目录之前**被拒绝，除非显式配置 `[images] skip_missing_images = true`
-  （`src/ard/pipeline.py:1017-1077`，`src/ard/domain/image_store.py:125-251`）。
-- **验收读数不参与生成**：`q95` 等读数在生成完成后计算，读的是已落盘记录与用户提供的目标集，不影响采样与生成（`src/ard/pipeline.py:747`，`_run_acceptance`）。
+  （`src/ard/pipeline.py:1242-1301`，`src/ard/domain/image_store.py:125-251`）。
+- **验收读数不参与生成**：`q95` 等读数在生成完成后计算，读的是已落盘记录与用户提供的目标集，不影响采样与生成（`src/ard/pipeline.py:962`，`_run_acceptance`）。
 
 ## 3. 入口链路
 
@@ -106,14 +107,14 @@ flowchart LR
     M --> C["src/ard/cli.py:113<br/>cli.main()"]
     C --> O["cli.resolve_override<br/>cli.py:53-110"]
     O --> L["load_config<br/>cli.py:165 → config.py"]
-    L --> P["pipeline.run<br/>cli.py:178 → pipeline.py:847"]
+    L --> P["pipeline.run<br/>cli.py:178 → pipeline.py:1062"]
     P --> Out["outputs/&lt;run_name&gt;/"]
 ```
 
 - `run.sh` 以 `--network=host` 启动容器，只读挂载 `configs/`、`ontology/`、`examples/`、`.local/`，可写挂载 `outputs/`（`run.sh:90-97`）。
 - 容器入口是 `python -m ard`（`docker/Dockerfile:41`），即 `src/ard/__main__.py:5` → `src/ard/cli.py:113`。
 - CLI 参数（`src/ard/cli.py:119-148`）覆盖 `--config`（必需）、`--override`、`--image-dir`、`--smoke`。图片是否转码由 `[images] convert` 决定，不进 CLI（宪法 §10.1）。
-- `pipeline.run`（`src/ard/pipeline.py:847`）在**创建输出目录之前**先做端点边界校验与验收输入校验：缺 `api_base`/`model_name`、或目标集文件缺失/维度不符，都在零副作用的前提下拒绝（`§2.3 边界校验即防呆`）。
+- `pipeline.run`（`src/ard/pipeline.py:1062`）在**创建输出目录之前**先做端点边界校验与验收输入校验：缺 `api_base`/`model_name`、或目标集文件缺失/维度不符，都在零副作用的前提下拒绝（`§2.3 边界校验即防呆`）。
 
 ## 4. 输出目录布局
 
@@ -123,16 +124,24 @@ flowchart LR
 outputs/<run_name>/            # 默认 ard_dataset_<YYYYmmdd_HHMMSS>；--smoke 追加 _smoke
 ├── anchor_bank.jsonl          # 锚点库，每行一条 record（schema_version 4.0.0）
 ├── config.toml                # 合并后的配置快照（密钥已脱敏，端点保留）
+├── plan_identity.in_progress.json  # 只在运行结束前存在：中途可审计的计划身份
 ├── logs/                      # 文件日志（ard.log 等，见 logging.py:36 起）
 ├── results/
 │   ├── coverage.json          # 机器可读验收读数
 │   └── coverage.md            # 人读版验收报告
-└── manifest.json              # 库构成 + 运行健康 + config + plan_identity + acceptance 指针
+└── manifest.json              # 库构成 + 运行健康 + config + plan_identity + acceptance 指针（权威申报）
 ```
 
-- 输出目录：`src/ard/pipeline.py:994`（`_resolve_run_directory` 的调用处）；`--smoke` 会在目录名后加 `_smoke` 并在 manifest 里声明 `smoke: true`。
-- 两个落盘点：`src/ard/pipeline.py:995` 写 `anchor_bank.jsonl`，`src/ard/pipeline.py:1109` 写脱敏 `config.toml`（**每次运行覆盖**：续跑时它描述的是**最后一次**运行，包括什么都没生成的空转调用——所以它记录的是进程级 `seed`，**不是计划身份**）。计划身份是 manifest 里的 `plan_identity`（有序坐标列表的 sha256 + 计划条数 + 版本）；续跑时先比这个摘要，不同即在写任何东西之前报错，不静默混合两个计划。
-- `manifest.json` 由 `bank.build_manifest_from_records` 组装（库构成：`total_anchors`/`domains`/`languages`/`capabilities`/`system_prompt_modes`/`data_sources`/`output_dir`，`src/ard/domain/bank.py:510-543`），再挂上运行健康与 `acceptance` 指针；`src/ard/pipeline.py:1300` 落盘。
+**运行目录里哪个是权威，半途中断的产物怎么审计**（WP-S25 补齐的可审计性缺口）：
+
+- **权威只有 `manifest.json`**：它带 `status: "complete"`、`plan_identity`、库构成与运行健康（`generation` 计数器/失败记账）与 `acceptance` 指针。申报一律读它。
+- **`plan_identity.in_progress.json` 是中间态记录，不是申报**：它在计划已生成、配置快照已写之后、**第一次调用端点之前**落盘（写入点 `src/ard/pipeline.py:1487-1500`，构造 `:479-546`），文件里 `status: "in_progress"`、`ard_progress_record: "plan_identity/v1"`，并且**故意不含** `generation` 计数器——那些数字在运行结束前根本不存在。它的作用只有一个：让一个没走完的运行目录**也能被绑定到某个计划**（1,826 条那条路几乎必然被中断/续跑，中间态是常态）。
+- **绑定与复算**：记录里的 `plan_identity` 与 manifest 是同一份定义（`core/sampling.py` 的 `PlanIdentity.of`，有序坐标列表的 sha256 + 条数 + 版本）。审计中断产物时可独立复算：取出计划的有序坐标（或按 id 重建），跑 `PlanIdentity.of(...)`，与记录里的 `digest` 逐位比对——不是读一个无法验证的字符串。
+- **计数器不完整，不得当最终申报**：记录的 `counters`（`existing`/`new`/`written`）是**那一刻**的快照，`written` 只表示"当时已落库多少"，既不是计划完成度也不代表运行健康。半途产物的正确读法是"这个库属于哪个计划 + 它走到哪一步"；`within_rule` 之类的申报必须等 manifest。
+- **生命周期**：每次真正采样计划的调用都刷新这份记录（写前一次留下的记录会被替换，属**有意**：目录现在说的是这一次的计划）；运行正常结束时写完 manifest（同一 `plan_identity`）后把它删掉——**完成的目录里只有一份申报**。续跑的空转调用（无锚点可生成）若发现已有 manifest 记录同一计划，则保持 manifest 原文不动、并同样删掉中间记录（不会把已完成运行改写回 `in_progress`）。
+- 输出目录：`src/ard/pipeline.py:1209`（`_resolve_run_directory` 的调用处）；`--smoke` 会在目录名后加 `_smoke` 并在 manifest 里声明 `smoke: true`。
+- 两个落盘点：`src/ard/pipeline.py:1210` 写 `anchor_bank.jsonl`，`src/ard/pipeline.py:1335` 写脱敏 `config.toml`（**每次运行覆盖**：续跑时它描述的是**最后一次**运行，包括什么都没生成的空转调用——所以它记录的是进程级 `seed`，**不是计划身份**）。计划身份是 manifest 里的 `plan_identity`（有序坐标列表的 sha256 + 计划条数 + 版本）；续跑时先比这个摘要，不同即在写任何东西之前报错，不静默混合两个计划。**守卫的读数来源有两个**：已有 manifest 的 `plan_identity`，或（上一次没走完时）中间记录的 `plan_identity`——两个都比，因为"中断"正是最容易混计划的入口。
+- `manifest.json` 由 `bank.build_manifest_from_records` 组装（库构成：`total_anchors`/`domains`/`languages`/`capabilities`/`system_prompt_modes`/`data_sources`/`output_dir`，`src/ard/domain/bank.py:510-543`），再挂上运行健康与 `acceptance` 指针；`src/ard/pipeline.py:1554` 落盘（且只在**本次真的重新生成**时落盘——空转调用若发现 manifest 已记录同一 `plan_identity`，保持原文不动）。
 - `results/coverage.{json,md}` 是**验收读数**，不是训练数据：结构读数（计划计数 vs 构造规则，零模型调用）恒产出；指标读数（`q95` 等）只在配置了 `coverage.target_set_path` 与 `[coverage.embedding]` 时产出，否则显式 WARNING。字段与口径见 `docs/measurement.md`。
 
 ## 5. 配置分层
@@ -174,10 +183,10 @@ flowchart TD
 ```
 
 - **唯一约定**：`<image_dir>/<visual_domain>/<图片文件>`，`<image_dir>` 来自 `--image-dir`；只取该子目录的**直接子文件**，扩展名白名单见 `src/ard/domain/image_store.py:30`（`SUPPORTED_EXTENSIONS`）与 `:54`（`CONVERTABLE_EXTENSIONS`）；约定常量 `src/ard/domain/image_store.py:125`（`VISUAL_DOMAIN_LAYOUT`），目录解析 `src/ard/domain/image_store.py:128`（`domain_directory`）、`:211`（`resolve_domain_images`），`configs/config.toml:79-93` 面向用户说明同一约定。
-- **选择确定可复现**：候选先按文件名排序，再以 `sha256(f"{seed}:{visual_domain}")` 摘要作种子选一张（`src/ard/domain/image_store.py:167`，`select_domain_image`）——同一 `(候选集, 域, seed)` 在任何平台得到同一张图；选中的图由 `pipeline._assign_images_by_domain` 分配到锚点（`src/ard/pipeline.py:580`，调用点 `:1243`）。
-- **缺图默认报错**：所需域缺目录或缺合法图片时，`pipeline.run` 在**创建输出目录之前**拒绝整个运行（校验块 `src/ard/pipeline.py:1017-1077`，`raise ConfigError` 在 `:1047`（缺目录）与 `:1060`（缺域），而第一个副作用 `output_dir.mkdir` 在 `:1090`）；只有显式开启 `[images] skip_missing_images = true`（`configs/config.toml:93`）才跳过，且逐条 WARNING 并在 `manifest.json` 里申报跳过数与域——绝不静默。
+- **选择确定可复现**：候选先按文件名排序，再以 `sha256(f"{seed}:{visual_domain}")` 摘要作种子选一张（`src/ard/domain/image_store.py:167`，`select_domain_image`）——同一 `(候选集, 域, seed)` 在任何平台得到同一张图；选中的图由 `pipeline._assign_images_by_domain` 分配到锚点（`src/ard/pipeline.py:795`，调用点 `:1475`）。
+- **缺图默认报错**：所需域缺目录或缺合法图片时，`pipeline.run` 在**创建输出目录之前**拒绝整个运行（校验块 `src/ard/pipeline.py:1242-1301`，`raise ConfigError` 在 `:1273`（缺目录）与 `:1286`（缺域），而第一个副作用 `output_dir.mkdir` 在 `:1316`）；只有显式开启 `[images] skip_missing_images = true`（`configs/config.toml:93`）才跳过，且逐条 WARNING 并在 `manifest.json` 里申报跳过数与域——绝不静默。
 - **文本态永不附图**：没有 `visual_domain` 的坐标不携带图片，避免"坐标说文本态、消息里却有图"的错配。
-- **丢弃锚点不留图**：图片在生成**之前**复制，因此一条锚点最终被丢弃（生成失败/重试耗尽）时，它的图片会被 `pipeline._prune_abandoned_images`（`src/ard/pipeline.py:1375`）从 `output/images/` 删除，使产物目录与 `anchor_bank.jsonl` 的引用数一致。删除判据是"`anchor_bank.jsonl` 里**没有任何记录引用**该文件"，且只考察**本轮放置/复用**的文件（候选集来自本轮 pending specs 的 `image_path`）；记录集是**既有记录 ∪ 本轮写出记录**，所以同一张图被同域其它**已写出**锚点共享时**不删**（按记录引用判定，而非按锚点数），**断点续跑**时既有记录引用的图同样不删（本轮 pending 锚点经 `force=False` 复用同一文件后被丢弃的情形）。删除失败只记 WARNING、不影响本轮运行。
+- **丢弃锚点不留图**：图片在生成**之前**复制，因此一条锚点最终被丢弃（生成失败/重试耗尽）时，它的图片会被 `pipeline._prune_abandoned_images`（`src/ard/pipeline.py:1636`）从 `output/images/` 删除，使产物目录与 `anchor_bank.jsonl` 的引用数一致。删除判据是"`anchor_bank.jsonl` 里**没有任何记录引用**该文件"，且只考察**本轮放置/复用**的文件（候选集来自本轮 pending specs 的 `image_path`）；记录集是**既有记录 ∪ 本轮写出记录**，所以同一张图被同域其它**已写出**锚点共享时**不删**（按记录引用判定，而非按锚点数），**断点续跑**时既有记录引用的图同样不删（本轮 pending 锚点经 `force=False` 复用同一文件后被丢弃的情形）。删除失败只记 WARNING、不影响本轮运行。
 
 ## 7. 证据基准
 

@@ -129,22 +129,22 @@ flowchart TD
     W --> R
 ```
 
-**三种配置组合的契约**（`src/ard/config.py:352-404`，`resolved_embedding`；`src/ard/pipeline.py:656-698`，`_prepare_coverage`）。
+**三种配置组合的契约**（`src/ard/config.py:352-404`，`resolved_embedding`；`src/ard/pipeline.py:871-913`，`_prepare_coverage`）。
 
 | `coverage.target_set_path` | `[coverage.embedding]` | 行为 |
 |---|---|---|
-| **两者都未设** | 任意 | **结构读数 + 明确 WARNING**：`metric readout not measured …`（`src/ard/pipeline.py:674-680`）；报告 `metrics: null`、manifest `metric_readout: false` / `q95: null`。不静默、不崩溃 |
+| **两者都未设** | 任意 | **结构读数 + 明确 WARNING**：`metric readout not measured …`（`src/ard/pipeline.py:886-892`）；报告 `metrics: null`、manifest `metric_readout: false` / `q95: null`。不静默、不崩溃 |
 | **已设** | **缺** `api_base` / `model` / `dimension`（或全空） | **fail-fast 报错**（`ConfigError`），报文逐项列出缺失字段并要求"补齐或清空 `target_set_path`"；在 `load_config` 即触发（`src/ard/config.py:381-387`），**早于创建任何输出目录**。这是**刻意严格**的行为：目标集已声明要测指标，却没有可用嵌入器，属于配置错误而非可退化的缺省 |
 | **已设** | 完备，`normalize = true` | 产出**指标读数**（`q95` / `Extent(ε)` / ε 带 / 噪声带）；`normalize = false` 同样 fail-fast（尺子要求 L2 归一化，`src/ard/config.py:389-393`） |
 
-其余退化行为（都**显式**、绝不静默，`src/ard/pipeline.py:747-844`，`_run_acceptance`）：
+其余退化行为（都**显式**、绝不静默，`src/ard/pipeline.py:962-1058`，`_run_acceptance`）：
 
 | 情形 | 行为 |
 |---|---|
-| 目标集缺失/不可解析/计数或维度与配置矛盾 | 在**创建输出目录之前**拒绝整个运行（`src/ard/pipeline.py:656-698`，`CoverageWiringError`；`:941` 在输出目录存在之前调用），不产生半成品产物 |
-| 嵌入调用失败 | 结构性读数**先已落盘**（`src/ard/pipeline.py:813-820`），失败照常抛出，但不会抹掉零成本的结构报告 |
-| 无同格重复生成数据 | 噪声带写 `unavailable` 并附原因（`src/ard/core/acceptance.py:85-87`；`src/ard/pipeline.py:827-828` 把原因并入 warnings） |
-| 库比计划少一条计划坐标 | 结构读数仍描述计划，但读数被如实改为 `within_rule: false`，并在 warnings 里**列出缺失坐标**（`src/ard/pipeline.py:716-745`；一条计划坐标没落库时，计划再合规也不算"产物合规"） |
+| 目标集缺失/不可解析/计数或维度与配置矛盾 | 在**创建输出目录之前**拒绝整个运行（`src/ard/pipeline.py:871-913`，`CoverageWiringError`；`:1157` 在输出目录存在之前调用），不产生半成品产物 |
+| 嵌入调用失败 | 结构性读数**先已落盘**（`src/ard/pipeline.py:1032-1035`），失败照常抛出，但不会抹掉零成本的结构报告 |
+| 无同格重复生成数据 | 噪声带写 `unavailable` 并附原因（`src/ard/core/acceptance.py:85-87`；`src/ard/pipeline.py:1042-1043` 把原因并入 warnings） |
+| 库比计划少一条计划坐标 | 结构读数仍描述计划，但读数被如实改为 `within_rule: false`，并在 warnings 里**列出缺失坐标**（`src/ard/pipeline.py:931-1000`；一条计划坐标没落库时，计划再合规也不算"产物合规"） |
 
 ## 7. 已知边界：指标层的分辨力上限
 
@@ -213,7 +213,7 @@ flowchart TD
 
 三种配置组合的行为见 §6 的契约表：都没设 ⇒ 结构读数 + WARNING；只设目标集不配嵌入器 ⇒ fail-fast 报错；
 两者都设 ⇒ 指标读数。只想验证接线、不想调用生成端点时，可以对**已有的** `anchor_bank.jsonl` 直接调用
-`pipeline._prepare_coverage` + `pipeline._run_acceptance`（`src/ard/pipeline.py:656-698` / `:747-844`）。
+`pipeline._prepare_coverage` + `pipeline._run_acceptance`（`src/ard/pipeline.py:871-913` / `:747-844`）。
 
 ## 10. 目标集样例的构造规则
 
@@ -281,7 +281,7 @@ WP-S17 把这六个 instruction 轴的措辞真的渲染进 prompt 之后，"有
 ## 12. 计划身份：读数必须绑定到它，而不是绑定到 seed
 
 **问题**：`manifest.json` 的 `config.generation.seed` 是**进程级配置值**，不是计划的身份。输出目录的
-`config.toml` 快照**每次运行都被覆盖**（`src/ard/pipeline.py:1109`），包括什么都没生成的空转续跑；
+`config.toml` 快照**每次运行都被覆盖**（`src/ard/pipeline.py:1335`），包括什么都没生成的空转续跑；
 不钉 seed 时每个进程还会现抽一个新 seed（`src/ard/config.py:204-205`）。所以"记录 seed + 代码"**不能**
 复现历史产物里的自由轴分配——历史冒烟库被调用 3 次，后两次空转覆盖了真正采样那次的 seed，
 用记录值复算自由轴只有 11/32 相同。
@@ -289,7 +289,7 @@ WP-S17 把这六个 instruction 轴的措辞真的渲染进 prompt 之后，"有
 ⇒ 计划可复现"不成立**，因为记录值可能属于另一次调用。
 
 **做法**：每次运行把 `plan_identity`（有序坐标列表 sha256 + `plan_size` + `algorithm` + `version`）写进
-`manifest.json`（`src/ard/pipeline.py:490-496`）。同一计划在任何进程、任何 `PYTHONHASHSEED` 下得到同一摘要
+`manifest.json`（`src/ard/pipeline.py:705-710`）。同一计划在任何进程、任何 `PYTHONHASHSEED` 下得到同一摘要
 （S22 实测：7 个进程、1,826 条全量计划，摘要逐字节相同）。
 
 **绑定规则（全量 1,826 运行时）**：

@@ -169,7 +169,7 @@ flowchart TD
 
 | 轴 | 取值仍被谁使用（非措辞） | 证据 |
 |---|---|---|
-| `visual_domain` | **决定影像态图片目录** `<image_dir>/<visual_domain>/`；进 manifest 分组标签 | `src/ard/domain/image_store.py:125-211`；调用点 `src/ard/pipeline.py:1017-1077`；分组标签 `src/ard/domain/bank.py:453` |
+| `visual_domain` | **决定影像态图片目录** `<image_dir>/<visual_domain>/`；进 manifest 分组标签 | `src/ard/domain/image_store.py:125-211`；调用点 `src/ard/pipeline.py:1242-1301`；分组标签 `src/ard/domain/bank.py:453` |
 
 > 上表在 WP-S14 审计时还有 6 行（`response_style` / `difficulty` / `context_length` / `output_format` /
 > `input_condition` / `answer_mode`）：当时它们的取值只进采样坐标与约束求解，**一个字符都没进 prompt**。WP-S17 已为这 6 条
@@ -258,7 +258,7 @@ o = load_ontology_v4('ontology/anchor_ontology.v4.json'); \
 print(PlanIdentity.of(sample_anchors(o, AnchorGenerationConfig(seed=1488279264), scale=SMOKE_SCALE)).as_dict())"
 ```
 
-**续跑判据**（`src/ard/pipeline.py:420-487`）：记录的 `plan_identity` 与本次不同 ⇒ 报错，绝不把两个计划写进同一份
+**续跑判据**（`src/ard/pipeline.py:625-703`）：记录的 `plan_identity` 与本次不同 ⇒ 报错，绝不把两个计划写进同一份
 `anchor_bank.jsonl`；相同 ⇒ 允许续跑。同一计划的判据是摘要，不是 seed——**不同 seed 可以是同一计划，同一 seed 也可以是
 不同计划**（换本体/换 scale）。若产物没有记录 `plan_identity`（旧库），守卫退化为结构校验：库里出现不属于本次计划的
 anchor id 即拒绝，全部属于则允许并记 WARNING。
