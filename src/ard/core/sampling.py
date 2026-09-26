@@ -38,6 +38,7 @@ Pure computation: the only I/O is reading the ontology through
 from __future__ import annotations
 
 import hashlib
+import json
 import random
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
@@ -631,3 +632,104 @@ def sample_anchors(
     """
     coordinates = sample_coordinates(ontology, config.seed, scale=scale)
     return build_specs(coordinates, ontology=ontology)
+
+
+# ── Plan identity: the auditable name of a plan ─────────────────────────────
+#
+# ``seed`` is a *configuration* value, not a plan's name.  Two runs can share a
+# seed and build different plans (a different ontology, a different scale), and
+# — the failure this recipe exists for — the seed recorded in a run directory
+# can be overwritten by a later invocation that sampled nothing, while the bank
+# still holds the *first* invocation's plan.  A plan's auditable name is
+# therefore a digest over the plan itself: ``PlanIdentity.of(plan)``.
+#
+# The digest is a pure function of the ordered coordinate list: the axes are
+# read in the explicit order below (never in ``dict``/``set`` iteration order),
+# the canonical form is ASCII JSON, and the version is framed into the hashed
+# payload — so the same plan yields the same digest in any process, under any
+# ``PYTHONHASHSEED``, and a future recipe change cannot collide with v1.
+
+PLAN_IDENTITY_VERSION = 1
+"""Version of the digest recipe below; bump it when the canonical form changes."""
+
+PLAN_IDENTITY_ALGORITHM = "sha256"
+"""The one hash function :meth:`PlanIdentity.of` uses."""
+
+PLAN_IDENTITY_AXES: tuple[str, ...] = (
+    "modality",
+    "language",
+    "knowledge_domain",
+    "capability",
+    "system_prompt_mode",
+    "conversation_type",
+    "response_style",
+    "output_format",
+    "difficulty",
+    "context_length",
+    "input_condition",
+    "answer_mode",
+    "visual_domain",
+)
+"""The coordinate axes, in digest order — fixed here, not derived from a mapping."""
+
+
+@dataclass(frozen=True, slots=True)
+class PlanIdentity:
+    """The stable, reproducible name of a plan.
+
+    Attributes:
+        algorithm: The hash function, always :data:`PLAN_IDENTITY_ALGORITHM`.
+        version: The recipe version, always :data:`PLAN_IDENTITY_VERSION`.
+        plan_size: How many coordinates the plan holds.
+        digest: Hex SHA-256 of the canonical, ordered coordinate list.
+    """
+
+    algorithm: str
+    version: int
+    plan_size: int
+    digest: str
+
+    @classmethod
+    def of(cls, specs: Iterable[AnchorSpec]) -> PlanIdentity:
+        """Return the identity of *specs*, in the order given.
+
+        The digest covers each spec's id, its coordinate values (the axes it
+        carries, in :data:`PLAN_IDENTITY_AXES` order) and its turn count.  Two
+        plans with the same coordinates and ids get the same digest; reordering
+        them, dropping one, or changing one value changes it.
+
+        Args:
+            specs: The plan, as :class:`~ard.core.types.AnchorSpec` objects.
+
+        Returns:
+            The plan's :class:`PlanIdentity`.
+        """
+        ordered = list(specs)
+        rows: list[list[Any]] = []
+        for spec in ordered:
+            meta = spec.anchor_meta or {}
+            rows.append(
+                [
+                    spec.id,
+                    [[axis, str(meta[axis])] for axis in PLAN_IDENTITY_AXES if axis in meta],
+                    len(spec.turns),
+                ]
+            )
+        payload = f"ard-plan-identity/v{PLAN_IDENTITY_VERSION}\n" + json.dumps(
+            rows, ensure_ascii=True, separators=(",", ":")
+        )
+        return cls(
+            algorithm=PLAN_IDENTITY_ALGORITHM,
+            version=PLAN_IDENTITY_VERSION,
+            plan_size=len(ordered),
+            digest=hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the identity as the mapping a run artifact records."""
+        return {
+            "algorithm": self.algorithm,
+            "version": self.version,
+            "plan_size": self.plan_size,
+            "digest": self.digest,
+        }

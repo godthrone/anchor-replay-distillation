@@ -11,6 +11,7 @@ rule must never allow (§2.3 边界校验即防呆).
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -25,17 +26,20 @@ from ard.core.sampling import (
     EXPECTED_TOTAL,
     EXPECTED_VISUAL_DOMAINS,
     MULTI_TURN_DEFAULT,
+    PLAN_IDENTITY_ALGORITHM,
+    PLAN_IDENTITY_VERSION,
     SMOKE_IMAGE_BLOCKS,
     SMOKE_PLAN_SIZE,
     SMOKE_SCALE,
     SMOKE_TEXT_BLOCKS,
     AnchorCoordinate,
+    PlanIdentity,
     SamplingError,
     sample_anchors,
     sample_coordinates,
     turn_counts_by_conversation_type,
 )
-from ard.core.types import AnchorGenerationConfig
+from ard.core.types import AnchorGenerationConfig, AnchorSpec
 
 ONTOLOGY_PATH = "ontology/anchor_ontology.v4.json"
 RESTRICTED_AXES = (
@@ -491,3 +495,47 @@ def test_free_axis_product_is_unchanged_by_the_rule(ontology: OntologyV4) -> Non
     counts: LegalBlockCounts = evaluator.legal_block_counts()
     assert counts.legal_restricted_block == EXPECTED_TEXT_BLOCKS
     assert counts.legal_restricted_block_image_capable == EXPECTED_IMAGE_BLOCKS
+
+
+# ── plan identity: the digest names the plan, not the seed ──────────────────
+
+
+def _smoke_specs(ontology: OntologyV4, seed: int = 7) -> list[AnchorSpec]:
+    return sample_anchors(ontology, AnchorGenerationConfig(seed=seed), scale=SMOKE_SCALE)
+
+
+def test_plan_identity_is_stable_and_names_the_plan_size(ontology: OntologyV4) -> None:
+    """The identity is a pure function of the ordered plan (same plan, same digest)."""
+    plan = _smoke_specs(ontology)
+    first = PlanIdentity.of(plan)
+    assert first == PlanIdentity.of(plan)
+    assert first.algorithm == PLAN_IDENTITY_ALGORITHM
+    assert first.version == PLAN_IDENTITY_VERSION
+    assert first.plan_size == SMOKE_PLAN_SIZE
+    assert len(first.digest) == 64
+    assert set(first.digest) <= set("0123456789abcdef")
+    assert first.as_dict() == {
+        "algorithm": PLAN_IDENTITY_ALGORITHM,
+        "version": PLAN_IDENTITY_VERSION,
+        "plan_size": SMOKE_PLAN_SIZE,
+        "digest": first.digest,
+    }
+
+
+def test_plan_identity_changes_with_the_plan_not_just_the_seed(ontology: OntologyV4) -> None:
+    """Same seed, different plan ⇒ different digest; different seed ⇒ different plan."""
+    plan = _smoke_specs(ontology, seed=7)
+    reordered = list(reversed(plan))
+    assert PlanIdentity.of(reordered).digest != PlanIdentity.of(plan).digest
+    renamed = [replace(spec, id=f"{spec.id}-x") for spec in plan]
+    assert PlanIdentity.of(renamed).digest != PlanIdentity.of(plan).digest
+    assert PlanIdentity.of(_smoke_specs(ontology, seed=8)).digest != PlanIdentity.of(plan).digest
+
+
+def test_plan_identity_does_not_depend_on_metadata_key_order(ontology: OntologyV4) -> None:
+    """A coordinate is its values, not the insertion order of its mapping."""
+    plan = _smoke_specs(ontology)
+    shuffled = [
+        replace(spec, anchor_meta=dict(reversed(list(spec.anchor_meta.items())))) for spec in plan
+    ]
+    assert PlanIdentity.of(shuffled) == PlanIdentity.of(plan)
