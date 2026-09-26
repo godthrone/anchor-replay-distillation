@@ -16,6 +16,8 @@ this is a *boundary* mock (§6.1), not a mock-identity shortcut (task-C §九
 
 from __future__ import annotations
 
+import logging
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -211,8 +213,12 @@ def test_convert_image_rawpy_boundary_mock_then_real_jpeg_encode(
     to return a fake raw object whose ``postprocess()`` yields a *real* RGB
     numpy array.  The Pillow JPEG encode then runs unmocked (real mechanism,
     not a mock-identity shortcut).
+
+    ``rawpy`` lives in the optional ``.[raw]`` extra, so in a default
+    installation there is no decoder to mock: the test skips instead of turning
+    that absence into a failure.
     """
-    import rawpy
+    rawpy = pytest.importorskip("rawpy")
 
     def fake_imread(_path: str) -> _FakeRaw:
         return _FakeRaw()
@@ -242,6 +248,27 @@ def test_convert_image_rawpy_boundary_mock_then_real_jpeg_encode(
     with Image.open(out) as im:
         assert im.format == "JPEG"
         assert im.size == (4, 4)
+
+
+def test_convert_image_raw_without_rawpy_warns_and_returns_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A default install (no ``.[raw]``) must degrade loudly, not fatally.
+
+    ``sys.modules["rawpy"] = None`` makes ``import rawpy`` raise ``ImportError``
+    even where the extra *is* installed, so this exercises the default-install
+    branch from either environment.
+    """
+    monkeypatch.setitem(sys.modules, "rawpy", None)
+    src = tmp_path / "camera.cr2"
+    src.write_bytes(b"not a genuine RAW capture")
+
+    with caplog.at_level(logging.WARNING, logger="ard.domain.image_store"):
+        assert convert_image(src, tmp_path / "conv.jpg") is False
+
+    assert not (tmp_path / "conv.jpg").exists()
+    assert "rawpy not installed" in caplog.text
+    assert str(src) in caplog.text
 
 
 # ── convert_and_copy_images (real files, resume / force) ───────────────────────
