@@ -246,7 +246,9 @@ stopped and resumed, and this record binds such a directory to the plan that pro
 are fixed before the first endpoint call and describe the *plan*, not progress: `existing` is what the
 bank already held, `new` and `written` are the number of anchors this invocation set out to generate and
 write (the same number). They must never be read as a completion, progress or acceptance claim — the
-count of records actually persisted is `manifest.json`'s `generation.counters.written`. The plan identity
+count of records actually persisted is `manifest.json`'s `total_anchors` — the full bank, records that
+were already on disk included; `generation.counters.written` counts only what this invocation wrote,
+so the two differ on a resumed run. The plan identity
 in it can be verified by recomputing `PlanIdentity.of(plan)` and comparing digests. See
 [docs/architecture.md](docs/architecture.md) section 4.
 
