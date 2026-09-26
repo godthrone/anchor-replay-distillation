@@ -972,8 +972,19 @@ class TestManifestGenerationReport:
             "ard.pipeline.generate_text_anchors",
             lambda **kwargs: pytest.fail("no generation must run on the resume path"),
         )
+        # The bank's coordinate must belong to this run's plan: since S22 the
+        # resume guard refuses a bank holding ids outside the plan, so an empty
+        # plan double would (correctly) be a refusal rather than the early return
+        # this test measures.
+        plan_double = [
+            AnchorSpec(
+                id="already_here",
+                anchor_meta={"language": "English", "knowledge_domain": "math"},
+                turns=[TurnSpec(turn_index=0, role="user", is_final=True)],
+            )
+        ]
 
-        result_dir = run(load_config(config_path), generate_specs=lambda cfg: [])
+        result_dir = run(load_config(config_path), generate_specs=lambda cfg: plan_double)
         manifest = json.loads((result_dir / "manifest.json").read_text(encoding="utf-8"))
         assert manifest["total_anchors"] == 1
         assert manifest.get("generation") is None, (

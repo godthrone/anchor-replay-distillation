@@ -583,8 +583,13 @@ def test_resuming_reuses_a_picture_that_stays_referenced_by_the_old_record(
     output_dir, _spy, _plan = _rig(tmp_path, monkeypatch, specs)
     config = load_config(tmp_path / "config.toml")
 
-    monkeypatch.setattr(pipeline, "generate_text_anchors", _ImagePartGeneratorSpy())
-    run(config, image_dir=str(images), generate_specs=lambda _config: [copy.deepcopy(specs[0])])
+    # Both runs hand the pipeline the *same* plan: since S22 the resume guard is
+    # keyed on the plan identity, so a shorter run-1 plan would be a different
+    # plan and would be refused before the pruning logic under test runs.  Run 1
+    # abandons ``p1``, so only ``a1`` reaches the bank while the identity is the
+    # full plan's — exactly the state a real interrupted resume leaves behind.
+    monkeypatch.setattr(pipeline, "generate_text_anchors", _ImagePartGeneratorSpy({"p1"}))
+    run(config, image_dir=str(images), generate_specs=lambda _config: copy.deepcopy(specs))
     picture = output_dir / "images" / "animals" / "img_0.png"
     assert picture.exists(), "precondition: run 1 leaves the picture behind"
 
@@ -647,8 +652,10 @@ def test_a_picture_shared_by_a_surviving_record_is_not_removed(
     output_dir, _spy, _plan = _rig(tmp_path, monkeypatch, specs)
     config = load_config(tmp_path / "config.toml")
 
-    monkeypatch.setattr(pipeline, "generate_text_anchors", _ImagePartGeneratorSpy())
-    run(config, image_dir=str(images), generate_specs=lambda _config: [copy.deepcopy(specs[0])])
+    # Same plan in both runs (the S22 identity guard forbids a plan change);
+    # run 1 abandons both pending anchors, so only ``a1`` lands in the bank.
+    monkeypatch.setattr(pipeline, "generate_text_anchors", _ImagePartGeneratorSpy({"p1", "p2"}))
+    run(config, image_dir=str(images), generate_specs=lambda _config: copy.deepcopy(specs))
 
     monkeypatch.setattr(pipeline, "generate_text_anchors", _ImagePartGeneratorSpy({"p1"}))
     with caplog.at_level("INFO"):

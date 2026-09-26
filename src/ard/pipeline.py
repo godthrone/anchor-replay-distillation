@@ -11,7 +11,6 @@ import logging
 import random
 import re
 import time
-import tomllib
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from functools import partial
@@ -35,9 +34,11 @@ from ard.core.ontology import OntologyV4
 from ard.core.quota import allocate_images
 from ard.core.sampling import (
     EXPECTED_TOTAL,
+    PLAN_IDENTITY_ALGORITHM,
     SMOKE_IMAGE_BLOCKS,
     SMOKE_SCALE,
     SMOKE_TEXT_BLOCKS,
+    PlanIdentity,
     PlanScale,
     sample_anchors,
 )
@@ -388,61 +389,111 @@ def _resolve_run_directory(config: ARDConfig, *, timestamp: str, smoke: bool) ->
     return output_dir
 
 
-def _snapshot_seed(snapshot_path: Path) -> int | None:
-    """The ``[generation] seed`` recorded in a run's ``config.toml`` snapshot.
+def _recorded_plan_identity(manifest_path: Path) -> PlanIdentity | None:
+    """The ``plan_identity`` a previous run recorded in its ``manifest.json``.
 
-    Returns ``None`` when the snapshot is absent, unreadable, not TOML, or does
-    not carry an integer seed — "no recorded seed" is a different fact from
-    "seed 0", and only the latter may be compared.
+    Returns ``None`` when the manifest is absent, unreadable, or does not carry
+    a well-formed identity of this algorithm — "no recorded identity" is a
+    different fact from "identity 0", and is handled separately below (§3.2).
     """
     try:
-        with snapshot_path.open("rb") as handle:
-            data = tomllib.load(handle)
-    except (OSError, tomllib.TOMLDecodeError):
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
         return None
-    generation = data.get("generation")
-    if not isinstance(generation, dict):
+    recorded = data.get("plan_identity") if isinstance(data, dict) else None
+    if not isinstance(recorded, dict):
         return None
-    seed = generation.get("seed")
-    return seed if isinstance(seed, int) else None
+    digest = recorded.get("digest")
+    plan_size = recorded.get("plan_size")
+    version = recorded.get("version")
+    if recorded.get("algorithm") != PLAN_IDENTITY_ALGORITHM:
+        return None
+    if not isinstance(digest, str) or not digest:
+        return None
+    if not isinstance(plan_size, int) or not isinstance(version, int):
+        return None
+    return PlanIdentity(
+        algorithm=PLAN_IDENTITY_ALGORITHM, version=version, plan_size=plan_size, digest=digest
+    )
 
 
-def _refuse_seed_change_on_resume(
+def _refuse_plan_change_on_resume(
     output_dir: Path,
-    config: ARDConfig,
+    identity: PlanIdentity,
+    plan_ids: set[str],
     existing_records: JsonObjectList,
 ) -> None:
-    """Refuse a resume whose seed differs from the run already on disk (B5).
+    """Refuse a resume that would append a *different* plan to the bank (§2.3).
 
-    ``[generation] seed`` decides which plan is sampled.  Appending a
-    different plan's anchors to the bank a previous seed produced mixes two
-    datasets in one run directory while every counter stays green — the manifest
-    and the bank then describe different plans, and nothing on disk says so.
-    The previous run's redacted ``config.toml`` snapshot is the recorded seed, so
-    a mismatch is refused here instead of silently merged.
+    The guard keys on the plan's identity, never on ``[generation] seed``: the
+    seed is a process-level config value that does not name a plan (two runs can
+    share one seed and still build different plans, and a run directory's
+    recorded seed is rewritten by every later invocation, including ones that
+    generate nothing — see ``docs/algorithm.md`` §6).  The identity is the
+    previous run's ``manifest.json`` ``plan_identity``, which describes the plan
+    actually sampled.
 
-    A resume whose snapshot is missing or carries no seed is *not* refused: that
-    is a hand-assembled or pre-snapshot bank, and inventing a seed to compare
-    would be worse than acknowledging there is nothing to compare (§3.2).
+    A resume whose manifest records no identity (a hand-assembled or
+    pre-identity bank) falls back to the structural fact that proves it safe:
+    every anchor id already in the bank must be part of *this* run's plan.  A
+    bank holding a foreign coordinate is refused; a bank that is a subset is
+    resumed with a WARNING, so "cannot verify" never silently becomes "mixed".
 
     Raises:
-        ConfigError: If records already exist for *output_dir* and its snapshot
-            records a seed different from this run's.
+        ConfigError: If records already exist for *output_dir* and either the
+            recorded identity differs from this run's, or no identity is
+            recorded and the bank holds an id outside this run's plan.
     """
     if not existing_records:
         return
-    recorded = _snapshot_seed(output_dir / "config.toml")
-    current = config.generation.resolved_seed
-    if recorded is None or recorded == current:
-        return
-    raise ConfigError(
-        f"refusing to resume {output_dir} with a different generation seed: the run "
-        f"already on disk was sampled with seed {recorded}, this run would use "
-        f"{current}. A different seed is a different plan, so appending to the same "
-        f"anchor_bank.jsonl would mix two datasets in one run directory. Re-run with "
-        f"seed = {recorded}, or give the new plan its own output.directory (or set "
-        f"output.overwrite = true to replace this one deliberately)."
-    )
+    existing_ids = {
+        record["id"] for record in existing_records if isinstance(record.get("id"), str)
+    }
+    recorded = _recorded_plan_identity(output_dir / "manifest.json")
+    if recorded is not None:
+        if (
+            recorded.digest == identity.digest
+            and recorded.plan_size == identity.plan_size
+            and recorded.version == identity.version
+        ):
+            return
+        raise ConfigError(
+            f"refusing to resume {output_dir}: the bank already on disk holds a "
+            f"different plan. Recorded plan identity {recorded.digest} "
+            f"(version {recorded.version}, {recorded.plan_size} coordinates); this "
+            f"run's plan identity is {identity.digest} (version {identity.version}, "
+            f"{identity.plan_size} coordinates). Appending would mix two datasets in "
+            "one run directory while every counter stays green. Re-run with the plan "
+            "that produced this bank, or give the new plan its own output.directory "
+            "(or set output.overwrite = true to replace this one deliberately)."
+        )
+    foreign = sorted(existing_ids - plan_ids)
+    if foreign:
+        raise ConfigError(
+            f"refusing to resume {output_dir}: its anchor_bank.jsonl holds "
+            f"{len(foreign)} anchor id(s) that are not part of this run's plan "
+            f"(first: {foreign[0]}), and its manifest.json records no plan_identity "
+            "to verify. Appending would mix two datasets in one run directory; give "
+            "the new plan its own output.directory (or set output.overwrite = true "
+            "to replace this one deliberately)."
+        )
+    if existing_ids:
+        logger.warning(
+            "%s has %d record(s) but no recorded plan_identity; verified every "
+            "existing anchor id belongs to this run's plan, so this resume appends "
+            "within one plan.",
+            output_dir,
+            len(existing_ids),
+        )
+
+
+def _declare_plan_identity(manifest: dict[str, Any], identity: PlanIdentity) -> None:
+    """Record the run's plan identity in *manifest* (§7.4: self-naming field).
+
+    One definition of the field name, both manifest sinks (the completed run and
+    the no-op resume), so a reader of the artifact always finds the plan's name.
+    """
+    manifest["plan_identity"] = identity.as_dict()
 
 
 def _declare_smoke(manifest: dict[str, Any], *, plan_size: int, output_dir: Path) -> None:
@@ -840,12 +891,11 @@ def run(
             without a usable embedder, if an image-modality anchor's
             ``visual_domain`` has no image under ``--image-dir`` while
             ``[images] skip_missing_images`` is false, or if the bank already
-            holds records and the run's ``[generation] seed`` differs from the
-            seed recorded in the previous run's ``config.toml`` snapshot (a
-            different seed is a different plan — resuming it would mix two
-            datasets in one run directory).  All are checked before the output
-            directory is created, so a refused run leaves no side effect behind
-            (§2.3).
+            holds records and this run's plan identity differs from the plan
+            identity recorded in the previous run's ``manifest.json`` (a
+            different plan would mix two datasets in one run directory).  All are
+            checked before the output directory is created, so a refused run
+            leaves no side effect behind (§2.3).
         CoverageWiringError: If ``coverage.target_set_path`` names a file that
             is missing, unreadable, unparsable, empty, or whose declared count
             / dimension contradicts the file or the config — also before any
@@ -918,6 +968,14 @@ def run(
     rng = random.Random(gen_config.seed)
     plan = spec_sampler(config)
     target_count = len(plan)
+    plan_id = PlanIdentity.of(plan)
+    logger.info(
+        "Plan identity: %s (algorithm=%s, version=%d, coordinates=%d)",
+        plan_id.digest,
+        plan_id.algorithm,
+        plan_id.version,
+        plan_id.plan_size,
+    )
     if smoke:
         logger.warning(
             "SMOKE RUN: plan reduced to %d of %d anchors (%d text blocks + %d "
@@ -949,11 +1007,12 @@ def run(
     remaining = target_count - existing_count
 
     # ── Resume identity check (§2.3, still before any side effect) ──────────
-    # The seed decides the plan, so resuming with a different one appends a
-    # *different* plan's anchors to the same bank — two datasets silently mixed
-    # under one run directory (B5).  The previous run's config snapshot is the
-    # on-disk record of the seed it was sampled with; a mismatch is refused.
-    _refuse_seed_change_on_resume(output_dir, config, existing_records)
+    # The plan's identity — not ``[generation] seed``, which is a process-level
+    # config value that every invocation redraws and rewrites — is what decides
+    # whether appending to this bank stays within one plan.  The previous run's
+    # manifest.json records that identity; a mismatch is refused here, before
+    # the config snapshot is rewritten, so nothing on disk is touched.
+    _refuse_plan_change_on_resume(output_dir, plan_id, {spec.id for spec in plan}, existing_records)
 
     # ── Image addressing boundary check (§2.3, before the output dir) ──────
     # Every image-modality anchor resolves its picture under
@@ -1080,6 +1139,7 @@ def run(
             )
         all_records = read_anchor_bank(output_path)
         manifest = build_manifest_from_records(all_records, output_dir, config_info)
+        _declare_plan_identity(manifest, plan_id)
         if smoke:
             _declare_smoke(manifest, plan_size=target_count, output_dir=output_dir)
         if image_dir is not None:
@@ -1214,6 +1274,7 @@ def run(
     all_records = read_anchor_bank(output_path)
     _prune_abandoned_images(specs, output_dir, all_records)
     manifest = build_manifest_from_records(all_records, output_dir, config_info)
+    _declare_plan_identity(manifest, plan_id)
     # Publish the run's failures next to the anchors that survived, so a short
     # bank can never be mistaken for a healthy one (§3.2).
     with_generation_report(

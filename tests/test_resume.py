@@ -13,14 +13,18 @@ Translated into the three behaviours frozen here:
    coordinate is not a short prefix of the plan), they are **appended** to the
    bank, and the records already on disk survive byte-for-byte;
 2. an output directory that already satisfies the plan generates nothing at all
-   and returns without touching the bank (idempotent re-run);
+   and returns without touching the bank (idempotent re-run) — unless it holds
+   anchor ids outside the plan, which is a different dataset and is refused
+   (section 2, S22);
 3. ``output.overwrite`` is the explicit opt-in that clears the bank (§3.3
    预授权退路) — without it, a second run never destroys the first one's records.
 
 Plus the failure mode that made (1) untrustworthy: an append interrupted mid-line
 left a fragment without its trailing newline, after which the record *count* and
 the record *reader* disagreed and every following record was concatenated onto the
-fragment.  Sections 5–7 pin that down at the bank level.
+fragment.  Sections 5–7 pin that down at the bank level; section 7 is keyed on the
+**plan identity** recorded in ``manifest.json`` (S22), never on ``[generation]
+seed`` — a seed is a process-level config value that does not name a plan.
 
 Scope note: the pipeline half is deliberately *not* a second sampler test.  ``run``
 is exercised with the spec plan replaced by a small deterministic double (the
@@ -373,15 +377,25 @@ def test_complete_bank_is_left_untouched(tmp_path: Path, monkeypatch: pytest.Mon
     assert manifest["total_anchors"] == _TARGET_COUNT
 
 
-def test_overfilled_bank_is_left_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """More records than requested is still "nothing to do", not an error."""
-    from ard.config import load_config
+def test_overfilled_bank_with_foreign_records_is_refused_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An over-filled bank is unverifiable, not "nothing to do" (S22).
+
+    More records than the plan means the bank necessarily holds anchor ids that
+    are *not* in this run's plan.  Rewriting this run's plan identity over such
+    a bank would make ``manifest.json`` describe a plan the bank does not hold —
+    exactly the divergence the identity guard exists to prevent.  The refusal
+    happens before any side effect, so the bank is byte-identical afterwards.
+    """
+    from ard.config import ConfigError, load_config
     from ard.pipeline import run
 
     _, bank, spy, plan = _resume_rig(tmp_path, monkeypatch, existing=_TARGET_COUNT + 2)
     before = bank.read_text(encoding="utf-8")
 
-    run(load_config(tmp_path / "config.toml"), generate_specs=plan)
+    with pytest.raises(ConfigError, match="not part of this run's plan"):
+        run(load_config(tmp_path / "config.toml"), generate_specs=plan)
 
     assert spy.requested == []
     assert bank.read_text(encoding="utf-8") == before
@@ -614,13 +628,77 @@ def test_readout_reconciles_with_the_bank_and_names_the_missing_coordinate(
     assert len(_records(bank)) == _PLAN_SIZE
 
 
-# ── 7. a resume that changes the seed is refused, not merged (B5) ────────────
+# ── 7. a resume that changes the *plan* is refused, not merged ──────────────
+#
+# B5 originally guarded on ``[generation] seed``.  S22 showed that key is wrong:
+# a run directory's recorded seed is rewritten by every later invocation (even
+# ones that generate nothing), so the recorded seed does not name the banked
+# plan; and two runs can share a seed while sampling different plans.  The guard
+# now compares the **plan identity** recorded in ``manifest.json``.  The tests
+# below are the three cases: different plan ⇒ refused, different seed + same
+# plan ⇒ allowed, and a legacy bank (no recorded identity) ⇒ structurally
+# verified instead of assumed.
 
 
-def test_resume_with_a_different_seed_is_refused(
+def _plan_tagged(tag: str) -> list[AnchorSpec]:
+    """A plan double whose ids carry *tag*, so two plans cannot be confused."""
+    return [
+        AnchorSpec(
+            id=f"{tag}-{index}",
+            anchor_meta={"language": "English", "knowledge_domain": "math"},
+            turns=[TurnSpec(turn_index=0, role="user", is_final=True)],
+        )
+        for index in range(_PLAN_SIZE)
+    ]
+
+
+def test_a_run_records_its_plan_identity_in_the_manifest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A different seed is a different plan: refusing beats silently mixing (B5)."""
+    """The run artifact names its plan: digest, algorithm, version and size."""
+    from ard.config import load_config
+    from ard.core.sampling import PlanIdentity
+    from ard.pipeline import run
+
+    output_dir, _bank, _spy, plan = _resume_rig(tmp_path, monkeypatch, existing=0)
+
+    run(load_config(tmp_path / "config.toml"), generate_specs=plan)
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["plan_identity"] == PlanIdentity.of(_plan()).as_dict()
+
+
+def test_resume_with_a_different_seed_but_the_same_plan_is_allowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NEGATIVE CONTROL: a seed-comparing guard would refuse this resume.
+
+    The plan double ignores the config, so editing the seed changes no
+    coordinate: the recorded identity still matches and the resume must proceed.
+    """
+    from ard.config import load_config
+    from ard.pipeline import run
+
+    output_dir, bank, _spy, plan = _resume_rig(tmp_path, monkeypatch, existing=0)
+    run(load_config(tmp_path / "config.toml"), generate_specs=plan)
+    before = bank.read_text(encoding="utf-8")
+
+    # The user edits the seed and resumes the same output directory.
+    _write_config(tmp_path / "config.toml", output_dir, overwrite=False, seed=9)
+    run(load_config(tmp_path / "config.toml"), generate_specs=plan)
+
+    assert bank.read_text(encoding="utf-8") == before
+    assert len(_records(bank)) == _TARGET_COUNT
+
+
+def test_resume_with_a_different_plan_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A different plan is a different dataset: refusing beats silently mixing.
+
+    The seed is deliberately left unchanged, so this refusal is only reachable
+    through the plan identity — the old seed key cannot see the difference.
+    """
     from ard.config import ConfigError, load_config
     from ard.pipeline import run
 
@@ -628,25 +706,57 @@ def test_resume_with_a_different_seed_is_refused(
     run(load_config(tmp_path / "config.toml"), generate_specs=plan)
     before = bank.read_text(encoding="utf-8")
     snapshot = (output_dir / "config.toml").read_text(encoding="utf-8")
-    assert "seed = 7" in snapshot
 
-    # The user edits the seed and resumes the same output directory.
-    _write_config(tmp_path / "config.toml", output_dir, overwrite=False, seed=9)
-    with pytest.raises(ConfigError, match="different generation seed"):
-        run(load_config(tmp_path / "config.toml"), generate_specs=plan)
+    with pytest.raises(ConfigError, match="holds a different plan"):
+        run(
+            load_config(tmp_path / "config.toml"),
+            generate_specs=lambda config: _plan_tagged("other"),
+        )
 
     assert bank.read_text(encoding="utf-8") == before, (
         "a refused resume must not append anything to the bank"
     )
     assert (output_dir / "config.toml").read_text(encoding="utf-8") == snapshot, (
-        "a refused resume must not overwrite the previous run's seed snapshot"
+        "a refused resume must not rewrite the previous run's config snapshot"
     )
 
 
-def test_resume_with_the_same_seed_still_works(
+def test_resume_without_a_recorded_identity_refuses_a_foreign_bank(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The refusal is specific to a *changed* seed, not to resuming at all."""
+    """A pre-identity bank is verified structurally, never assumed compatible."""
+    from ard.config import ConfigError, load_config
+    from ard.pipeline import run
+
+    output_dir, bank, _spy, plan = _resume_rig(tmp_path, monkeypatch, existing=0)
+    append_anchor(_anchor("foreign-0"), bank)
+
+    with pytest.raises(ConfigError, match="not part of this run's plan"):
+        run(load_config(tmp_path / "config.toml"), generate_specs=plan)
+
+    assert len(_records(bank)) == 1
+
+
+def test_resume_without_a_recorded_identity_allows_a_subset_bank(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A pre-identity bank whose ids are all in the plan is provably one plan."""
+    from ard.config import load_config
+    from ard.pipeline import run
+
+    _output_dir, bank, _spy, plan = _resume_rig(tmp_path, monkeypatch, existing=2)
+
+    with caplog.at_level("WARNING"):
+        run(load_config(tmp_path / "config.toml"), generate_specs=plan)
+
+    assert len(_records(bank)) == _TARGET_COUNT
+    assert any("no recorded plan_identity" in record.message for record in caplog.records)
+
+
+def test_resume_with_the_same_plan_still_works(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refusal is specific to a *changed* plan, not to resuming at all."""
     from ard.config import load_config
     from ard.pipeline import run
 
