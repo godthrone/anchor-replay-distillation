@@ -8,9 +8,10 @@ User requirement under test, verbatim:
 Translated into the three behaviours frozen here:
 
 1. an output directory holding fewer records than the rule-derived plan
-   resumes: only the missing ``len(plan) - existing`` anchors are asked for,
-   they are **appended** to the bank, and the records already on disk survive
-   byte-for-byte;
+   resumes: only the plan coordinates whose stable id is **absent from the bank**
+   are asked for (identity, not record count — a bank missing a middle
+   coordinate is not a short prefix of the plan), they are **appended** to the
+   bank, and the records already on disk survive byte-for-byte;
 2. an output directory that already satisfies the plan generates nothing at all
    and returns without touching the bank (idempotent re-run);
 3. ``output.overwrite`` is the explicit opt-in that clears the bank (§3.3
@@ -27,10 +28,10 @@ is exercised with the spec plan replaced by a small deterministic double (the
 resume arithmetic and the bank on disk — not the v4 construction rule (covered by
 ``tests/core/test_sampling.py``) and not the turn generator (covered by
 ``tests/domain/test_text_anchor_backpressure.py``).  Since WP-S2a the target is
-``len(plan)`` — derived from the ontology — so the double *is* the plan and the
-pipeline owns the ``existing`` offset into it.  No network call is reachable: the
-generator double never touches the API clients the pipeline constructs, and
-``api_base`` points at a closed local port.
+``len(plan)`` — derived from the ontology — so the double *is* the plan, and the
+pipeline decides the shortfall by comparing the plan's ids against the bank's.  No
+network call is reachable: the generator double never touches the API clients the
+pipeline constructs, and ``api_base`` points at a closed local port.
 """
 
 from __future__ import annotations
@@ -76,8 +77,8 @@ def _plan() -> list[AnchorSpec]:
 
     It stands in for the rule-derived 1,826-coordinate plan; ``_PLAN_SIZE`` is
     what the resume arithmetic is measured against.  The ids are indexed by
-    *plan position*, so resuming the plan from an offset yields the same ids the
-    original run would have written at those positions.
+    *plan position*; resume is keyed on these ids, so a test can name exactly
+    which coordinate a previous run left unfinished.
     """
     return [
         AnchorSpec(
@@ -89,7 +90,7 @@ def _plan() -> list[AnchorSpec]:
     ]
 
 
-def _write_config(path: Path, output_dir: Path, *, overwrite: bool) -> None:
+def _write_config(path: Path, output_dir: Path, *, overwrite: bool, seed: int = 7) -> None:
     """Minimal valid config; the API endpoints are dummies that are never called."""
     lines = [
         "[input_generator]",
@@ -106,7 +107,7 @@ def _write_config(path: Path, output_dir: Path, *, overwrite: bool) -> None:
         # Neither the count nor the turn counts are config fields: the plan size
         # and each entry's turns come from the ontology's construction rule, and
         # the plan double below supplies the size here.
-        "seed = 7",
+        f"seed = {seed}",
         "concurrency = 1",
         "",
         "[ontology]",
@@ -123,9 +124,11 @@ def _write_config(path: Path, output_dir: Path, *, overwrite: bool) -> None:
 class _RunSpy:
     """Records what the pipeline asked for and appends one real record per spec."""
 
-    def __init__(self, tag: str) -> None:
+    def __init__(self, tag: str, abandoned: set[str] | None = None) -> None:
         self.tag = tag
+        self.abandoned = abandoned or set()
         self.requested: list[int] = []
+        self.requested_ids: list[list[str]] = []
 
     def __call__(self, **kwargs: object) -> list[GeneratedAnchor]:
         specs = kwargs["specs"]
@@ -135,9 +138,12 @@ class _RunSpy:
         assert isinstance(output_path, Path)
         assert isinstance(stats, AnchorGenerationStats)
         self.requested.append(len(specs))
+        self.requested_ids.append([spec.id for spec in specs if isinstance(spec, AnchorSpec)])
         written: list[GeneratedAnchor] = []
         for spec in specs:
             assert isinstance(spec, AnchorSpec)
+            if spec.id in self.abandoned:
+                continue  # the generation failure this test needs to reproduce
             anchor = _anchor(spec.id, answer=f"answer from {self.tag}")
             outcome = append_anchor(anchor, output_path)
             assert outcome.value == "appended", (
@@ -157,6 +163,7 @@ def _resume_rig(
     existing: int,
     overwrite: bool = False,
     tag: str = "resumed",
+    abandoned: set[str] | None = None,
 ) -> tuple[Path, Path, _RunSpy, Callable[[object], list[AnchorSpec]]]:
     """Prepare an output dir with *existing* records and return the run rig.
 
@@ -168,13 +175,19 @@ def _resume_rig(
     output_dir = tmp_path / "out"
     output_dir.mkdir(parents=True)
     bank = output_dir / "anchor_bank.jsonl"
+    # The records a previous run wrote carry the *plan's* ids: resume is decided
+    # by coordinate identity (``plan - bank``), so a bank whose ids are not in
+    # the plan is a foreign bank, not a short prefix of this plan.  Positions
+    # beyond the plan stand in for "the bank holds extra records".
+    plan_ids = [spec.id for spec in _plan()]
     for index in range(existing):
-        append_anchor(_anchor(f"existing-{index}"), bank)
+        record_id = plan_ids[index] if index < len(plan_ids) else f"overfill-{index}"
+        append_anchor(_anchor(record_id), bank)
 
     config_path = tmp_path / "config.toml"
     _write_config(config_path, output_dir, overwrite=overwrite)
 
-    spy = _RunSpy(tag)
+    spy = _RunSpy(tag, abandoned=abandoned)
     # The ontology is never read: the plan double is handed to ``run`` through
     # its ``generate_specs`` seam, so the expensive v4 load is skipped.
     monkeypatch.setattr(
@@ -312,7 +325,7 @@ def test_incomplete_bank_generates_only_the_missing_anchors(
     records = _records(bank)
     assert len(records) == _TARGET_COUNT
     assert [r["id"] for r in records[:existing]] == [
-        f"existing-{index}" for index in range(existing)
+        f"resumed-{index}" for index in range(existing)
     ], "the pre-existing records must not be reordered or rewritten"
     assert [r["id"] for r in records[existing:]] == [
         f"resumed-{index}" for index in range(existing, _TARGET_COUNT)
@@ -434,7 +447,7 @@ def test_trailing_fragment_is_ignored_instead_of_crashing_the_resume(
     )
     records = _records(bank)
     assert [r["id"] for r in records[:existing]] == [
-        f"existing-{index}" for index in range(existing)
+        f"resumed-{index}" for index in range(existing)
     ]
     assert [r["id"] for r in records[existing:]] == [
         f"resumed-{index}" for index in range(existing, _TARGET_COUNT)
@@ -486,3 +499,67 @@ def test_failed_resume_grows_the_bank_without_rewriting_it(
     assert spy.requested == [_TARGET_COUNT - existing]
     assert bank.read_text(encoding="utf-8").startswith(before)
     assert len(_records(bank)) == existing + 1
+
+
+# ── 6. resume is keyed by coordinate identity, not by record count (F1) ─────
+
+
+def _distinct_plan() -> list[AnchorSpec]:
+    """A small plan whose entries are pairwise distinct *coordinates*.
+
+    The readout test shrinks the construction rule's expected counts to this
+    plan's size (see :func:`test_readout_reconciles_with_the_bank`), so the
+    entries also have to be distinct for ``duplicate_coordinates`` to be 0.
+    """
+    return [
+        AnchorSpec(
+            id=f"resumed-{index}",
+            anchor_meta={"language": "English", "knowledge_domain": f"domain-{index}"},
+            turns=[TurnSpec(turn_index=0, role="user", is_final=True)],
+        )
+        for index in range(_PLAN_SIZE)
+    ]
+
+
+def test_resume_asks_for_a_middle_anchor_the_previous_run_abandoned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F1: the shortfall is ``plan - bank`` by id, not ``plan[record_count:]``.
+
+    Run 1 abandons the plan's *middle* entry.  A count-based resume sees 4
+    records and asks for ``plan[4:]`` — the last entry, already on disk — so the
+    abandoned coordinate is never retried.  An identity-based resume asks for
+    exactly the coordinate the bank is missing.
+    """
+    from ard.config import load_config
+    from ard.pipeline import run
+
+    output_dir, bank, spy, plan = _resume_rig(
+        tmp_path, monkeypatch, existing=0, abandoned={"resumed-2"}
+    )
+    run(load_config(tmp_path / "config.toml"), generate_specs=plan)
+    assert spy.requested_ids == [["resumed-0", "resumed-1", "resumed-2", "resumed-3", "resumed-4"]]
+    assert [r["id"] for r in _records(bank)] == [
+        "resumed-0",
+        "resumed-1",
+        "resumed-3",
+        "resumed-4",
+    ], "the middle entry was abandoned, so the bank is NOT a prefix of the plan"
+
+    resumed = _RunSpy("resumed")
+    monkeypatch.setattr("ard.pipeline.generate_text_anchors", resumed)
+    run(load_config(tmp_path / "config.toml"), generate_specs=plan)
+
+    assert resumed.requested_ids == [["resumed-2"]], (
+        "the missing middle coordinate must be pending again; a count-based resume "
+        "would ask for plan[4:] = resumed-4, which is already in the bank"
+    )
+    records = _records(bank)
+    assert sorted(r["id"] for r in records) == sorted(
+        f"resumed-{index}" for index in range(_PLAN_SIZE)
+    ), "every planned coordinate must end up in the bank"
+    assert records[-1]["id"] == "resumed-2", (
+        "the recovered coordinate is appended at the end — resume is append-only, "
+        "so the bank is not re-sorted into plan order"
+    )
+    assert (output_dir / "results" / "coverage.json").is_file()

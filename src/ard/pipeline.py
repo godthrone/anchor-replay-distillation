@@ -50,7 +50,6 @@ from ard.core.types import (
 )
 from ard.domain.bank import (
     build_manifest_from_records,
-    count_existing_anchors,
     read_anchor_bank,
     with_generation_report,
     write_manifest,
@@ -785,10 +784,12 @@ def run(
     # anchors further down (§2.3 边界校验即防呆).  ``sample_specs`` loads it.
     #
     # The plan **is** the target: ``len(plan)`` is the rule-derived count, and
-    # the checkpoint/resume path asks for the plan entries not on disk yet.
-    # Slicing the *tail* keeps resume append-only — plan order is deterministic,
-    # so the first N entries are exactly the N anchors a previous run wrote
-    # first.
+    # the checkpoint/resume path asks for the plan entries whose stable id is not
+    # in the bank yet.  Resume is append-only by construction — the generator
+    # writes only ids absent from the bank — and it is *identity*-based so a
+    # middle coordinate abandoned by an earlier run is requested again instead of
+    # being shadowed by a later, already-written one (see the ``pending_specs``
+    # comment below).
     #
     # It is built *before* the output directory exists so the image-addressing
     # check below runs on it and can still refuse before any side effect: a run
@@ -827,7 +828,11 @@ def run(
     # bank.  Opting into overwrite means "replaceable by a run that succeeds",
     # not "delete first and find out later" (§3.3 预授权退路).
     overwrite_existing = config.output.overwrite and output_path.exists()
-    existing_count = 0 if overwrite_existing else count_existing_anchors(output_path)
+    existing_records = [] if overwrite_existing else read_anchor_bank(output_path)
+    existing_ids = {
+        record["id"] for record in existing_records if isinstance(record.get("id"), str)
+    }
+    existing_count = len(existing_ids)
     remaining = target_count - existing_count
 
     # ── Image addressing boundary check (§2.3, before the output dir) ──────
@@ -838,7 +843,17 @@ def run(
     # those anchors ([images] skip_missing_images = true, §3.3 预授权退路).
     # Only the anchors still to be generated are checked: a completed bank needs
     # no image lookup at all.
-    pending_specs = plan[existing_count:]
+    #
+    # "Still to be generated" is decided by **coordinate identity**, not by a
+    # count: the bank stores each coordinate's stable id, so the shortfall is
+    # ``plan - bank``.  Slicing the tail after ``N`` records assumed the bank was
+    # a prefix of the plan; a run that abandoned a *middle* anchor wrote 1,825 of
+    # 1,826 records, and the resume then asked for ``plan[1825:]`` — the plan's
+    # last entry, already on disk — so the abandoned coordinate was never
+    # retried while ``coverage.json`` still read ``within_rule=true`` against the
+    # full plan (F1: a green readout decoupled from the library).  Identity makes
+    # every missing coordinate pending again, in plan order.
+    pending_specs = [spec for spec in plan if spec.id not in existing_ids]
     # ``[images] convert`` decides both the accepted input set and the bytes
     # that land in <output_dir>/images, so it is read here from the config
     # rather than from a CLI flag (§10.1: one source of truth per parameter).
@@ -882,11 +897,16 @@ def run(
                 or spec.anchor_meta["visual_domain"] in available
             ]
 
-    # The plan this run actually owns: skipped anchors are removed, so both the
-    # resume arithmetic and the acceptance structure readout stay consistent
-    # with what is on disk instead of claiming a rule-conformant plan.
+    # The plan this run actually owns: every planned coordinate that is either
+    # already in the bank or about to be generated.  Domain-skipped coordinates
+    # are removed, so both the resume arithmetic and the acceptance structure
+    # readout stay consistent with what is on disk instead of claiming a
+    # rule-conformant plan.  Built by identity (same reason as ``pending_specs``
+    # above), so the readout describes the artifact this run owns rather than the
+    # first N plan entries.
     specs = pending_specs
-    effective_plan = plan[:existing_count] + specs
+    owned_ids = existing_ids | {spec.id for spec in specs}
+    effective_plan = [spec for spec in plan if spec.id in owned_ids]
 
     # ── Output directory (first side effect) ───────────────────────────────
     output_dir.mkdir(parents=True, exist_ok=True)
