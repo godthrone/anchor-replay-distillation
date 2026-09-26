@@ -20,13 +20,18 @@ wrote, with a handful of environment-specific fields normalised (listed below).
 ./run.sh --config configs/config.toml --smoke --image-dir examples/images
 ```
 
-`--smoke` is the standard construction rule at reduced scale: **8 of the 1,826 anchors**
-(4 text-only + 4 image, evenly spaced over the block enumeration and including both ends).
-The run directory name carried the `_smoke` suffix, the log carried a WARNING, and the
-manifest below declares `smoke: true`. Generation is stochastic, so re-running that command
-reproduces the same *shape* — 8 planned anchors, 4 per modality, `schema_version 4.0.0`, the
-same addressing — but neither the same questions and answers nor, if the endpoint hiccups the
-same way, the same number of written records.
+`--smoke` is the standard construction rule at reduced scale: **8 restricted blocks** (4 text
+blocks + 4 image blocks, evenly spaced over the block enumeration, first and last included).
+That is 8 plan slots but only **6 distinct `RestrictedBlock`s** — two blocks appear once per
+modality, the same 891⊂935 subset identity behind the 1,826-anchor count in the main README.
+Those blocks are a subset of the blocks the full plan enumerates (**8/8 block-level coverage**),
+but their coordinates are re-rotated at smoke scale, so the 8 slots are **not rows of the
+1,826-anchor plan** (only 1/8 coincide coordinate-wise): a smoke artifact is **not a subset** of
+the full plan's rows. The run directory name carried the `_smoke` suffix, the log carried a
+WARNING, and the manifest below declares `smoke: true`. Generation is stochastic, so re-running
+that command reproduces the same *shape* — 8 planned anchors, 4 per modality,
+`schema_version 4.0.0`, the same addressing — but neither the same questions and answers nor,
+if the endpoint hiccups the same way, the same number of written records.
 
 **Provenance — which build produced these files.** Both sample files are the artifacts of one
 run of this repository at commit `12690b3`, made on 2026-09-27 against a real deployment
