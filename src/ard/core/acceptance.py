@@ -113,8 +113,8 @@ NOISE_UNAVAILABLE_REASON: Final[str] = (
 #:
 #: Deliberately **not** in the tuple: ``modality`` / ``has_image`` /
 #: ``image_count``.  They are plan bookkeeping (``modality`` selects the branch,
-#: ``has_image`` / ``image_count`` are stamped by
-#: ``src/ard/pipeline.py:550-553``); ``image_count`` is ``min(#user turns,
+#: ``has_image`` / ``image_count`` are stamped by ``ard.core.quota.allocate_images`` /
+#: ``ard.pipeline._assign_images_by_domain``); ``image_count`` is ``min(#user turns,
 #: IMAGES_PER_ANCHOR)`` with ``IMAGES_PER_ANCHOR = 1``
 #: (``src/ard/pipeline.py:356``), so it carries no information the tuple does
 #: not already carry.  The contract test
