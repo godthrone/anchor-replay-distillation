@@ -229,6 +229,7 @@ outputs/<run_name>/          # default ard_dataset_<YYYYmmdd_HHMMSS>; --smoke ap
 ├── anchor_bank.jsonl        # one record per line, schema_version 4.0.0
 ├── config.toml              # merged config snapshot, credentials redacted
 ├── plan_identity.in_progress.json  # only while a run is unfinished: its plan-identity record
+├── images/                  # where image-modality anchors' pictures land: images/<visual_domain>/<file> (transcoded or copied); created only when this run has image anchors
 ├── logs/                    # ard.log / ard_debug.log / ard_error.log
 ├── results/
 │   ├── coverage.json        # machine-readable acceptance readout

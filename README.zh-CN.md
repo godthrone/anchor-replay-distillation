@@ -199,6 +199,7 @@ outputs/<run_name>/          # 默认 ard_dataset_<YYYYmmdd_HHMMSS>；--smoke �
 ├── anchor_bank.jsonl        # 每行一条记录，schema_version 4.0.0
 ├── config.toml              # 合并后的配置快照，凭证已脱敏
 ├── plan_identity.in_progress.json  # 仅运行未结束时存在：中途的计划身份记录
+├── images/                  # 影像态锚点图片的落点：images/<visual_domain>/<图片文件>（转码或复制而来）；只有本次带影像态锚点时才创建
 ├── logs/                    # ard.log / ard_debug.log / ard_error.log
 ├── results/
 │   ├── coverage.json        # 机器可读的验收读数
