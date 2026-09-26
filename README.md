@@ -34,6 +34,17 @@ Requires [uv](https://docs.astral.sh/uv/) and Python 3.11 (pinned in `.python-ve
 that carries no `.git` (GitHub "Download ZIP", `git archive`) falls back to the fixed version
 `1.0.0` — the same value `run.sh` and `docker/build.sh` use when there is no tag to describe.
 
+**RAW support is not installed by default.** The default dependency set is MIT/Apache only; RAW
+camera formats (`.cr2`, `.nef`, `.arw`, `.dng`, …) need `rawpy`, whose wheels bundle LibRaw
+(LGPL-2.1 / CDDL-1.0). Install that extra explicitly when you feed RAW files:
+
+```bash
+uv sync --extra raw
+```
+
+Without it a RAW input is reported and skipped (a WARNING naming the file) rather than crashing
+the run — the FAQ entry below has the detail and the licence reason.
+
 ### 2. Provide endpoint credentials
 
 ```bash
@@ -182,7 +193,7 @@ input locations and run boundaries only: `--config`, `--override`, `--image-dir`
 | `[generation]` | `concurrency`, the optional `seed` (omit it and every run draws a fresh seed; the seed actually used is recorded in the run's `config.toml`), backpressure thresholds. The anchor count and the turn counts are **not** configurable — they come from the ontology |
 | `[ontology]` | Path to the v4 ontology (`ontology/anchor_ontology.v4.json`) |
 | `[output]` | `directory` (empty = `outputs/ard_dataset_<timestamp>`), `overwrite` (default `false`: an existing bank is resumed, not replaced) |
-| `[images]` | `convert` (default **`true`**): accept RAW/BMP/TIFF/GIF/WebP and normalise every selected picture to JPEG; `false` accepts only the already-web formats and copies them verbatim. `skip_missing_images` (default **`false`**): a missing `visual_domain` directory is refused, not skipped |
+| `[images]` | `convert` (default **`true`**): accept RAW/BMP/TIFF/GIF/WebP and normalise every selected picture to JPEG (RAW additionally needs the optional `raw` extra); `false` accepts only the already-web formats and copies them verbatim. `skip_missing_images` (default **`false`**): a missing `visual_domain` directory is refused, not skipped |
 | `[coverage]` | `enabled` (default `true`) and `target_set_path` — the target set for the metric readout; empty means structure readout only |
 | `[coverage.embedding]` | The OpenAI-compatible `/embeddings` endpoint, model, expected `dimension`, batch size and timeouts used by the metric readout |
 
@@ -290,6 +301,14 @@ domains are declared in `manifest.json` — a skip is never silent. A run that o
 `--image-dir` altogether attaches no pictures at all: image-modality anchors are still
 generated, as text conversations, while keeping their `visual_domain` coordinate. Pass
 `--image-dir` when you want the images.
+
+**Why do RAW camera files need `.[raw]`?**
+RAW decoding goes through `rawpy`, whose wheels bundle the LibRaw decoder (LGPL-2.1 /
+CDDL-1.0). Every dependency installed by a plain `uv sync` is MIT- or Apache-licensed, so the
+RAW decoder is an opt-in extra rather than part of the default set: `uv sync --extra raw` (see
+the install step above). A default install does not break on a RAW input — it logs a WARNING
+naming the file ("`rawpy not installed, cannot convert RAW image: …`") and drops that picture
+while the rest of the run proceeds.
 
 **Why is `q95` the main ruler while coverage is only a reference?**
 `q95` is the 95th percentile (Hyndman–Fan type 7) of each target point's distance to its

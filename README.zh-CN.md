@@ -27,6 +27,17 @@ uv sync
 标签对应的确切版本；而不带 `.git` 的源码归档（GitHub 的 "Download ZIP"、`git archive`）
 回退到固定版本 `1.0.0`——与 `run.sh`、`docker/build.sh` 在没有可描述标签时使用的值一致。
 
+**默认安装不含 RAW 支持。** 默认依赖集只有 MIT/Apache 许可证；RAW 相机格式（`.cr2`、`.nef`、
+`.arw`、`.dng` 等）需要 `rawpy`，而它的 wheel 捆绑了 LibRaw（LGPL-2.1 / CDDL-1.0）。要处理
+RAW 文件，请显式安装该 extra：
+
+```bash
+uv sync --extra raw
+```
+
+未安装时，RAW 输入会以一条点名该文件的 WARNING 被跳过，而不会让运行崩溃——原因（许可证）
+与细节见下面的 FAQ。
+
 ### 2. 准备端点凭证
 
 ```bash
@@ -160,7 +171,7 @@ uv run python -m ard --config configs/config.toml --smoke --image-dir examples/i
 | `[generation]` | `concurrency`；可选 `seed`（省略则每次运行从系统随机源抽新种子，实际使用的种子记在本次运行的 `config.toml` 里）；背压阈值。锚点条数与对话轮数**不可配置**——它们由本体推导 |
 | `[ontology]` | v4 本体路径（`ontology/anchor_ontology.v4.json`） |
 | `[output]` | `directory`（留空 = `outputs/ard_dataset_<timestamp>`）、`overwrite`（默认 `false`：已有锚点库是续跑，不是替换） |
-| `[images]` | `convert`（默认 **`true`**）：接受 RAW/BMP/TIFF/GIF/WebP 并把选中的图统一转成 JPEG；设 `false` 则只接受已适合网络的格式并原样复制。`skip_missing_images`（默认 **`false`**）：缺某个 `visual_domain` 图片目录时报错，而不是跳过 |
+| `[images]` | `convert`（默认 **`true`**）：接受 RAW/BMP/TIFF/GIF/WebP 并把选中的图统一转成 JPEG（RAW 另需可选 `raw` extra）；设 `false` 则只接受已适合网络的格式并原样复制。`skip_missing_images`（默认 **`false`**）：缺某个 `visual_domain` 图片目录时报错，而不是跳过 |
 | `[coverage]` | `enabled`（默认 `true`）与 `target_set_path`——指标读数用的目标集；留空即只出结构读数 |
 | `[coverage.embedding]` | 指标读数用的 OpenAI 兼容 `/embeddings` 端点、模型、期望 `dimension`、批大小与超时 |
 
@@ -255,6 +266,12 @@ uv run mypy src/ard/
 `[images] skip_missing_images = true`：那些锚点会被丢掉、逐条打 WARNING，跳过条数与涉及的域在
 `manifest.json` 里申报——跳过永不静默。完全不传 `--image-dir` 时，运行根本不会附图：影像态锚点
 仍会被生成成纯文本对话，同时保留自己的 `visual_domain` 坐标。想要图片就传 `--image-dir`。
+
+**RAW 相机文件为什么要装 `.[raw]`？**
+RAW 解码走 `rawpy`，而它的 wheel 捆绑了 LibRaw 解码器（LGPL-2.1 / CDDL-1.0）。一次普通
+`uv sync` 装上的依赖都是 MIT 或 Apache 许可证，所以 RAW 解码器做成可选 extra，而不进默认依赖集：
+`uv sync --extra raw`（见上面的安装步骤）。默认安装遇到 RAW 输入不会崩——它打一条点名该文件的
+WARNING（"`rawpy not installed, cannot convert RAW image: …`"），丢掉这张图，其余运行照常继续。
 
 **为什么 q95 是主尺子而覆盖率只作参考？**
 `q95` 是每个目标点到其最近锚点距离的 95 分位（Hyndman–Fan type-7）：一个尾部统计量，读作
