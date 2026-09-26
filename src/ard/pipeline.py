@@ -494,7 +494,7 @@ def _build_progress_record(
     its ``counters`` describe the *plan*, not progress: ``existing`` is the bank
     size when this invocation started, ``new`` the still-pending anchors it was
     asked for (``len(specs)``), and ``written`` the same number as ``new`` — the
-    output planned, not records on disk; the manifest's ``generation.counters.written``.
+    output planned, not records on disk, which is the manifest's ``total_anchors``.
 
     Args:
         identity: The plan's identity (``PlanIdentity.of(plan)``).
