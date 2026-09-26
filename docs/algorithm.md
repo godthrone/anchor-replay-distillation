@@ -118,7 +118,7 @@ flowchart TD
 （`build_system_prompt_prompt`）——`core/` 内零文件访问（§1.3，由 `tests/core/test_core_is_pure.py` 守卫）。目录缺失、mode 无对应文件、
 文件为空、占位符非法**一律硬报错**，报文含**路径与期望**（§2.3），**不静默回退到硬编码**（那等于重建第二个真相源，§1.4）；
 报文只含路径与 mode 名，无机密（§15）。`system_prompt_mode = none` 时 `_generate_system_message` 直接返回 `None`，
-不发起任何请求（`src/ard/domain/text_anchor.py:484`）。
+不发起任何请求（`src/ard/domain/text_anchor.py:496`）。
 
 **模板目录来源单点**：`SYSTEM_PROMPT_TEMPLATE_DIR`（`src/ard/core/system_prompt.py:64`）是运行时**唯一**一处
 声明该目录的地方（`git grep -n "configs/prompts" -- src` 仅此 1 命中）；契约测试
@@ -137,35 +137,71 @@ flowchart TD
 
 | 轴 | 措辞来源 | 证据 |
 |---|---|---|
-| `language` | 内联模板串（user 侧）+ 数据文件占位符 `{language}`（system-prompt 侧） | `src/ard/domain/text_anchor.py:184`、`:261`、`:269`；`configs/prompts/system_prompt/*.md` |
-| `knowledge_domain` | 内联模板串 + 数据文件占位符 `{domain}` | `src/ard/domain/text_anchor.py:185`、`:270`；`configs/prompts/system_prompt/*.md` |
-| `capability` | 内联模板串 + 数据文件占位符 `{capability}` | `src/ard/domain/text_anchor.py:186`、`:263`、`:271`；`configs/prompts/system_prompt/*.md` |
-| `conversation_type` | 内联模板串（作为 "conversation style" 回显；其 `turns` 另决定消息条数） | `src/ard/domain/text_anchor.py:187`、`:264`、`:272` |
-| `system_prompt_mode` | **数据文件** `configs/prompts/system_prompt/<mode>.md`（5 个取值各一份；present 模式 = 完整生成 prompt 模板） | `configs/prompts/system_prompt/`、`configs/prompts/README.md:1`、`src/ard/core/system_prompt.py:64`、`:95-226`；消费点 `src/ard/domain/text_anchor.py:499`（`none` 不生成 system message） |
+| `language` | 内联模板串（user 侧）+ 数据文件占位符 `{language}`（system-prompt 侧） | `src/ard/domain/text_anchor.py:185`、`:272`、`:280`；`configs/prompts/system_prompt/*.md` |
+| `knowledge_domain` | 内联模板串 + 数据文件占位符 `{domain}` | `src/ard/domain/text_anchor.py:186`、`:281`；`configs/prompts/system_prompt/*.md` |
+| `capability` | 内联模板串 + 数据文件占位符 `{capability}` | `src/ard/domain/text_anchor.py:187`、`:274`、`:282`；`configs/prompts/system_prompt/*.md` |
+| `conversation_type` | 内联模板串（作为 "conversation style" 回显；其 `turns` 另决定消息条数） | `src/ard/domain/text_anchor.py:188`、`:275`、`:283` |
+| `system_prompt_mode` | **数据文件** `configs/prompts/system_prompt/<mode>.md`（5 个取值各一份；present 模式 = 完整生成 prompt 模板） | `configs/prompts/system_prompt/`、`configs/prompts/README.md:1`、`src/ard/core/system_prompt.py:64`、`:95-226`；消费点 `src/ard/domain/text_anchor.py:511`（`none` 不生成 system message） |
+| `response_style` | **数据文件** `configs/prompts/axis_instruction/response_style.json`（7 取值各一句） | 同上；组装 `src/ard/domain/text_anchor.py:242`、`:289` |
+| `output_format` | **数据文件** `configs/prompts/axis_instruction/output_format.json`（6 取值各一句） | 同上；组装 `src/ard/domain/text_anchor.py:242`、`:289` |
+| `difficulty` | **数据文件** `configs/prompts/axis_instruction/difficulty.json`（3 取值各一句） | 同上；组装 `src/ard/domain/text_anchor.py:242`、`:289` |
+| `context_length` | **数据文件** `configs/prompts/axis_instruction/context_length.json`（3 取值各一句） | 同上；组装 `src/ard/domain/text_anchor.py:242`、`:289` |
+| `input_condition` | **数据文件** `configs/prompts/axis_instruction/input_condition.json`（6 取值各一句） | 同上；组装 `src/ard/domain/text_anchor.py:242`、`:289` |
+| `answer_mode` | **数据文件** `configs/prompts/axis_instruction/answer_mode.json`（4 取值各一句） | 同上；组装 `src/ard/domain/text_anchor.py:242`、`:289` |
 
-> 注：`text_anchor.py` 的 import 段历经两次删除（最近一次是把 system-prompt 措辞读取下沉到
-> `src/ard/backends/prompt_loader.py`，§1.3），其 import 段之后的行号整体上移；本页行号已按上面声明的基线提交逐条重核，无需再自行换算。
+**6 条 instruction 轴的措辞数据**（WP-S17 新增；"wording is data" 的第二个数据族，与 `system_prompt/` 平级，
+格式另见 `configs/prompts/README.md`）：`configs/prompts/axis_instruction/<axis>.json` 下 6 个文件，
+键 = 轴的取值，值 = 发给输入生成器的一句要求。纯契约在 `src/ard/core/axis_instruction.py`
+（`INSTRUCTION_AXES`、`AXIS_INSTRUCTION_DIR`、`validate_axis_instructions`、`render_axis_instructions`），
+读文件在 `src/ard/backends/axis_instruction_loader.py`（`load_axis_instructions` / `build_axis_requirements`）。
+取值缺指令 = **硬报错并点名轴、取值与文件**，无内置回退（§1.4、§2.3）；坐标不携带该轴（`None`）时该轴不加文本。
+逐值来源（`[本体有据]` / `[我方拟定]`）与渲染后片段见 WP-S17 的 `AXIS-WORDING-MAP.md`。
+
+**落点语义**：这 6 条轴约束的是**生成出的用户消息**，不是别的通道——`input_condition` 决定消息本身带何种缺陷，
+其余 5 条要求用户在提问里**索要**该风格 / 格式 / 难度 / 长度 / 回答方式。`context_length` 按
+**用户消息的长度**落地（本体 R7 逐字称该轴为 "input length"），而不是答案长度：锚点这一侧生成的就是用户消息；
+若改按答案长度落地，需要目标模型的 system 通道，会与 `system_prompt_mode` 的语义冲突。
+
+> 注：`text_anchor.py` 的 import 段历经增删（最近一次是 WP-S17 加一行 axis-wording import），其后的行号整体上移；
+> 本页行号已按 WP-S17 提交逐条重核，无需再自行换算。
 
 - **仅坐标的轴**（取值进入 `anchor_meta` / id / 统计，但**不改变 prompt 的文本措辞**）：
 
 | 轴 | 取值仍被谁使用（非措辞） | 证据 |
 |---|---|---|
-| `response_style` | 采样坐标、id 维度之一 | `src/ard/core/sampling.py:80-85`、`:202-218`、`:350`；`src/ard/core/constraints.py:26` |
-| `difficulty` | 采样坐标 | `src/ard/core/sampling.py:352`；`src/ard/core/constraints.py:27` |
-| `context_length` | 采样坐标 | `src/ard/core/sampling.py:353`；`src/ard/core/constraints.py:28` |
-| `output_format` | 受限块合法性判定（决定有哪些合法块） | `src/ard/core/constraints.py:34`、`:53`、`:228`、`:235`；`src/ard/core/sampling.py:351` |
-| `input_condition` | 受限块合法性判定 | `src/ard/core/constraints.py:35`、`:54`、`:229`、`:236`、`:244-252`；`src/ard/core/sampling.py:354` |
-| `answer_mode` | 受限块合法性判定 | `src/ard/core/constraints.py:36`、`:55`、`:230`、`:237`；`src/ard/core/sampling.py:355` |
 | `visual_domain` | **决定影像态图片目录** `<image_dir>/<visual_domain>/`；进 manifest 分组标签 | `src/ard/domain/image_store.py:125-211`；调用点 `src/ard/pipeline.py:958-1018`；分组标签 `src/ard/domain/bank.py:453` |
 
-**边界声明（如实记录，不补措辞）**：上述 7 个"仅坐标"轴（6 个受限轴 + `visual_domain`）的取值**不改变 prompt 的文本措辞**；
-`visual_domain` 经图片目录影响**输入图像的内容**（属于内容而非措辞），其余 6 个受限轴只作为**约束求解的输入**
-（决定有哪些合法块、共 935/891 个）。其中 `output_format` / `input_condition` / `answer_mode` 的语义
-**没有落到生成时的任何指令里**——这是显式的口径缺口，本文档不复述任何自行补写的措辞，缺口已单列"需上级决策"。
+> 上表在 WP-S14 审计时还有 6 行（`response_style` / `difficulty` / `context_length` / `output_format` /
+> `input_condition` / `answer_mode`）：当时它们的取值只进采样坐标与约束求解，**一个字符都没进 prompt**。WP-S17 已为这 6 条
+> `layer = "instruction"` 的轴补齐措辞，故它们上移到"有措辞的轴"表。它们原先的非措辞用途不变：
+> 采样坐标（`src/ard/core/sampling.py:351-355`）与受限块合法性判定（`src/ard/core/constraints.py:34-36`、`:53-55`、`:228-237`）。
 
-**待决清单沿革**：本工作包曾单列"需上级决策"的**措辞数据位置**项（当时事实："本体推荐位置无对应文件 + 措辞硬编码在 Python"）
-——**已决**：按本体推荐落地为数据文件（提交 `c8ffd44`）。仍未决的一条：上面
-`output_format` / `input_condition` / `answer_mode` 的语义缺口。
+**边界声明**：12 轴中 **11 轴的取值改变发给模型的 prompt 文本**（4 条 base 轴 + `system_prompt_mode` + 本轮补齐的 6 条
+instruction 轴）；唯一例外是 `visual_domain`——它不进文本，而是经图片目录影响**输入图像的内容**，属内容而非措辞
+（WP-S14 已实测其生效）。**不允许"吉祥物轴"**：守卫测试 `tests/domain/test_axis_influence_guard.py` 对 12 轴逐轴取两个
+只差该轴的坐标，断言生成侧请求四元组 `(I, S, T, V)` 不同；负向对照在临时去掉 6 条 instruction 轴的措辞时**恰好点名这 6 条**。
+
+**待决清单沿革**：曾单列"需上级决策"的**措辞数据位置**项——**已决**：按本体推荐落地为数据文件（提交 `c8ffd44`）。
+其后单列的 `output_format` / `input_condition` / `answer_mode` 语义缺口（以及同类的 3 条自由轴）——**已决**（WP-S17，
+数据位置见上面的 instruction 轴表；用户裁定原话："这就是 bug……确保所有的轴都有提示词应用，能切实的影响生成"）。
+
+### 4.1 `layer` 词表（本体无定义，本工程定义）
+
+本体（`ontology/anchor_ontology.v4.json`）给每条轴一个 `layer` 字段，取值 `content` / `form` / `instruction` /
+`modality`，但**全文无 legend、0 代码消费者**（`git grep -n "\.layer" -- src` 0 命中），即该词表此前
+**只有名字没有定义**（WP-S14 审计 §1、§4.2）。此处按四值对 12 轴的实际划分**给出定义**——**这是我方拟定的定义，不是本体的声明**
+（本体与本体指纹均未改动）：
+
+| `layer` | 定义（我方拟定） | 该层的轴 |
+|---|---|---|
+| `content` | 取值决定**内容主题与语言** | `language`、`knowledge_domain`、`capability` |
+| `form` | 取值决定**对话形态**（system message 的存在与风格、轮数） | `system_prompt_mode`、`conversation_type` |
+| `instruction` | 取值是**对生成内容的要求/指令**，必须作为措辞进入 prompt | `response_style`、`output_format`、`difficulty`、`context_length`、`input_condition`、`answer_mode` |
+| `modality` | 取值是**模态条件轴**，经输入通道（图片）生效 | `visual_domain`（R5 逐字称其为 "modality-conditional axis"） |
+
+定义与代码的一致性由测试锁定：`instruction` 层 = `src/ard/core/axis_instruction.py` 的 `INSTRUCTION_AXES`
+（契约测试 `test_instruction_axes_are_the_ontology_instruction_layer`），且 12 轴逐轴守卫见
+`tests/domain/test_axis_influence_guard.py`。
 
 ## 5. 本体指纹沿革
 
