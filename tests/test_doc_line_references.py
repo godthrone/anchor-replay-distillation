@@ -21,6 +21,15 @@ past the end, reference left dangling on a blank line), not a correctness proof
 for line numbers.  A reference that lands on a blank line — which is how a
 ``+1`` shift past a section separator shows up — *is* caught.
 
+**Range references are outside its coverage.**  A ``file:12-30`` reference is
+bounds-checked only: the guard asserts that line 30 exists and that line 12 is
+non-blank.  It never asserts that the range still brackets the symbol the prose
+names, nor that either endpoint belongs to it.  A range that has drifted by N
+lines onto other real lines — or one that was wrong from the time it was written
+— therefore passes silently, even though a wrong range is the more damaging
+error: it is the form used to cite a whole function or data block.  Only a human
+(or a symbol-aware check) can see that its endpoints no longer match the prose.
+
 Not covered at all: targets without one of the extensions above (e.g.
 ``docker/Dockerfile:41``), and relative ``:123`` references whose target file is
 only clear from the surrounding prose rather than from an explicit reference
