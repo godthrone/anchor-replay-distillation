@@ -2,8 +2,10 @@
 
 > 职责：说明 ARD 一轮锚点计划的**目标集口径**、**构造规则**（坐标如何被选出）、**轮数口径**、**坐标与措辞的边界**，
 > 以及本体指纹沿革。纯计算实现见 `src/ard/core/sampling.py` / `constraints.py` / `ontology.py`；判据与读数定义见 `docs/measurement.md`。
-> 基线：本页所有 `文件:行` 已按提交 `a94e7b3` 的树逐条核对（该提交之后只有文档变更，被引用的代码行未再漂移；
-> 此前按 `a0f3221` 记录的行号已随代码演进整体平移并用符号名交叉核对过）。
+> 基线：本页所有 `文件:行` 已按提交 `a94e7b3` 的树逐条核对；其中指向 `src/ard/pipeline.py` 的引用
+> 已按提交 `70af65e`（S11c resume 修复系列）逐条按符号内容重定位，指向 `src/ard/core/sampling.py`
+> 的一处引用同期核正（原起点落在空行）。其余引用由 `tests/test_doc_line_references.py` 守卫检查
+> "文件存在 / 行号在范围内 / 引用行非空"——它**不能**发现错位到另一条非空行上的情况。
 
 ## 1. 目标集口径
 
@@ -51,7 +53,7 @@ flowchart TD
 | 6 个受限轴（`capability`/`system_prompt_mode`/`conversation_type`/`output_format`/`input_condition`/`answer_mode`） | **穷举合法受限块，每块恰好 1 条** | `src/ard/core/sampling.py:372-452`；`src/ard/core/constraints.py:212-264` |
 | `knowledge_domain` | **轮转**：第 i 条取 `leaves[i % 209]` | `src/ard/core/sampling.py:78`、`:419-421` |
 | `visual_domain` | **轮转**：第 i 条取 `leaves[i % 21]`（仅影像态；文本态缺席） | `src/ard/core/sampling.py:78`、`:419-421` |
-| `language` / `response_style` / `difficulty` / `context_length` | **按 run seed 随机抽取** | `src/ard/core/sampling.py:80-85`、`:416-418`；`_draw` `src/ard/core/sampling.py:325-328` |
+| `language` / `response_style` / `difficulty` / `context_length` | **按 run seed 随机抽取** | `src/ard/core/sampling.py:80-85`、`:417-418`；`_draw` `src/ard/core/sampling.py:325-328` |
 | `modality` | 采样字段（非轴）：前 935 条 `text_only`，后 891 条 `image` | `src/ard/core/sampling.py:428-448`；本体 `ontology/anchor_ontology.v4.json:1303-1309` |
 
 已知的两个失败模式都做成**显式报错**而非静默降级：坐标重复（`src/ard/core/sampling.py:360-369`）、本体叶数与期望不符
@@ -154,7 +156,7 @@ flowchart TD
 | `output_format` | 受限块合法性判定（决定有哪些合法块） | `src/ard/core/constraints.py:34`、`:53`、`:228`、`:235`；`src/ard/core/sampling.py:351` |
 | `input_condition` | 受限块合法性判定 | `src/ard/core/constraints.py:35`、`:54`、`:229`、`:236`、`:244-252`；`src/ard/core/sampling.py:354` |
 | `answer_mode` | 受限块合法性判定 | `src/ard/core/constraints.py:36`、`:55`、`:230`、`:237`；`src/ard/core/sampling.py:355` |
-| `visual_domain` | **决定影像态图片目录** `<image_dir>/<visual_domain>/`；进 manifest 分组标签 | `src/ard/domain/image_store.py:125-211`；调用点 `src/ard/pipeline.py:832-879`；分组标签 `src/ard/domain/bank.py:453` |
+| `visual_domain` | **决定影像态图片目录** `<image_dir>/<visual_domain>/`；进 manifest 分组标签 | `src/ard/domain/image_store.py:125-211`；调用点 `src/ard/pipeline.py:958-1018`；分组标签 `src/ard/domain/bank.py:453` |
 
 **边界声明（如实记录，不补措辞）**：上述 7 个"仅坐标"轴（6 个受限轴 + `visual_domain`）的取值**不改变 prompt 的文本措辞**；
 `visual_domain` 经图片目录影响**输入图像的内容**（属于内容而非措辞），其余 6 个受限轴只作为**约束求解的输入**

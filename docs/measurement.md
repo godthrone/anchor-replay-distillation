@@ -4,8 +4,10 @@
 > 并写明该尺子的**可分辨性边界**。纯计算实现见 `src/ard/core/coverage.py`；读数组装见 `src/ard/core/acceptance.py`
 > 与 `src/ard/backends/coverage_wiring.py`；产物见 `results/coverage.json` / `coverage.md`。
 > 基线：`src/ard/core/acceptance.py` 的行号已按提交 `16ee1fd` 的树重新逐条核对（该提交修正多模态锚点取文，
-> 行号随之整体平移）；其余被引用的代码文件自 `a94e7b3` 以来未改动，沿用以该提交为准的核对结果，
-> 其间核正了本页此前指向 `src/ard/pipeline.py` 的几处错行。
+> 行号随之整体平移）；本页指向 `src/ard/pipeline.py` 的引用已按提交 `70af65e`（S11c resume 修复系列）
+> 逐条按符号内容重定位；其余被引用的代码文件沿用以 `a94e7b3` 为准的核对结果。
+> `tests/test_doc_line_references.py` 守卫检查"文件存在 / 行号在范围内 / 引用行非空"，但它**不能**
+> 发现引用错位到另一条非空行上的情况。
 
 ## 1. 距离与分位
 
@@ -79,7 +81,7 @@
 静默跳过会让 `q95` 落在一个比运行产物更小的锚点集上，空串占位则是在空间里伪造一个点——两者都是伪读数。
 
 **不含密钥**：空间声明只写 model 与 dimension，不写 `api_base`、不写任何 key；输出目录里的配置快照另有脱敏
-（`src/ard/pipeline.py:201`，`_redact_secrets`）。
+（`src/ard/pipeline.py:202`，`_redact_secrets`）。
 
 ## 6. 读数流水线与退化行为
 
@@ -99,21 +101,22 @@ flowchart TD
     W --> R
 ```
 
-**三种配置组合的契约**（`src/ard/config.py:352-404`，`resolved_embedding`；`src/ard/pipeline.py:542-584`，`_prepare_coverage`）。
+**三种配置组合的契约**（`src/ard/config.py:352-404`，`resolved_embedding`；`src/ard/pipeline.py:605-647`，`_prepare_coverage`）。
 
 | `coverage.target_set_path` | `[coverage.embedding]` | 行为 |
 |---|---|---|
-| **两者都未设** | 任意 | **结构读数 + 明确 WARNING**：`metric readout not measured …`（`src/ard/pipeline.py:561-567`）；报告 `metrics: null`、manifest `metric_readout: false` / `q95: null`。不静默、不崩溃 |
+| **两者都未设** | 任意 | **结构读数 + 明确 WARNING**：`metric readout not measured …`（`src/ard/pipeline.py:623-629`）；报告 `metrics: null`、manifest `metric_readout: false` / `q95: null`。不静默、不崩溃 |
 | **已设** | **缺** `api_base` / `model` / `dimension`（或全空） | **fail-fast 报错**（`ConfigError`），报文逐项列出缺失字段并要求"补齐或清空 `target_set_path`"；在 `load_config` 即触发（`src/ard/config.py:381-387`），**早于创建任何输出目录**。这是**刻意严格**的行为：目标集已声明要测指标，却没有可用嵌入器，属于配置错误而非可退化的缺省 |
 | **已设** | 完备，`normalize = true` | 产出**指标读数**（`q95` / `Extent(ε)` / ε 带 / 噪声带）；`normalize = false` 同样 fail-fast（尺子要求 L2 归一化，`src/ard/config.py:389-393`） |
 
-其余退化行为（都**显式**、绝不静默，`src/ard/pipeline.py:597-685`，`_run_acceptance`）：
+其余退化行为（都**显式**、绝不静默，`src/ard/pipeline.py:696-793`，`_run_acceptance`）：
 
 | 情形 | 行为 |
 |---|---|
-| 目标集缺失/不可解析/计数或维度与配置矛盾 | 在**创建输出目录之前**拒绝整个运行（`src/ard/pipeline.py:542-584`，`CoverageWiringError`；`:779` 在输出目录存在之前调用），不产生半成品产物 |
-| 嵌入调用失败 | 结构性读数**先已落盘**（`src/ard/pipeline.py:653-660`），失败照常抛出，但不会抹掉零成本的结构报告 |
-| 无同格重复生成数据 | 噪声带写 `unavailable` 并附原因（`src/ard/core/acceptance.py:68-70`；`src/ard/pipeline.py:667-668` 把原因并入 warnings） |
+| 目标集缺失/不可解析/计数或维度与配置矛盾 | 在**创建输出目录之前**拒绝整个运行（`src/ard/pipeline.py:605-647`，`CoverageWiringError`；`:891` 在输出目录存在之前调用），不产生半成品产物 |
+| 嵌入调用失败 | 结构性读数**先已落盘**（`src/ard/pipeline.py:762-769`），失败照常抛出，但不会抹掉零成本的结构报告 |
+| 无同格重复生成数据 | 噪声带写 `unavailable` 并附原因（`src/ard/core/acceptance.py:68-70`；`src/ard/pipeline.py:776-777` 把原因并入 warnings） |
+| 库比计划少一条计划坐标 | 结构读数仍描述计划，但读数被如实改为 `within_rule: false`，并在 warnings 里**列出缺失坐标**（`src/ard/pipeline.py:665-694`；一条计划坐标没落库时，计划再合规也不算"产物合规"） |
 
 ## 7. 已知边界：指标层的分辨力上限
 
@@ -170,7 +173,7 @@ flowchart TD
 
 三种配置组合的行为见 §6 的契约表：都没设 ⇒ 结构读数 + WARNING；只设目标集不配嵌入器 ⇒ fail-fast 报错；
 两者都设 ⇒ 指标读数。只想验证接线、不想调用生成端点时，可以对**已有的** `anchor_bank.jsonl` 直接调用
-`pipeline._prepare_coverage` + `pipeline._run_acceptance`（`src/ard/pipeline.py:542-584` / `:597-685`）。
+`pipeline._prepare_coverage` + `pipeline._run_acceptance`（`src/ard/pipeline.py:605-647` / `:696-793`）。
 
 ## 10. 目标集样例的构造规则
 
