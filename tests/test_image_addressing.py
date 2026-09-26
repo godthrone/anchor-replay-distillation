@@ -91,6 +91,7 @@ def _write_config(
     *,
     seed: int = 7,
     skip_missing_images: bool = False,
+    convert: bool = True,
 ) -> None:
     lines = [
         "[input_generator]",
@@ -116,6 +117,7 @@ def _write_config(
         "",
         "[images]",
         f"skip_missing_images = {'true' if skip_missing_images else 'false'}",
+        f"convert = {'true' if convert else 'false'}",
         "",
     ]
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -128,6 +130,7 @@ def _rig(
     *,
     skip_missing_images: bool = False,
     seed: int = 7,
+    convert: bool = True,
 ) -> tuple[Path, _GeneratorSpy, Callable[[object], list[AnchorSpec]]]:
     """Config + spy + plan double; the ontology is never loaded.
 
@@ -138,7 +141,13 @@ def _rig(
 
     output_dir = tmp_path / "out"
     config_path = tmp_path / "config.toml"
-    _write_config(config_path, output_dir, seed=seed, skip_missing_images=skip_missing_images)
+    _write_config(
+        config_path,
+        output_dir,
+        seed=seed,
+        skip_missing_images=skip_missing_images,
+        convert=convert,
+    )
     spy = _GeneratorSpy()
     monkeypatch.setattr(
         pipeline,
@@ -392,6 +401,40 @@ def _bank_image_reference(abs_path: str) -> str:
     """The bank's persisted form of *abs_path*: ``images/<domain>/<file>``."""
     index = abs_path.rfind("/images/")
     return abs_path[index + 1 :]
+
+
+def test_convert_false_resume_reuses_the_placed_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``convert = false`` resume reuses the placed image instead of copying `_1` (B3).
+
+    ``copy_images_to_output`` had no ``force=False`` reuse branch, so a resume
+    that still had one anchor to generate copied the domain image again as
+    ``img_1.png``/``img_0_1.png`` — one duplicate per run, with the bank left
+    referencing two identical files.  The ``convert = true`` path already reused.
+    """
+    from ard.pipeline import run
+
+    images = _image_dir(tmp_path, {"animals": 1})
+    specs = [_spec("a1", "animals"), _spec("a2", "animals")]
+    output_dir, _spy, plan = _rig(tmp_path, monkeypatch, specs, convert=False)
+    config = load_config(tmp_path / "config.toml")
+
+    # run 1 abandons a2, as if its generation had failed and the run stopped.
+    monkeypatch.setattr("ard.pipeline.generate_text_anchors", _AbandoningGeneratorSpy({"a2"}))
+    run(config, image_dir=str(images), generate_specs=plan)
+    placed = sorted(p.name for p in (output_dir / "images" / "animals").iterdir())
+    assert placed == ["img_0.png"], "a1 survives, so the shared picture must survive too"
+
+    # run 2 resumes a2 in the same domain: reuse the file, do not copy a second.
+    monkeypatch.setattr("ard.pipeline.generate_text_anchors", _GeneratorSpy())
+    run(config, image_dir=str(images), generate_specs=plan)
+
+    assert sorted(p.name for p in (output_dir / "images" / "animals").iterdir()) == ["img_0.png"], (
+        "a resume must not place a suffixed duplicate of an image already in the run dir"
+    )
+    records = (output_dir / "anchor_bank.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(records) == 2
 
 
 class _ImagePartGeneratorSpy(_GeneratorSpy):

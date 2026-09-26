@@ -270,13 +270,23 @@ def copy_images_to_output(
     image_paths: list[Path],
     output_dir: str | Path,
     *,
+    force: bool = False,
     subdir: str | None = None,
 ) -> list[str]:
     """Copy images to output/images/ directory.
 
+    When ``force=False`` (the default) an existing file at the destination is
+    treated as already placed and skipped — this is the **resume** scenario, and
+    it mirrors :func:`convert_and_copy_images`'s ``force=False`` branch so both
+    ``[images] convert`` settings behave the same on a second run.  Without it a
+    ``convert = false`` resume copied every domain image again as
+    ``name_1.ext``, growing one duplicate per run.  Set ``force=True`` to copy
+    unconditionally (the collision handler then suffixes ``_1``).
+
     Args:
         image_paths: Source image paths.
         output_dir: Output directory root.
+        force: If ``True``, copy even when the destination already exists.
         subdir: Optional subdirectory of ``images/`` (the run passes the
             ``visual_domain`` so the output tree mirrors the addressing
             convention).  ``None`` keeps the historical flat layout.
@@ -289,6 +299,14 @@ def copy_images_to_output(
     relative_paths: list[str] = []
     for src in image_paths:
         dst = images_dir / src.name
+        # Resume: an existing destination is the file a previous run placed;
+        # reuse it instead of writing a ``name_1`` duplicate.  One file may be
+        # shared by several anchors, which is why the reference is returned
+        # rather than the copy being skipped silently.
+        if dst.exists() and not force:
+            logger.info("Skipping %s (already exists)", dst.name)
+            relative_paths.append(_relative_image_path(dst.name, subdir))
+            continue
         if dst.exists():
             stem = src.stem
             suffix = src.suffix

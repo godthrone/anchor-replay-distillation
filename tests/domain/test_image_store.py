@@ -125,13 +125,37 @@ def test_copy_images_to_output_copies_and_handles_collision(tmp_path: Path) -> N
     _make_image(tmp_path / "photo.png", "PNG")
     _make_image(tmp_path / "photo.png", "PNG", color=10)  # duplicate name
 
-    rel = copy_images_to_output([tmp_path / "photo.png", tmp_path / "photo.png"], tmp_path / "out")
+    rel = copy_images_to_output(
+        [tmp_path / "photo.png", tmp_path / "photo.png"], tmp_path / "out", force=True
+    )
 
     assert rel == ["images/photo.png", "images/photo_1.png"]
     assert (tmp_path / "out" / "images" / "photo.png").read_bytes() == (
         tmp_path / "photo.png"
     ).read_bytes()
     assert (tmp_path / "out" / "images" / "photo_1.png").is_file()
+
+
+def test_copy_images_to_output_resume_reuses_instead_of_duplicating(tmp_path: Path) -> None:
+    """``force=False`` (the default) is the resume branch: reuse, do not re-copy.
+
+    The ``convert = false`` path used to have no reuse branch, so every resume
+    copied the same source again as ``photo_1.png`` — one duplicate per run, with
+    the bank then referencing two identical files.
+    """
+    _make_image(tmp_path / "photo.png", "PNG")
+    out = tmp_path / "out"
+
+    first = copy_images_to_output([tmp_path / "photo.png"], out, subdir="animals")
+    assert first == ["images/animals/photo.png"]
+    before = (out / "images" / "animals" / "photo.png").stat().st_mtime_ns
+
+    resumed = copy_images_to_output([tmp_path / "photo.png"], out, subdir="animals")
+    assert resumed == first, "the resume must report the file that is already there"
+    assert sorted(p.name for p in (out / "images" / "animals").iterdir()) == ["photo.png"], (
+        "a resume must not add a second copy under a suffixed name"
+    )
+    assert (out / "images" / "animals" / "photo.png").stat().st_mtime_ns == before
 
 
 # ── convert_image (real format paths) ──────────────────────────────────────────
