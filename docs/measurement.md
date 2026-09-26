@@ -3,9 +3,11 @@
 > 职责：定义 ARD 的验收尺子——距离、分位、覆盖读数、ε 敏感带、配对 bootstrap、噪声带、空间声明要求与退化行为，
 > 并写明该尺子的**可分辨性边界**。纯计算实现见 `src/ard/core/coverage.py`；读数组装见 `src/ard/core/acceptance.py`
 > 与 `src/ard/backends/coverage_wiring.py`；产物见 `results/coverage.json` / `coverage.md`。
-> 基线：`src/ard/core/acceptance.py` 的行号已按提交 `16ee1fd` 的树重新逐条核对（该提交修正多模态锚点取文，
-> 行号随之整体平移）；本页指向 `src/ard/pipeline.py` 的引用已按提交 `70af65e`（S11c resume 修复系列）
-> 逐条按符号内容重定位；其余被引用的代码文件沿用以 `a94e7b3` 为准的核对结果。
+> 基线：`src/ard/core/acceptance.py` 的行号已按 **WP-S18** 的树重新逐条核对（S18 新增
+> `prompt_signature_distinct` / `effective_projection_distinct` / `diversity` 并把噪声带分组改为
+> **prompt 签名**，行号随之整体平移）；更早一次核对在提交 `16ee1fd`（修正多模态锚点取文）；
+> 本页指向 `src/ard/pipeline.py` 的引用沿用以提交 `70af65e`（S11c resume 修复系列）为准的核对结果；
+> 其余被引用的代码文件沿用以 `a94e7b3` 为准的核对结果。
 > `tests/test_doc_line_references.py` 守卫检查"文件存在 / 行号在范围内 / 引用行非空"，但它**不能**
 > 发现引用错位到另一条非空行上的情况。
 
@@ -32,7 +34,7 @@
 ε 的来源被显式落在空间声明里（`src/ard/backends/coverage_wiring.py:180-191`）：
 
 1. 目标集文件头部声明了 `epsilon` ⇒ 原样使用；
-2. 未声明 ⇒ 用目标集**自身尺度**：目标点之间最近邻距离的 type-7 中位数（`src/ard/core/acceptance.py:492-514`，`intrinsic_epsilon`）；
+2. 未声明 ⇒ 用目标集**自身尺度**：目标点之间最近邻距离的 type-7 中位数（`src/ard/core/acceptance.py:705-726`，`intrinsic_epsilon`）；
    目标点少于 2 个时**报错**，不猜测。
 
 ## 3. 配对 bootstrap
@@ -47,25 +49,51 @@
 
 ## 4. 噪声带
 
-同格重复生成（**同一坐标**被生成多次）的距离分布，下沿 `q50`、上沿 `max`（`src/ard/core/coverage.py:578-595`）。
+同格重复生成（**同一请求**被生成多次）的距离分布，下沿 `q50`、上沿 `max`（`src/ard/core/coverage.py:578-595`）。
 原料是同一格的**互异对**距离（`pairwise_distances`，`src/ard/core/coverage.py:549-576`）。判据 `within_noise_band(value, band)`
 为闭区间判定：落在 `[q50, max]` 内 = 与重复生成噪声**不可分辨**（`src/ard/core/coverage.py:597-608`）。
 
-组装：`src/ard/core/acceptance.py:516-557`（`noise_section`）从库记录中找同坐标分组（`repeat_groups`，`:470-490`），
-无重复生成数据时按 `NOISE_UNAVAILABLE_REASON`（`src/ard/core/acceptance.py:68-70`）显式写 **`unavailable`**，绝不省略。
+组装：`src/ard/core/acceptance.py:729-769`（`noise_section`）从库记录中找**同 prompt 签名**的分组
+（`repeat_groups`，`src/ard/core/acceptance.py:676-702`），无重复生成数据时按 `NOISE_UNAVAILABLE_REASON`
+（`src/ard/core/acceptance.py:85-87`）显式写 **`unavailable`**，绝不省略。
+
+### 4.1 分组键 = prompt 签名（不是整份 `anchor_meta`）
+
+**这是 WP-S18 修正的口径。** 分组的定义是"两次生成发给输入生成器的请求逐字节相同"，因此分组键必须是
+**prompt 组装实际读到的字段序列**，而不是 `anchor_meta` 的全部键：
+
+- 签名 = `PROMPT_SIGNATURE_AXES`（`src/ard/core/acceptance.py:123-136`）的取值**有序元组**；缺轴 = `None`，
+  不是"取该轴第一个值"（`prompt_signature`，`src/ard/core/acceptance.py:401-413`）。
+- 这 12 个轴就是**全部 12 个本体轴**，逐字段的消费点见 `src/ard/core/acceptance.py:89-122` 的注释：
+  `language` / `knowledge_domain` / `capability` / `conversation_type`
+  （`src/ard/domain/text_anchor.py:233-236` 读，`:266-284` 拼进指令，`:286-291` 组装 system 串）、
+  `system_prompt_mode`（`src/ard/backends/prompt_loader.py:99-100` 选措辞文件，
+  `src/ard/core/system_prompt.py:83-87` 填占位符）、
+  六个 instruction 轴（`src/ard/domain/text_anchor.py:242-243` → `src/ard/backends/axis_instruction_loader.py:96-97`）、
+  `visual_domain`（`src/ard/domain/image_store.py:128-130` 选图目录，即请求里带哪张图）。
+- **不在**签名里的是计划记账字段 `modality` / `has_image` / `image_count`：它们不改变发给生成器的请求文本。
+  `image_count = min(用户轮数, IMAGES_PER_ANCHOR)` 且 `IMAGES_PER_ANCHOR = 1`（`src/ard/pipeline.py:356`），
+  信息量为零；契约测试 `tests/core/test_acceptance_prompt_signature.py` 双向渲染两遍（列出轴必须改变渲染、
+  未列字段必须不改变渲染）来守住这个集合，轴一旦变成"吉祥物"即失败。
+- **判据没有放宽**：仍然只在"同一签名出现 **≥2** 条"时才标定噪声带。v4 计划里每条签名都只出现一次，
+  所以正常运行的读数**就是** `unavailable`；重复组是因为"同一格被生成多次"才出现，不是为了"能出数"而放宽。
+
+**为什么旧口径会低估噪声**：按整份 `anchor_meta` 分组时，两条**只差不进 prompt 的字段**的记录会被分到两格，
+于是"同一请求的两次生成"被算成"两个格子"，重复对消失、噪声带被报成 `unavailable` 或偏窄，
+而 `q95` 的臂间差反而显得"可分辨"。这正是 WP-S14 §3 记下的口径缺陷。
 
 ## 5. 空间声明要求
 
-每次指标读数必须**声明它是在什么空间里测的**（`src/ard/core/acceptance.py:161-194`，`SpaceDeclaration`）：
+每次指标读数必须**声明它是在什么空间里测的**（`src/ard/core/acceptance.py:302-334`，`SpaceDeclaration`）：
 
 | 字段 | 要求 | 值/来源 |
 |---|---|---|
 | `anchors_source` | 锚点向量来自哪个产物 | 锚点库路径（如 `outputs/<run>/anchor_bank.jsonl`） |
-| `anchor_field` | 嵌入的是该产物的哪个字段 | `src/ard/core/acceptance.py:53`：`messages[last].content(text parts only)`（最后一个 user 轮的**文本部分**） |
+| `anchor_field` | 嵌入的是该产物的哪个字段 | `src/ard/core/acceptance.py:70`：`messages[last].content(text parts only)`（最后一个 user 轮的**文本部分**） |
 | `targets_source` | 目标集文件路径 | `coverage.target_set_path` |
-| `target_field` | 嵌入目标条目的哪个字段 | `src/ard/core/acceptance.py:65`：`text` |
+| `target_field` | 嵌入目标条目的哪个字段 | `src/ard/core/acceptance.py:82`：`text` |
 | `n_anchor` / `n_target` | `|A|` / `|T|` | 实测矩阵行数 |
-| `embedder` | **嵌入器身份 = model + dimension + normalize** | `src/ard/core/acceptance.py:151-158`；由 `[coverage.embedding]` 解析 |
+| `embedder` | **嵌入器身份 = model + dimension + normalize** | `src/ard/core/acceptance.py:292-299`；由 `[coverage.embedding]` 解析 |
 | `distance` / `quantile_method` | 距离与分位定义 | `"1 - cos"`、`"linear"`（type-7） |
 | `epsilon` / `epsilon_source` | ε 及其来源 | 头部声明或目标集自身尺度 |
 
@@ -73,11 +101,11 @@
 `content` 是多模态 part 列表（`{"type": "image", ...}` 与 `{"type": "text", "text": ...}` 并列），
 取文只取其中 `type == "text"` 的 `text`，故 `anchor_field` 写作 `messages[last].content(text parts only)`，
 而不是笼统的 `messages[last].content`——否则读数的空间声明会被误读成"图像也进了这个空间"。
-多个文本部分按声明分隔符 `"\n"`（`src/ard/core/acceptance.py:62`）连接；非文本 part 一律忽略。
+多个文本部分按声明分隔符 `"\n"`（`src/ard/core/acceptance.py:79`）连接；非文本 part 一律忽略。
 
 **没有任何文本部分 ⇒ 报错，不静默跳过、不用空串占位。** 某条锚点的最终 user 轮若一个可用文本部分都没有
-（纯图像锚点、或文本部分全为空白），`user_turn_text`（`src/ard/core/acceptance.py:372-429`）与
-`anchor_texts`（`:431-468`）以 `AcceptanceError` 终止，报文含**记录 id、part 数量与 part 类型**。
+（纯图像锚点、或文本部分全为空白），`user_turn_text`（`src/ard/core/acceptance.py:578-634`）与
+`anchor_texts`（`src/ard/core/acceptance.py:637-673`）以 `AcceptanceError` 终止，报文含**记录 id、part 数量与 part 类型**。
 静默跳过会让 `q95` 落在一个比运行产物更小的锚点集上，空串占位则是在空间里伪造一个点——两者都是伪读数。
 
 **不含密钥**：空间声明只写 model 与 dimension，不写 `api_base`、不写任何 key；输出目录里的配置快照另有脱敏
@@ -115,7 +143,7 @@ flowchart TD
 |---|---|
 | 目标集缺失/不可解析/计数或维度与配置矛盾 | 在**创建输出目录之前**拒绝整个运行（`src/ard/pipeline.py:605-647`，`CoverageWiringError`；`:891` 在输出目录存在之前调用），不产生半成品产物 |
 | 嵌入调用失败 | 结构性读数**先已落盘**（`src/ard/pipeline.py:762-769`），失败照常抛出，但不会抹掉零成本的结构报告 |
-| 无同格重复生成数据 | 噪声带写 `unavailable` 并附原因（`src/ard/core/acceptance.py:68-70`；`src/ard/pipeline.py:776-777` 把原因并入 warnings） |
+| 无同格重复生成数据 | 噪声带写 `unavailable` 并附原因（`src/ard/core/acceptance.py:85-87`；`src/ard/pipeline.py:776-777` 把原因并入 warnings） |
 | 库比计划少一条计划坐标 | 结构读数仍描述计划，但读数被如实改为 `within_rule: false`，并在 warnings 里**列出缺失坐标**（`src/ard/pipeline.py:665-694`；一条计划坐标没落库时，计划再合规也不算"产物合规"） |
 
 ## 7. 已知边界：指标层的分辨力上限
@@ -130,18 +158,27 @@ flowchart TD
   （出处：v4 设计阶段的本地实验记录，**未纳入版本控制**，此处只作方法论沿革；不引用任何部署/运行编号，
   也不构成对某个具体运行的断言。）
 - **由此得出的口径**：在该分辨力上限内，**结构保证才是硬约束**——
-  即"935/891 个合法受限块每块恰好 1 条、`knowledge_domain` 209 叶轮转、`visual_domain` 21 叶轮转、坐标 0 重复"
+  即"935/891 个合法受限块每块恰好 1 条、**935/891 个互异 prompt 签名**、**935/891 个有效受限投影**、
+  `knowledge_domain` 209 叶轮转、`visual_domain` 21 叶轮转、坐标 0 重复"
   这类可零成本复核的结构事实，比臂间 `q95` 排名更可靠。`q95` 用于**自证与回归**（同一构造的读数是否稳定），
   不用于主张细微的算法优劣。
+  后两个数不是装饰（§11）：它们正是"935 个格子"与"935 个不同规格"之间那道必须被读出来的差别。
 - 报告的措辞要求：当读数落在噪声带内时，不得写"某臂更优/更差"，只能报
   **效应量 + CI 宽度 + 最小可辨差（≈ CI 半宽）**，并明确声明"不可分辨"。
 
 ## 8. 产物字段
 
-- `results/coverage.json`：`AcceptanceReport` 的完整机器可读序列化（`report_schema = "ard-acceptance-1"`），
+- `results/coverage.json`：`AcceptanceReport` 的完整机器可读序列化（`report_schema = "ard-acceptance-2"`），
   含 `structure` / `metrics`（`space` / `quantiles` / `extent` / `epsilon_band` / `noise`）/ `warnings`。
-- `results/coverage.md`：同一报告的人读版渲染（`src/ard/core/acceptance.py:602-692`），
-  结构读数表、Conventions（`MULTI_TURN_DEFAULT` 与轮数映射）、空间声明、分位/覆盖读数、噪声带、warnings。
+- `results/coverage.md`：同一报告的人读版渲染（`src/ard/core/acceptance.py:815-934`），
+  结构读数表、Diversity declaration（两个 distinct 读数的定义）、Conventions（`MULTI_TURN_DEFAULT` 与轮数映射）、
+  空间声明、分位/覆盖读数、噪声带、warnings。
+
+**`ard-acceptance-1` → `ard-acceptance-2`（WP-S18，字段语义变更 ⇒ 版本号递增）。** 两处变化：
+`structure` 新增 `prompt_signature_distinct` / `effective_projection_distinct` / `diversity`（§11），
+且 `metrics.noise.n_repeat_groups` 的含义从"整份 `anchor_meta` 相同的格子数"改为"prompt 签名相同的格子数"（§4.1）。
+**这两个版本的 `noise` 字段不可直接比较**：同名不同义，所以老报告必须按 `report_schema` 区分后再读
+（`src/ard/core/acceptance.py:62-69`）。
 
 ## 9. 复核指标路径：三步
 
@@ -196,3 +233,44 @@ flowchart TD
 **它不保证读出的数字有意义**：32 条同模板句子的自身尺度很小（本机离线 MiniLM 384-d 下 ε ≈ 0.021，
 故 `Extent(ε)` 通常为 0）。样例只证明"目标集 → 嵌入 → 距离 → 读数"这条**接线**通，不构成任何覆盖结论；
 产品级读数需要真正的目标集与真正的锚点库。
+
+## 11. 结构读数里的"有效多样性"——以及读数如何被误读
+
+**为什么非要报这两个数（WP-S14 审计的教训）。** WP-S14 的只读审计（**工作区产物，未入库**；其脚本只读
+import 本体加载器与两个真实 prompt 渲染器，不调用任何模型）发现：把 935 个合法受限块投影到
+**prompt 真正读到的受限轴**上，只剩 **112** 种（影像是 102 种）；**4282 对**块只差在
+`output_format` / `input_condition` / `answer_mode` 上——只要自由轴相同，它们发出的 prompt **逐字节相同**。
+也就是说：**"935 个块"曾经被读成"935 个不同规格"，而当时只有 112 个规格真的影响生成。**
+WP-S17 把这六个 instruction 轴的措辞真的渲染进 prompt 之后，"有效投影"才等于块数（112/102 → 935/891，
+见本页 §4.1 逐字段消费点）。
+
+**于是结构读数并列报四个数**（`structure` 里，全部按模态分开；定义随读数一起落盘在 `structure.diversity`）：
+
+| 字段 | 含义 | 当前全量计划 |
+|---|---|---|
+| `text_block_count` / `image_block_count` | 覆盖到的**合法受限块**数（标称块数） | 935 / 891 |
+| `prompt_signature_distinct` | 不同 **prompt 签名**数 = 不同生成侧请求数 | 935 / 891 |
+| `effective_projection_distinct` | 受限轴里**真正进 prompt**的那些轴的**不同投影**数 = 能改变生成结果的不同规格数 | 935 / 891 |
+| `knowledge_domain_leaves` / `visual_domain_leaves` | 轮转叶覆盖数 | 209 / 21 |
+
+`prompt_signature_distinct` 与 `effective_projection_distinct` 都是 `{text_only, image}` 两个整数；
+`structure.diversity` 写明签名包含哪些轴、按什么顺序拼、在什么集合上数（`counted_over`），
+`docs/` 这页只讲"为什么要报"。任何一个 distinct 数**小于**同模态的块数，`within_rule` 即为 `false`、
+`coverage.md` 对应行标 `MISMATCH`、`structure_mismatch` 的 warning 逐行点名——这是防呆，
+不是给读数化妆。
+
+**读数如何被误读（三种典型错误，都必须避免）**
+
+1. **把标称块数当有效多样性**：`935/935 块覆盖` 只说明"计划枚举了 935 个合法受限组合"，
+   **不说明**它们产生 935 个不同请求或 935 个不同规格。要读有效多样性，只能看上面后两个数。
+2. **把 `prompt_signature_distinct` 当"设计格数"**：签名 distinct=935 只说"935 个不同 prompt"。但签名互异
+   **可以靠单轴轮转撑起来**——WP-S14 在 S17 之前的口径下测得多样性分解是
+   **有效受限投影 112 → 加 `language` 386 → 加 `knowledge_domain` 935**，即当时"935 个不同 prompt"
+   由 `knowledge_domain` 逐条轮转贡献了后 549 个。所以**签名互异 ≠ 受限规格互异**，两个数必须一起读；
+   只看签名数会把"轮转出来的差异"当成"实验格子本身的差异"。
+3. **把 `noise.available=false` 当"没有噪声"**：`unavailable` 的含义是"**这批产物里没有同签名的重复生成**"，
+   不是"噪声为零"。v4 计划每格只生成一次，所以正常运行的读数就是 `unavailable`（§4.1）；此时
+   `q95` 的臂间差**没有标定过**可分辨性，不得据此写"某臂更优/更差"（§7）。
+
+**复算**：前三个数都是零成本的纯结构计数，`acceptance.structure_readout(plan)` 即可复得；
+本机既有产物上重跑读数的做法见 §9 结尾，不需要任何生成调用。
