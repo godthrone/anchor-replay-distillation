@@ -213,7 +213,7 @@ flowchart TD
 
 三种配置组合的行为见 §6 的契约表：都没设 ⇒ 结构读数 + WARNING；只设目标集不配嵌入器 ⇒ fail-fast 报错；
 两者都设 ⇒ 指标读数。只想验证接线、不想调用生成端点时，可以对**已有的** `anchor_bank.jsonl` 直接调用
-`pipeline._prepare_coverage` + `pipeline._run_acceptance`（`src/ard/pipeline.py:871-913` / `:747-844`）。
+`pipeline._prepare_coverage` + `pipeline._run_acceptance`（`src/ard/pipeline.py:871-913` / `:962-1058`）。
 
 ## 10. 目标集样例的构造规则
 
@@ -296,7 +296,7 @@ WP-S17 把这六个 instruction 轴的措辞真的渲染进 prompt 之后，"有
 
 1. **产品级读数（`q95` / `Extent` / 覆盖与多样性）只能绑定到 `plan_identity.digest`**：写报告时引用该摘要，
    而不是引用 seed；两个摘要相同才允许把两次读数并列比较。
-2. **续跑守卫比为计划身份**（`src/ard/pipeline.py:420-487`）：摘要不同 ⇒ 拒绝续跑（明确报错"holds a different
+2. **续跑守卫比为计划身份**（`src/ard/pipeline.py:625-703`）：摘要不同 ⇒ 拒绝续跑（明确报错"holds a different
    plan"），绝不把两份计划的锚点写进同一份 `anchor_bank.jsonl`；摘要相同 ⇒ 允许。旧库（无 `plan_identity`）
    走结构校验：库里存在不属于本次计划的 anchor id 即拒绝，绝不静默混合。
 3. **`plan_identity` 没有被记录的老产物**（本字段引入之前的库）不能凭 seed 断言其计划身份，只能按结构校验

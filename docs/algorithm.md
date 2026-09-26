@@ -22,8 +22,8 @@
 | 受限轴原始组合 `raw_restricted_block` | 100,800 | `:1341` |
 | 文本态合法受限块 | **935** | `:1342`；`src/ard/core/sampling.py:88` |
 | 影像态合法受限块（18 个 image-capable capability） | **891** | `:1343`；`src/ard/core/sampling.py:91` |
-| `knowledge_domain` 叶 | **209**（18 domain / 36 subdomain） | `:63-67` |
-| `visual_domain` 叶 | **21** | `:307-311` |
+| `knowledge_domain` 叶 | **209**（18 domain / 36 subdomain） | `:55-59` |
+| `visual_domain` 叶 | **21** | `:296-300` |
 | **一轮计划总数** | **1,826**（935 + 891） | `src/ard/core/sampling.py:100` |
 
 **总数不是配置项**：它由构造规则与本体唯一推导。`configs/config.toml` 中没有 `target_count` 一类字段，
