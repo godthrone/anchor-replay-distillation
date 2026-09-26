@@ -90,7 +90,7 @@ flowchart TD
 要点（结构级）：
 
 - **计划与生成分离**：`AnchorSpec` 计划在触碰任何端点之前就固定（坐标 → 轮数 → 消息角色），因此"要生成什么"可复现、可计数；生成阶段只是按计划逐轮调用模型。
-- **单条锚点原子性**：任一轮失败（超时/空内容/角色不符）即放弃整条锚点并记账，不允许产出角色错位的对话（`src/ard/domain/text_anchor.py:549`，`_generate_one_anchor` 起）。
+- **单条锚点原子性**：任一轮失败（超时/空内容/角色不符）即放弃整条锚点并记账，不允许产出角色错位的对话（`src/ard/domain/text_anchor.py:561`，`_generate_one_anchor` 起）。
 - **入库是唯一持久化入口**：形状门、`data_source` 门、id 去重都在 `bank.append_anchor` 内完成（`src/ard/domain/bank.py:219` 起），manifest 与验收读数都从落盘的记录重建。
 - **影像按坐标寻址**：影像态锚点按自己的 `visual_domain` 到 `<image_dir>/<visual_domain>/` 取图；
   缺图的域在**创建输出目录之前**被拒绝，除非显式配置 `[images] skip_missing_images = true`
