@@ -1,35 +1,35 @@
 {
-  "total_anchors": 8,
+  "total_anchors": 7,
   "domains": {
     "origin of the universe": 1,
-    "dark matter hypotheses": 1,
     "deep ocean unknowns": 1,
-    "planetary habitability": 1,
+    "dark matter hypotheses": 1,
     "complex systems emergence": 1,
     "consciousness research": 1,
-    "origin of life": 1,
-    "limits of scientific measurement": 1
+    "limits of scientific measurement": 1,
+    "origin of life": 1
   },
   "languages": {
+    "Español": 2,
     "简体中文": 1,
-    "English": 3,
-    "日本語": 4
+    "日本語": 1,
+    "English": 3
   },
   "capabilities": {
     "qa": 2,
     "structured_response": 2,
-    "reasoning": 2,
-    "debugging": 2
+    "debugging": 2,
+    "reasoning": 1
   },
   "system_prompt_modes": {
     "none": 2,
     "task_constraint": 2,
-    "detailed_persona": 2,
-    "domain_style": 2
+    "domain_style": 2,
+    "detailed_persona": 1
   },
   "data_sources": {
     "ard_text": 4,
-    "ard_multi": 4
+    "ard_multi": 3
   },
   "output_dir": "outputs/ard_dataset_<timestamp>_smoke",
   "config": {
@@ -59,7 +59,7 @@
       "enable_thinking": true
     },
     "generation": {
-      "seed": 3028740997,
+      "seed": 3188911139,
       "concurrency": 4,
       "backpressure_threshold": 3,
       "backpressure_cooldown": 60.0
@@ -68,11 +68,12 @@
       "path": "ontology/anchor_ontology.v4.json"
     },
     "output": {
-      "directory": "",
+      "directory": null,
       "overwrite": false
     },
     "images": {
-      "skip_missing_images": false
+      "skip_missing_images": false,
+      "convert": true
     },
     "coverage": {
       "enabled": true,
@@ -90,16 +91,26 @@
       }
     }
   },
+  "plan_identity": {
+    "algorithm": "sha256",
+    "version": 1,
+    "plan_size": 8,
+    "digest": "ea3884f20b46210a7c5b9464e27b76e7a082d6e51e97436f63bae64cfab1732f"
+  },
   "generation": {
     "counters": {
       "requested": 8,
-      "succeeded": 8,
-      "written": 8
+      "succeeded": 7,
+      "abandoned_total": 1,
+      "abandoned_by_reason": {
+        "transport_error": 1
+      },
+      "written": 7
     },
     "failures": {
-      "reasoning_responses": 18,
-      "reasoning_chars": 178416,
-      "responses": 42
+      "reasoning_responses": 17,
+      "reasoning_chars": 112310,
+      "responses": 39
     }
   },
   "acceptance": {
