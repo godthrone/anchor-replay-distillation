@@ -395,11 +395,61 @@ def _recorded_plan_identity(manifest_path: Path) -> PlanIdentity | None:
     Returns ``None`` when the manifest is absent, unreadable, or does not carry
     a well-formed identity of this algorithm — "no recorded identity" is a
     different fact from "identity 0", and is handled separately below (§3.2).
+
+    The same reader serves :func:`_recorded_progress_identity`, so both sinks
+    define "a recorded identity" identically.
     """
-    try:
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    return _identity_from_file(manifest_path)
+
+
+def _recorded_progress_identity(output_dir: Path) -> PlanIdentity | None:
+    """The ``plan_identity`` an unfinished run left in *output_dir*.
+
+    That is the plan the run directory is already bound to, so a resume must
+    match it exactly like it matches a finished run's manifest identity —
+    otherwise an interrupted run would be the one state a caller could append a
+    different plan to (§2.3).  ``None`` when no (well-formed) record exists.
+    """
+    return _identity_from_file(output_dir / PROGRESS_RECORD_FILENAME)
+
+
+MANIFEST_STATUS_COMPLETE = "complete"
+"""``status`` the authoritative ``manifest.json`` declares.
+
+The final manifest is a *completed* declaration, while
+:data:`PROGRESS_RECORD_FILENAME` carries ``status: "in_progress"``.  Both sinks
+use the key ``status`` so a reader compares like with like, and a completed run
+can never be presented as an unfinished one (or the other way round).
+"""
+
+PROGRESS_RECORD_FILENAME = "plan_identity.in_progress.json"
+"""Name of the run directory's intermediate plan-identity record.
+
+The authoritative plan name of a run directory is ``manifest.json``'s
+``plan_identity``, and that file is written only at the very end.  A run that is
+interrupted — crashed, killed, or still generating when the box goes away; on
+the 1,826-anchor path that is the common case, not the exception — would
+otherwise leave a bank with **no plan name at all**, so the artifact could not
+be bound to the plan that produced it and could not be audited or resumed with
+confidence.
+
+This file closes that gap without ever standing in for the manifest: its own
+``status`` (``"in_progress"``), its own schema key and its own filename all say
+"this is not the final declaration", and it deliberately carries no run health
+(no ``generation`` counters/failures) because those numbers do not exist until
+the run is over.  It is refreshed by every invocation that samples a plan and
+removed once the authoritative manifest has been written.
+"""
+
+
+def _identity_from_record(data: object) -> PlanIdentity | None:
+    """The well-formed ``plan_identity`` inside *data*, or ``None``.
+
+    One reader for both sinks (the final ``manifest.json`` and the intermediate
+    progress record): the identity is the same four-field object either way, and
+    validating it in one place is what keeps "no recorded identity" a different
+    fact from "identity 0" (§3.2).
+    """
     recorded = data.get("plan_identity") if isinstance(data, dict) else None
     if not isinstance(recorded, dict):
         return None
@@ -417,11 +467,167 @@ def _recorded_plan_identity(manifest_path: Path) -> PlanIdentity | None:
     )
 
 
+def _identity_from_file(path: Path) -> PlanIdentity | None:
+    """The identity a JSON artifact at *path* records, or ``None`` when unusable."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return _identity_from_record(data)
+
+
+def _build_progress_record(
+    *,
+    identity: PlanIdentity,
+    started_at: str,
+    existing: int,
+    new: int,
+    written: int,
+    smoke: bool,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Build the intermediate plan-identity record for an unfinished run (§2.4).
+
+    The record declares its own status in the file name *and* in ``status``, so
+    it can never be mistaken for ``manifest.json``: it is a *bound* plan name
+    with *incomplete* counters.  ``counters.new`` is what the invocation asked
+    the generator for, ``counters.written`` what it had persisted when the
+    record was written (equal for the record written before generation starts) —
+    a reader can see how far the run got, and recompute the identity from the
+    plan to verify it is bound to the right one.
+
+    Args:
+        identity: The plan's identity (``PlanIdentity.of(plan)``).
+        started_at: Local start time, ``%Y-%m-%d %H:%M:%S``.
+        existing: Anchors already in the bank when this invocation started.
+        new: Anchors this invocation asked the generator for.
+        written: Anchors this invocation had persisted when the record was
+            written.
+        smoke: Whether this run was ``--smoke``.
+        output_dir: The run directory the record describes.
+
+    Returns:
+        The JSON-ready record.
+    """
+    return {
+        "ard_progress_record": "plan_identity/v1",
+        "status": "in_progress",
+        "note": (
+            "Intermediate record of a run that has not finished. It binds this "
+            "directory to a plan, but its counters are incomplete and it is NOT "
+            "the final declaration — read manifest.json for that. Safe to delete."
+        ),
+        "started_at": started_at,
+        "plan_identity": identity.as_dict(),
+        "counters": {"existing": existing, "new": new, "written": written},
+        "smoke": smoke,
+        "output_dir": str(output_dir),
+    }
+
+
+def _write_progress_record(output_dir: Path, record: dict[str, Any]) -> Path:
+    """Write *record* to the run directory's progress record, replacing a stale one.
+
+    A run that samples a plan **is** the run that directory is now about, so the
+    record is refreshed in place rather than appended to: one file, one current
+    state (§1.4 单一真相源).  It is always written, even when it did not exist
+    before — "the process is running" is exactly the state that was invisible.
+    """
+    path = output_dir / PROGRESS_RECORD_FILENAME
+    path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    identity = record["plan_identity"]
+    logger.info(
+        "Plan identity %s recorded in %s (status: in_progress; manifest.json is "
+        "written only when the run finishes)",
+        identity["digest"],
+        path,
+    )
+    return path
+
+
+def _clear_progress_record(output_dir: Path) -> None:
+    """Remove the intermediate record once the authoritative manifest exists.
+
+    ``manifest.json`` with ``status: complete`` and the same ``plan_identity``
+    is the final word; keeping a *stale* ``in_progress`` file next to it would be
+    an ambiguity for no benefit — and it is the ambiguity a smoke-scaled audit
+    script could trip over.  A failed unlink is a WARNING, never a run failure
+    (§3.2: announce the degradation, do not fail a finished run over
+    housekeeping).
+    """
+    path = output_dir / PROGRESS_RECORD_FILENAME
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        logger.warning(
+            "Could not remove the intermediate progress record %s: %s. It no longer "
+            "matches the finished manifest; delete it by hand if the run directory "
+            "must hold only current state.",
+            path,
+            exc,
+        )
+        return
+    logger.info("Removed the intermediate progress record %s (run finished).", path)
+
+
+def _declare_manifest_status(manifest: dict[str, Any], *, status: str) -> dict[str, Any]:
+    """Declare the artifact's lifecycle ``status`` in *manifest* (§7.4)."""
+    manifest["status"] = status
+    return manifest
+
+
+def _refresh_manifest_for_no_generation(
+    manifest: dict[str, Any], path: Path, recorded: PlanIdentity | None
+) -> bool:
+    """Write *manifest* to ``manifest.json`` — unless a final one already names the plan.
+
+    The checkpoint/no-op path (``run`` found nothing left to generate) used to
+    write its manifest unconditionally.  That manifest is built from the bank
+    alone, so it carries **no** ``generation`` section: the counters, dropped
+    anchors and failure accounting of the run that actually did the generating
+    were replaced by a clean-looking summary — the §3.2 failure this project
+    keeps paying for.  It would also have let a later invocation restate a
+    finished run as unfinished.  So when the manifest already on disk records
+    *this* plan's identity, it is the authoritative statement about this run
+    directory and is left byte-for-byte untouched.  A manifest that is absent
+    (or that records a different plan — unreachable here, the identity guard
+    refuses such a resume earlier) is written as before.
+
+    Args:
+        manifest: The manifest built from the current bank.
+        path: The run directory's ``manifest.json``.
+        recorded: The identity the existing ``manifest.json`` records, or
+            ``None`` when there is no readable manifest.
+
+    Returns:
+        ``True`` when the manifest was written, ``False`` when it was preserved.
+    """
+    declared = manifest["plan_identity"]
+    same_plan = (
+        recorded is not None
+        and recorded.digest == declared["digest"]
+        and recorded.plan_size == declared["plan_size"]
+        and recorded.version == declared["version"]
+    )
+    if same_plan:
+        logger.info(
+            "Nothing to generate; %s already records this plan. Left untouched "
+            "(its run health stays authoritative).",
+            path,
+        )
+        return False
+    write_manifest(_declare_manifest_status(manifest, status=MANIFEST_STATUS_COMPLETE), path)
+    return True
+
+
 def _refuse_plan_change_on_resume(
     output_dir: Path,
     identity: PlanIdentity,
     plan_ids: set[str],
     existing_records: JsonObjectList,
+    recorded: PlanIdentity | None,
 ) -> None:
     """Refuse a resume that would append a *different* plan to the bank (§2.3).
 
@@ -429,15 +635,24 @@ def _refuse_plan_change_on_resume(
     seed is a process-level config value that does not name a plan (two runs can
     share one seed and still build different plans, and a run directory's
     recorded seed is rewritten by every later invocation, including ones that
-    generate nothing — see ``docs/algorithm.md`` §6).  The identity is the
-    previous run's ``manifest.json`` ``plan_identity``, which describes the plan
-    actually sampled.
+    generate nothing — see ``docs/algorithm.md`` §6).  The identity is the one
+    the run directory already records: the finished run's ``manifest.json``
+    ``plan_identity``, or — when the previous run never got that far — the
+    ``plan_identity`` in :data:`PROGRESS_RECORD_FILENAME`.  Both describe the
+    plan actually sampled, and both are checked before any side effect.
 
-    A resume whose manifest records no identity (a hand-assembled or
+    A resume whose directory records no identity (a hand-assembled or
     pre-identity bank) falls back to the structural fact that proves it safe:
     every anchor id already in the bank must be part of *this* run's plan.  A
     bank holding a foreign coordinate is refused; a bank that is a subset is
     resumed with a WARNING, so "cannot verify" never silently becomes "mixed".
+
+    Args:
+        output_dir: The run directory being resumed.
+        identity: This run's plan identity.
+        plan_ids: Every anchor id of this run's plan.
+        existing_records: The records already in the bank.
+        recorded: The identity the directory already records, or ``None``.
 
     Raises:
         ConfigError: If records already exist for *output_dir* and either the
@@ -449,7 +664,6 @@ def _refuse_plan_change_on_resume(
     existing_ids = {
         record["id"] for record in existing_records if isinstance(record.get("id"), str)
     }
-    recorded = _recorded_plan_identity(output_dir / "manifest.json")
     if recorded is not None:
         if (
             recorded.digest == identity.digest
@@ -472,8 +686,9 @@ def _refuse_plan_change_on_resume(
         raise ConfigError(
             f"refusing to resume {output_dir}: its anchor_bank.jsonl holds "
             f"{len(foreign)} anchor id(s) that are not part of this run's plan "
-            f"(first: {foreign[0]}), and its manifest.json records no plan_identity "
-            "to verify. Appending would mix two datasets in one run directory; give "
+            f"(first: {foreign[0]}), and neither manifest.json nor "
+            f"{PROGRESS_RECORD_FILENAME} records a plan_identity to verify. "
+            "Appending would mix two datasets in one run directory; give "
             "the new plan its own output.directory (or set output.overwrite = true "
             "to replace this one deliberately)."
         )
@@ -1009,10 +1224,20 @@ def run(
     # ── Resume identity check (§2.3, still before any side effect) ──────────
     # The plan's identity — not ``[generation] seed``, which is a process-level
     # config value that every invocation redraws and rewrites — is what decides
-    # whether appending to this bank stays within one plan.  The previous run's
-    # manifest.json records that identity; a mismatch is refused here, before
-    # the config snapshot is rewritten, so nothing on disk is touched.
-    _refuse_plan_change_on_resume(output_dir, plan_id, {spec.id for spec in plan}, existing_records)
+    # whether appending to this bank stays within one plan.  The run directory
+    # records it in one of two places: the finished run's ``manifest.json``, or —
+    # when the previous run was interrupted before the manifest was written —
+    # the intermediate progress record.  Both are read here, and a mismatch is
+    # refused before the config snapshot is rewritten, so nothing on disk is
+    # touched.
+    recorded_plan_identity = _recorded_plan_identity(output_dir / "manifest.json")
+    _refuse_plan_change_on_resume(
+        output_dir,
+        plan_id,
+        {spec.id for spec in plan},
+        existing_records,
+        recorded_plan_identity or _recorded_progress_identity(output_dir),
+    )
 
     # ── Image addressing boundary check (§2.3, before the output dir) ──────
     # Every image-modality anchor resolves its picture under
@@ -1150,15 +1375,21 @@ def run(
                 resolution=image_resolution,
                 skipped=skipped_domains,
             )
-        # No generation happened, so there are no run counters to report: the
-        # previous run's manifest is left as it is rather than overwritten with
-        # a clean-looking one (§3.2 — a missing field must not read as "healthy").
+        # No generation happens on this path, so there are no run counters to
+        # report.  A manifest that already names this plan is therefore left
+        # byte-for-byte as it is rather than overwritten with a clean-looking
+        # one (§3.2 — a missing field must not read as "healthy", and a finished
+        # run must not be restated as unfinished).  The intermediate progress
+        # record is dropped either way: the manifest is now the current word.
         acceptance_pointer = _run_acceptance(
             config, coverage_inputs, effective_plan, all_records, output_path
         )
         if acceptance_pointer is not None:
             manifest["acceptance"] = acceptance_pointer
-        write_manifest(manifest, output_dir / "manifest.json")
+        _refresh_manifest_for_no_generation(
+            manifest, output_dir / "manifest.json", recorded_plan_identity
+        )
+        _clear_progress_record(output_dir)
         logger.info("Done! Output: %s", output_dir)
         logger.info("  Total anchors: %d", len(all_records))
         return output_dir
@@ -1243,6 +1474,29 @@ def run(
             rel_by_domain[domain] = placed[0]
         _assign_images_by_domain(specs, rel_by_domain, output_dir, rng)
 
+    # ── Early plan-identity record (§2.4, before the first endpoint call) ──
+    # The plan is fixed and the config snapshot exists, but the authoritative
+    # ``manifest.json`` is written only after generation.  A run interrupted
+    # between here and there (the normal outcome on the 1,826-anchor path, where
+    # ~25% of coordinates are abandoned and the run is resumed) would leave a
+    # bank with no plan name at all.  So bind the run directory to the plan
+    # *now*, in a record that is explicitly not the manifest — different file
+    # name, different schema key, ``status: "in_progress"`` and no run health.
+    # It is refreshed by a later invocation and removed once the manifest is
+    # written, so a finished directory carries exactly one declaration.
+    _write_progress_record(
+        output_dir,
+        _build_progress_record(
+            identity=plan_id,
+            started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+            existing=existing_count,
+            new=len(specs),
+            written=len(specs),
+            smoke=smoke,
+            output_dir=output_dir,
+        ),
+    )
+
     # Step 3: Generate all anchors via the unified generator
     #
     # Reasoning observability (WP-F3): snapshot the API client's reasoning
@@ -1297,7 +1551,14 @@ def run(
             resolution=image_resolution,
             skipped=skipped_domains,
         )
-    write_manifest(manifest, output_dir / "manifest.json")
+    write_manifest(
+        _declare_manifest_status(manifest, status=MANIFEST_STATUS_COMPLETE),
+        output_dir / "manifest.json",
+    )
+    # The authoritative declaration now exists (and names the same plan), so the
+    # intermediate record has served its purpose; leaving its stale
+    # ``in_progress`` next to a finished manifest would be needless ambiguity.
+    _clear_progress_record(output_dir)
 
     total = len(all_records)
     logger.info("Done! Output: %s", output_dir)
