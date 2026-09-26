@@ -1,0 +1,11 @@
+{
+  "axis": "input_condition",
+  "values": {
+    "clean": "The user message states everything needed to answer it, with no noise.",
+    "irrelevant_details": "Include irrelevant details alongside the actual request in the user message.",
+    "missing_info": "Leave out a detail the answer would need, so the request cannot be answered as stated.",
+    "conflicting_constraints": "State requirements in the user message that conflict with each other.",
+    "ambiguous": "Make the user message ambiguous about what exactly is being asked.",
+    "edge_case": "Frame the request as an unusual edge case rather than the common case."
+  }
+}

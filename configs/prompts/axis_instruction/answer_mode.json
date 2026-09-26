@@ -1,0 +1,9 @@
+{
+  "axis": "answer_mode",
+  "values": {
+    "direct_answer": "The user asks for a direct answer, with no preamble.",
+    "explain_then_answer": "The user asks for an explanation first, and the answer after it.",
+    "ask_before_answering": "The user asks the assistant to raise clarifying questions before answering.",
+    "structured_analysis": "The user asks for a structured analysis that works through the problem."
+  }
+}

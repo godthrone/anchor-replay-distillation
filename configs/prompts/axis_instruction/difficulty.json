@@ -1,0 +1,8 @@
+{
+  "axis": "difficulty",
+  "values": {
+    "basic": "The user asks a basic, beginner-level question.",
+    "intermediate": "The user asks an intermediate-level question.",
+    "advanced": "The user asks an advanced, expert-level question."
+  }
+}

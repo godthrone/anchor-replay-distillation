@@ -1,0 +1,12 @@
+{
+  "axis": "response_style",
+  "values": {
+    "concise": "The user asks for a concise answer, without padding.",
+    "step-by-step": "The user asks for a step-by-step answer.",
+    "professional": "The user asks for a professional, business-like answer.",
+    "plain language": "The user asks for an answer in plain language, with no jargon.",
+    "teaching": "The user asks for a teaching-style answer that explains the key ideas.",
+    "formal": "The user asks for a formal, courteous answer.",
+    "casual": "The user asks for a casual, conversational answer."
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "axis": "output_format",
+  "values": {
+    "paragraph": "The user asks for the answer as a paragraph of prose.",
+    "bullets": "The user asks for the answer as a bulleted list.",
+    "table": "The user asks for the answer as a table.",
+    "JSON": "The user asks for the answer as JSON.",
+    "code block": "The user asks for the answer inside a code block.",
+    "markdown report": "The user asks for the answer as a Markdown report with headings."
+  }
+}
