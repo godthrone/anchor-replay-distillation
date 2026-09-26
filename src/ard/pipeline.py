@@ -490,19 +490,19 @@ def _build_progress_record(
 
     The record declares its own status in the file name *and* in ``status``, so
     it can never be mistaken for ``manifest.json``: it is a *bound* plan name
-    with *incomplete* counters.  ``counters.new`` is what the invocation asked
-    the generator for, ``counters.written`` what it had persisted when the
-    record was written (equal for the record written before generation starts) —
-    a reader can see how far the run got, and recompute the identity from the
-    plan to verify it is bound to the right one.
+    written before the first endpoint call and never refreshed afterwards, so
+    its ``counters`` describe the *plan*, not progress: ``existing`` is the bank
+    size when this invocation started, ``new`` the still-pending anchors it was
+    asked for (``len(specs)``), and ``written`` the same number as ``new`` — the
+    output planned, not records on disk; the manifest's ``generation.counters.written``.
 
     Args:
         identity: The plan's identity (``PlanIdentity.of(plan)``).
         started_at: Local start time, ``%Y-%m-%d %H:%M:%S``.
         existing: Anchors already in the bank when this invocation started.
         new: Anchors this invocation asked the generator for.
-        written: Anchors this invocation had persisted when the record was
-            written.
+        written: The planned output count; ``pipeline.run`` passes the same
+            value as *new*, so it is never a count of persisted records.
         smoke: Whether this run was ``--smoke``.
         output_dir: The run directory the record describes.
 

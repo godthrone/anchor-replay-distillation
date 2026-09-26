@@ -242,8 +242,11 @@ record, written once the plan exists and before the first endpoint call, and del
 finishes. It carries `status: "in_progress"` and the run's `plan_identity` — **not** run health, because
 none exists yet. It is what makes an interrupted run auditable: the 1,826-anchor path is routinely
 stopped and resumed, and this record binds such a directory to the plan that produced it. Its `counters`
-are a snapshot, so it must never be read as a completion or acceptance claim; the plan identity in it can
-be verified by recomputing `PlanIdentity.of(plan)` and comparing digests. See
+are fixed before the first endpoint call and describe the *plan*, not progress: `existing` is what the
+bank already held, `new` and `written` are the number of anchors this invocation set out to generate and
+write (the same number). They must never be read as a completion, progress or acceptance claim — the
+count of records actually persisted is `manifest.json`'s `generation.counters.written`. The plan identity
+in it can be verified by recomputing `PlanIdentity.of(plan)` and comparing digests. See
 [docs/architecture.md](docs/architecture.md) section 4.
 
 `results/coverage.{json,md}` is the acceptance readout, not training data:

@@ -210,8 +210,10 @@ outputs/<run_name>/          # 默认 ard_dataset_<YYYYmmdd_HHMMSS>；--smoke �
 `plan_identity.in_progress.json` 是中间态记录：计划固定、第一次端点调用之前落盘，运行正常结束时删除。
 它带 `status: "in_progress"` 与本次的 `plan_identity`，**不含**运行健康（那时还不存在）。它让
 **中断的运行也能被审计**——1,826 条那条路本来就会被反复中断/续跑，这份记录把目录绑定到产出它的计划。
-它的 `counters` 只是快照，**不得**当作完成度或验收申报来读；其中的计划身份可以用 `PlanIdentity.of(plan)`
-独立复算、逐位比对摘要。见 [docs/architecture.md](docs/architecture.md) 第 4 节。
+它的 `counters` 在第一次端点调用前定稿、此后不再刷新，描述的是**计划**而不是进度：`existing` = 库里已
+有多少，`new` 与 `written` = 本次计划生成、写出的锚点数（两者同值）。**不得**当作完成度、进度或验收申报
+来读——真正已落库的条数见 `manifest.json` 的 `generation.counters.written`；其中的计划身份可以用
+`PlanIdentity.of(plan)` 独立复算、逐位比对摘要。见 [docs/architecture.md](docs/architecture.md) 第 4 节。
 
 `results/coverage.{json,md}` 是**验收读数，不是训练数据**：
 
