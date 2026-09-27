@@ -53,8 +53,15 @@
 # enable_thinking = false
 
 [generation]
-# The anchor count is NOT configurable: the v4 construction rule derives it
-# from the ontology (935 text-only + 891 image-capable = 1,826 anchors).
+# Anchor count N: how many anchors this run produces. Omit (the default) = one
+# full round, i.e. the round's unit count U — one unit per legal restricted
+# block, rotated over the knowledge / visual leaves. U is derived from the
+# ontology at run time, never hand-copied here (recount command: see
+# docs/algorithm.md §1). There is NO upper bound: N rolls on across rounds
+# (finishing a round simply starts the next one), and anchor-id uniqueness is
+# what keeps the plan valid — not a rejection threshold. When set it must be an
+# integer >= 1; 0 / negative values are refused at config load.
+# count = 1826
 # Sampling seed (optional). Omit — the default — and every run draws a fresh
 # seed from the system random source; set an integer to pin this run's sampling
 # order. The seed actually used is recorded in <output_dir>/config.toml.

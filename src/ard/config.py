@@ -171,20 +171,53 @@ class OntologyConfig(BaseModel):
 class GenerationConfig(BaseModel):
     """Configuration for the question generation pipeline.
 
-    The anchor **count is not a configurable field**: the v4 construction rule
-    derives it from the ontology (one sample per legal restricted block, one per
-    rotated leaf — see :mod:`ard.core.sampling`).  A knob here would be a second
-    source of truth for a number the rule already fixes (§7.4).
+    ``count`` is the number of anchors this run produces (N).  Leaving it unset
+    (``None``, the default) means "one full round": the sampling layer derives
+    the round's unit count U from the ontology, so the config file and the
+    construction rule cannot disagree on how many units a round holds (§1.4).
+    N has **no upper bound**: the plan rolls on across rounds (finishing a round
+    starts the next one), and the anchor id is what keeps coordinates unique —
+    never a rejection threshold.
     """
 
     model_config = ConfigDict(extra="forbid")
 
+    # Anchor count N. ``None`` (the default) = one full round, i.e. the round's
+    # unit count U derived from the ontology. An explicit int must be >= 1;
+    # ``0`` / negatives are refused at load, never read as "unset" (§2.2).
+    count: int | None = None
     # Unset (``None``, the default) = draw a fresh seed for this run from the
     # system random source; an explicit int pins that run's sampling order.
     seed: int | None = None
     concurrency: int = 4
     backpressure_threshold: int = 3  # consecutive timeouts that trigger the cooldown
     backpressure_cooldown: float = 60.0  # cooldown pause, in seconds
+
+    @field_validator("count", mode="before")
+    @classmethod
+    def _check_count(cls, value: Any) -> Any:
+        """Refuse anything that is not an integer >= 1 at config load (§2.3).
+
+        ``None`` is the only legal "not provided" value (§2.2): it keeps the
+        "one full round" default, whose size the ontology fixes.  ``bool`` is
+        refused explicitly — pydantic's lax mode would coerce ``true`` to ``1``
+        and turn a typo into a one-anchor run.
+        """
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(
+                f"got {value!r}: generation.count must be an integer >= 1, or "
+                "be omitted to generate one full round."
+            )
+        if value < 1:
+            raise ValueError(
+                f"got {value}: generation.count must be an integer >= 1. "
+                "It is the number of anchors this run produces; omit the "
+                "`count` line to generate one full round instead (the round's "
+                "unit count U, derived from the ontology)."
+            )
+        return value
 
     @model_validator(mode="after")
     def _resolve_seed(self) -> GenerationConfig:
