@@ -115,21 +115,21 @@ def test_distinct_counts_count_distinct_values_not_plan_entries(ontology: Ontolo
     """
     meta = _meta(ontology, modality="image")
     plan = [{**meta, "has_image": True, "image_count": 1}, {**meta}]
-    readout = acceptance.structure_readout(plan)
+    readout = acceptance.structure_readout(plan, ontology=ontology)
 
     assert readout.plan_image_entries == 2
     assert readout.image_block_count == 1
     assert readout.prompt_signature_distinct.image == 1
     assert readout.effective_projection_distinct.image == 1
-    assert readout.duplicate_coordinates == 0  # the two entries are not identical
-    assert readout.within_rule is False
+    assert readout.coverage.distinct_coordinates == 2  # not identical: the two differ
+    assert readout.within_rule is False  # 2 entries is not this run's count
 
 
 def test_distinct_counts_fall_when_one_prompt_axis_is_shared(ontology: OntologyV4) -> None:
     """Two images specs differing on no prompt axis are one signature."""
     meta = _meta(ontology)
     forced = {**meta, "conversation_type": ontology.axis_values("conversation_type")[0]}
-    readout = acceptance.structure_readout([dict(forced), dict(forced)])
+    readout = acceptance.structure_readout([dict(forced), dict(forced)], ontology=ontology)
     assert readout.prompt_signature_distinct.text_only == 1
     assert readout.effective_projection_distinct.text_only == 1
 
@@ -137,7 +137,7 @@ def test_distinct_counts_fall_when_one_prompt_axis_is_shared(ontology: OntologyV
 def test_the_real_plan_lands_on_the_s14_numbers(ontology: OntologyV4) -> None:
     """Regression pin: 935 / 891, the numbers WP-S14's audit script measured."""
     plan = sample_anchors(ontology, AnchorGenerationConfig(seed=42))
-    readout = acceptance.structure_readout([spec.anchor_meta for spec in plan])
+    readout = acceptance.structure_readout([spec.anchor_meta for spec in plan], ontology=ontology)
 
     assert readout.text_block_count == 935
     assert readout.image_block_count == 891
@@ -201,9 +201,9 @@ def test_noise_band_stays_unavailable_without_a_repeated_signature(
     assert section.reason == "noise band unavailable (no repeated generation data provided)"
 
 
-def test_diversity_declaration_is_carried_by_the_readout() -> None:
+def test_diversity_declaration_is_carried_by_the_readout(ontology: OntologyV4) -> None:
     """The counts travel with their definition (§1.4)."""
-    readout = acceptance.structure_readout([])
+    readout = acceptance.structure_readout([], ontology=ontology)
     assert readout.diversity.prompt_signature_axes == acceptance.PROMPT_SIGNATURE_AXES
     assert readout.diversity.effective_projection_axes == acceptance.EFFECTIVE_PROJECTION_AXES
     assert "ordered tuple" in readout.diversity.prompt_signature_definition

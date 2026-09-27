@@ -1,18 +1,20 @@
 """Acceptance readouts for one ARD run: structure counts and metric readouts.
 
 Responsibility: assemble the acceptance report of a run — the **structure
-readout** (what the plan covers, versus what the construction rule expects) and
-the **metric readout** (``q95`` / ``q50`` / ``q90`` / ``r_max`` / ``Extent(ε)``
-and the ε sensitivity band, measured with :mod:`ard.core.coverage`).  Pure
-computation: numpy + pydantic only — this module touches no file, no network, no
-endpoint and no other ``ard`` module beyond the two pure ``core`` modules it
-reads its口径 from.
+readout** (what the plan covers, versus what this run's own ``N`` and round
+decomposition expect) and the **metric readout** (``q95`` / ``q50`` / ``q90`` /
+``r_max`` / ``Extent(ε)`` and the ε sensitivity band, measured with
+:mod:`ard.core.coverage`).  Pure computation: numpy + pydantic only — this module
+touches no file, no network, no endpoint and no other ``ard`` module beyond the
+two pure ``core`` modules it reads its口径 from.
 
 Two rules are absolute here:
 
-* every expected count and every convention is read from
-  :mod:`ard.core.sampling` at call time — no rule count is written down in this
-  module, so an ontology change cannot leave a stale expectation behind;
+* every expected count is derived at call time from the run's ontology and its
+  count ``N`` (`:func:`ard.core.sampling.coverage_units` /
+  :func:`~ard.core.sampling.plan_rounds` / ``axis_values``) — no rule count is
+  written down in this module, so an ontology change or a larger ``N`` cannot
+  leave a stale expectation behind;
 * an input that cannot be measured (an anchor record without a final user turn,
   a run whose bank is empty, a target set that is too small to have an intrinsic
   scale) is refused with :class:`AcceptanceError` instead of yielding a
@@ -44,22 +46,26 @@ count of *effective specifications* (WP-S14 audit, WP-S18):
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, TypeAlias
+from typing import Any, Final, Literal, TypeAlias
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict
 
 from ard.core import axis_instruction, constraints, sampling
 from ard.core import coverage as ruler
+from ard.core.ontology import OntologyV4
 from ard.core.types import JsonObjectSequence, StringPairs
 
 #: Version of the acceptance report schema — bumped when a field changes meaning.
-#: ``ard-acceptance-2`` (WP-S18) adds ``structure.prompt_signature_distinct``,
-#: ``structure.effective_projection_distinct`` and ``structure.diversity``, and
-#: redefines the noise band's repeat groups from "whole ``anchor_meta``" to
-#: "prompt signature": a reader of an ``ard-acceptance-1`` report must not read
-#: ``noise.n_repeat_groups`` as the same quantity as here.
-REPORT_SCHEMA: Final[str] = "ard-acceptance-2"
+#: ``ard-acceptance-3`` (WP-5) replaces the v4 rule "every count equals the full
+#: cycle's constant" with this run's own ``N`` and round decomposition, adds
+#: ``structure.coverage`` (coverage by coordinate, density by entry), and
+#: **removes** ``structure.duplicate_coordinates``: under the v5 id rule a
+#: coordinate is content, not identity, so the same coordinate sampled in a later
+#: round is a new sample and is never reported as a duplicate.  A reader of an
+#: ``ard-acceptance-2`` report must not read ``within_rule`` or the
+#: ``expected_*`` fields as the same quantities.
+REPORT_SCHEMA: Final[str] = "ard-acceptance-3"
 
 #: Which artifact field the anchor side embeds, declared in every report.
 #: The ``(text parts only)`` qualifier is load-bearing, not decoration: an
@@ -167,8 +173,11 @@ BlockKey: TypeAlias = tuple[Any, ...]
 #: Record indices of anchors that share one prompt signature.
 IndexGroup: TypeAlias = list[int]
 
-#: One structure check: its label, the measured count, the expected count.
-CountCheck: TypeAlias = tuple[str, int, int]
+#: One structure check: its label, the measured count, the expected count, and
+#: the comparison that must hold.  ``>=`` expresses the cycle rule's *guarantee*
+#: (a lower bound); ``==`` expresses a count the rule fixes exactly.
+CheckRelation: TypeAlias = Literal["==", ">="]
+CountCheck: TypeAlias = tuple[str, int, int, CheckRelation]
 
 _STRICT = ConfigDict(extra="forbid", frozen=True)
 
@@ -229,13 +238,65 @@ class DiversityDeclaration(BaseModel):
     effective_projection_definition: str
 
 
-class StructureReadout(BaseModel):
-    """What the plan covers, next to what the construction rule expects.
+class PlanCoverage(BaseModel):
+    """How much of the sampling space one plan visits, and over how many rounds.
 
-    ``within_rule`` is the conjunction of every comparison below; it is a
-    reading, not a gate: a plan assembled by a test double (or an ontology whose
-    rule changed) is reported as inconsistent instead of aborting the run that
-    already paid for its anchors.
+    Two 口径 live here and must not be confused:
+
+    * **coverage** counts *coordinates*: ``min(distinct, U) / U``.  The same
+      coordinate sampled in a later round is **not** credited a second time, so
+      coverage saturates at ``1.0`` once every unit has been visited and a
+      repetition can never push it above one;
+    * **density** counts *entries*: ``plan_total / U``.  Every sampled entry
+      counts, including a coordinate that recurs across rounds, so density keeps
+      growing with ``N`` (``N = 2U`` ⇒ ``2.0``).
+
+    Attributes:
+        unit_total: ``U`` — how many coverage units one full round visits
+            (text units then image units).
+        text_unit_total: the text-only units of ``U``.
+        image_unit_total: the image-modality units of ``U``.
+        knowledge_leaf_total: ``K`` — how many ``knowledge_domain`` leaves the
+            ontology declares.
+        visual_leaf_total: ``V`` — how many ``visual_domain`` leaves it declares.
+        plan_count: the run's count ``N`` as the caller declared it.
+        distinct_coordinates: distinct coordinate identities in the plan.
+        coverage: ``min(distinct_coordinates, unit_total) / unit_total``.
+        density: ``plan_total / unit_total`` — the entry口径.
+        full_rounds: complete cycles the plan holds, ``divmod(N, U)[0]``.
+        last_round_size: entries in the final, partial cycle.
+        rounds: how many cycles the plan touches —
+            ``full_rounds + (1 if last_round_size else 0)``.
+    """
+
+    model_config = _STRICT
+
+    unit_total: int
+    text_unit_total: int
+    image_unit_total: int
+    knowledge_leaf_total: int
+    visual_leaf_total: int
+    plan_count: int
+    distinct_coordinates: int
+    coverage: float
+    density: float
+    full_rounds: int
+    last_round_size: int
+    rounds: int
+
+
+class StructureReadout(BaseModel):
+    """What the plan covers, next to what this run's ``N`` and round rule expect.
+
+    ``within_rule`` is the conjunction of the checks :func:`structure_checks`
+    derives from *this* readout; it is a reading, not a gate: a plan assembled by
+    a test double (or an ontology whose rule changed) is reported as inconsistent
+    instead of aborting the run that already paid for its anchors.
+
+    **Coordinate repetition is not a check.**  Under v5 a coordinate is content,
+    not identity: sampling the same coordinate again in a later round is a new
+    sample (at temperature 0.8 the same labels yield a different question), so no
+    field here counts "duplicates" and no reading reports a repeat as wrong.
 
     Attributes:
         plan_total: number of coordinates in the plan.
@@ -256,15 +317,28 @@ class StructureReadout(BaseModel):
             ``text_block_count`` / ``image_block_count``.
         knowledge_domain_leaves: distinct ``knowledge_domain`` leaves covered.
         visual_domain_leaves: distinct ``visual_domain`` leaves covered.
-        duplicate_coordinates: plan entries sharing another entry's full
-            coordinate identity.
-        expected_*: the rule's own counts, read from :mod:`ard.core.sampling`.
+        coverage: the ``N`` / ``U`` / rounds / coverage / density readout.
+        expected_total: the run's count ``N`` (``U`` when the caller declares
+            none) — the rule's plan holds exactly this many entries.
+        expected_distinct_coordinates: ``min(N, U)`` — the cycle rule's coverage
+            lower bound.  One round visits every unit once, so the first ``U``
+            coordinates are distinct; only a cross-round recurrence (which the
+            rule permits, see :mod:`ard.core.sampling`) can lower the count below
+            this bound.  It is always compared with ``>=``, never with ``==``.
+        expected_text_blocks / expected_image_blocks: the text / image unit
+            totals when ``N >= U`` (a full round visits every unit), else
+            ``None``.  Below one round the shuffle order — not the rule — sets
+            the per-modality split, so the rule guarantees no block count.
+        expected_knowledge_domains / expected_visual_domains: ``K`` / ``V`` when
+            ``N >= U``, else ``None``.  A full round feeds every unit index
+            through ``(index + cycle) % K`` (and the image unit indices through
+            ``% V``), and ``U >= K``, so every leaf is visited; below ``U``
+            shuffled indices can share a residue, so no leaf count is guaranteed
+            (measured on today's ontology: ``N = K = 209`` reaches 136 of 209
+            leaves).
         conventions: the ``MULTI_TURN_DEFAULT`` / turn-mapping statements.
         diversity: the definition of the two distinct counts above.
-        within_rule: every measured count equals its expected count — including
-            the two diversity counts, so a plan that covers 935 legal blocks
-            while two of them collapse into one prompt is reported as *not*
-            within the rule.
+        within_rule: every check in :func:`structure_checks` holds.
     """
 
     model_config = _STRICT
@@ -278,12 +352,13 @@ class StructureReadout(BaseModel):
     effective_projection_distinct: ModalityDistinct
     knowledge_domain_leaves: int
     visual_domain_leaves: int
-    duplicate_coordinates: int
+    coverage: PlanCoverage
     expected_total: int
-    expected_text_blocks: int
-    expected_image_blocks: int
-    expected_knowledge_domains: int
-    expected_visual_domains: int
+    expected_distinct_coordinates: int
+    expected_text_blocks: int | None
+    expected_image_blocks: int | None
+    expected_knowledge_domains: int | None
+    expected_visual_domains: int | None
     conventions: Conventions
     diversity: DiversityDeclaration
     within_rule: bool
@@ -413,23 +488,63 @@ def prompt_signature(meta: Mapping[str, Any]) -> tuple[Any, ...]:
     return tuple(meta.get(axis) for axis in PROMPT_SIGNATURE_AXES)
 
 
-def structure_readout(plan: JsonObjectSequence) -> StructureReadout:
+def structure_readout(
+    plan: JsonObjectSequence,
+    *,
+    ontology: OntologyV4,
+    count: int | None = None,
+) -> StructureReadout:
     """Summarise *plan*: plan coordinates in, coverage counts out.
+
+    Every expectation is a function of the run's **own** sampling space and
+    count, computed here from *ontology* and *count* — nothing is compared
+    against a written-down full-cycle constant, so a smoke plan (8 entries) is
+    not reported as a violation of a 1,826-entry rule.
 
     Args:
         plan: one ``axis -> value`` mapping per planned anchor (the
             ``AnchorSpec.anchor_meta`` of each entry, in plan order).
+        ontology: the run's validated v4 ontology — the single source of ``U``
+            (:func:`ard.core.sampling.coverage_units`), ``K`` and ``V``
+            (``axis_values``).  Required: this module holds no fallback count
+            (§1.4 单一真相源).
+        count: the run's ``N``, i.e. the count the plan was requested with.
+            ``None`` means one full round, ``U`` — the same convention as
+            :func:`ard.core.sampling.sample_coordinates`.  A ``per_modality``
+            smoke plan is **not** one full round: its caller passes
+            ``count=len(plan)``.
 
     Returns:
-        The structure readout, with every expected count read from
-        :mod:`ard.core.sampling` at call time and ``within_rule`` stating
-        whether the plan matches them.
+        The structure readout, with every expectation derived from *ontology*
+        and *count* at call time and ``within_rule`` stating whether the plan
+        matches them.
+
+    Raises:
+        AcceptanceError: if ``count`` is unusable (not an integer ``>= 1``), or a
+            plan entry is not an ``axis -> value`` mapping.
     """
+    if count is None:
+        count = sampling.unit_total(ontology)
+    if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+        raise AcceptanceError(
+            f"structure_readout needs the run's count N as an integer >= 1 "
+            f"(received {count!r}); a resumed run passes the full plan's count and a "
+            "per_modality smoke plan passes len(plan)"
+        )
+
     restricted_axes = constraints.RESTRICTED_AXES
     effective_axes = EFFECTIVE_PROJECTION_AXES
     knowledge_axis, visual_axis = sampling.ROTATED_FREE_AXES
     text_modality = sampling.MODALITY_TEXT
     image_modality = sampling.MODALITY_IMAGE
+
+    units = sampling.coverage_units(ontology)
+    unit_total = len(units)
+    text_units = sum(1 for unit in units if unit.modality == text_modality)
+    image_units = unit_total - text_units
+    knowledge_total = sampling.knowledge_leaf_count(ontology)
+    visual_total = sampling.visual_leaf_count(ontology)
+    full_rounds, last_round_size = sampling.plan_rounds(ontology, count)
 
     text_entries = 0
     image_entries = 0
@@ -441,7 +556,11 @@ def structure_readout(plan: JsonObjectSequence) -> StructureReadout:
     visual_leaves: set[str] = set()
     identities: set[StringPairs] = set()
 
-    for meta in plan:
+    for index, meta in enumerate(plan):
+        if not isinstance(meta, Mapping):
+            raise AcceptanceError(
+                f"plan entry {index} is {type(meta).__name__}, not an axis -> value mapping"
+            )
         identities.add(tuple(sorted((str(key), str(value)) for key, value in meta.items())))
         modality = meta.get("modality")
         if modality in signatures:
@@ -461,12 +580,11 @@ def structure_readout(plan: JsonObjectSequence) -> StructureReadout:
             visual_leaves.add(str(visual))
 
     plan_total = len(plan)
-    duplicates = plan_total - len(identities)
-    expected_total = sampling.EXPECTED_TOTAL
-    expected_text = sampling.EXPECTED_TEXT_BLOCKS
-    expected_image = sampling.EXPECTED_IMAGE_BLOCKS
-    expected_knowledge = sampling.EXPECTED_KNOWLEDGE_DOMAINS
-    expected_visual = sampling.EXPECTED_VISUAL_DOMAINS
+    # A full round visits every unit, so it reaches every text/image block and
+    # every leaf.  Below one round the shuffle order decides what is reached;
+    # there the rule guarantees nothing, and ``None`` says so instead of
+    # inventing a bound a legitimate plan could miss.
+    reaches_full_round = count >= unit_total
     signature_distinct = ModalityDistinct(
         text_only=len(signatures[text_modality]),
         image=len(signatures[image_modality]),
@@ -475,24 +593,7 @@ def structure_readout(plan: JsonObjectSequence) -> StructureReadout:
         text_only=len(projections[text_modality]),
         image=len(projections[image_modality]),
     )
-    within_rule = (
-        plan_total == expected_total
-        and text_entries == expected_text
-        and image_entries == expected_image
-        and len(text_blocks) == expected_text
-        and len(image_blocks) == expected_image
-        # A plan can cover every legal block and still collapse two of them
-        # onto one prompt; that is not "the rule's plan", so both diversity
-        # counts are part of the conjunction (WP-S18).
-        and signature_distinct.text_only == expected_text
-        and signature_distinct.image == expected_image
-        and projection_distinct.text_only == expected_text
-        and projection_distinct.image == expected_image
-        and len(knowledge_leaves) == expected_knowledge
-        and len(visual_leaves) == expected_visual
-        and duplicates == 0
-    )
-    return StructureReadout(
+    readout = StructureReadout(
         plan_total=plan_total,
         plan_text_entries=text_entries,
         plan_image_entries=image_entries,
@@ -502,12 +603,26 @@ def structure_readout(plan: JsonObjectSequence) -> StructureReadout:
         effective_projection_distinct=projection_distinct,
         knowledge_domain_leaves=len(knowledge_leaves),
         visual_domain_leaves=len(visual_leaves),
-        duplicate_coordinates=duplicates,
-        expected_total=expected_total,
-        expected_text_blocks=expected_text,
-        expected_image_blocks=expected_image,
-        expected_knowledge_domains=expected_knowledge,
-        expected_visual_domains=expected_visual,
+        coverage=PlanCoverage(
+            unit_total=unit_total,
+            text_unit_total=text_units,
+            image_unit_total=image_units,
+            knowledge_leaf_total=knowledge_total,
+            visual_leaf_total=visual_total,
+            plan_count=count,
+            distinct_coordinates=len(identities),
+            coverage=min(len(identities), unit_total) / unit_total,
+            density=plan_total / unit_total,
+            full_rounds=full_rounds,
+            last_round_size=last_round_size,
+            rounds=full_rounds + (1 if last_round_size else 0),
+        ),
+        expected_total=count,
+        expected_distinct_coordinates=min(count, unit_total),
+        expected_text_blocks=text_units if reaches_full_round else None,
+        expected_image_blocks=image_units if reaches_full_round else None,
+        expected_knowledge_domains=knowledge_total if reaches_full_round else None,
+        expected_visual_domains=visual_total if reaches_full_round else None,
         conventions=conventions(),
         diversity=DiversityDeclaration(
             counted_over=DIVERSITY_COUNTED_OVER,
@@ -516,43 +631,56 @@ def structure_readout(plan: JsonObjectSequence) -> StructureReadout:
             effective_projection_axes=EFFECTIVE_PROJECTION_AXES,
             effective_projection_definition=EFFECTIVE_PROJECTION_DEFINITION,
         ),
-        within_rule=within_rule,
+        within_rule=True,
     )
+    # One source for the reading and the warning: ``within_rule`` is exactly
+    # "structure_mismatch finds nothing" (§1.4).
+    return readout.model_copy(update={"within_rule": structure_mismatch(readout) is None})
 
 
-def structure_mismatch(structure: StructureReadout) -> str | None:
-    """Return one line naming every structure count that disagrees, or ``None``.
+def structure_checks(structure: StructureReadout) -> list[CountCheck]:
+    """Return every count comparison the rule makes, in report order.
 
-    The acceptance phase publishes this as a WARNING instead of aborting a run
-    whose anchors are already on disk: "the plan is not the rule's plan" is a
-    reading about the artifact, and the reader must be able to see it.
+    Each entry is ``(label, measured, expected, relation)``.  Both
+    :func:`structure_mismatch` and :func:`render_markdown` consume this one list,
+    so the published table and the WARNING cannot disagree (§1.4).
+
+    A check whose expected value is ``None`` is omitted: the rule guarantees
+    nothing about that count at this ``N``, and an omitted check can never be
+    reported as a mismatch.  The two projection checks are the inert-axis guard —
+    every restricted axis must reach the prompt, so the projection count must
+    equal the block count (WP-S18).
     """
-    checks: tuple[CountCheck, ...] = (
-        ("plan entries", structure.plan_total, structure.expected_total),
-        ("text-only plan entries", structure.plan_text_entries, structure.expected_text_blocks),
-        ("image plan entries", structure.plan_image_entries, structure.expected_image_blocks),
-        ("legal text blocks", structure.text_block_count, structure.expected_text_blocks),
-        ("legal image blocks", structure.image_block_count, structure.expected_image_blocks),
+    checks: list[CountCheck] = [
+        ("plan entries", structure.plan_total, structure.expected_total, "=="),
         (
-            "prompt signatures (text_only)",
-            structure.prompt_signature_distinct.text_only,
-            structure.expected_text_blocks,
+            "entries with a known modality",
+            structure.plan_text_entries + structure.plan_image_entries,
+            structure.plan_total,
+            "==",
         ),
         (
-            "prompt signatures (image)",
-            structure.prompt_signature_distinct.image,
-            structure.expected_image_blocks,
+            "distinct coordinates",
+            structure.coverage.distinct_coordinates,
+            structure.expected_distinct_coordinates,
+            ">=",
         ),
         (
             "effective restricted projections (text_only)",
             structure.effective_projection_distinct.text_only,
-            structure.expected_text_blocks,
+            structure.text_block_count,
+            "==",
         ),
         (
             "effective restricted projections (image)",
             structure.effective_projection_distinct.image,
-            structure.expected_image_blocks,
+            structure.image_block_count,
+            "==",
         ),
+    ]
+    for label, measured, expected in (
+        ("legal text blocks", structure.text_block_count, structure.expected_text_blocks),
+        ("legal image blocks", structure.image_block_count, structure.expected_image_blocks),
         (
             "knowledge_domain leaves",
             structure.knowledge_domain_leaves,
@@ -563,16 +691,33 @@ def structure_mismatch(structure: StructureReadout) -> str | None:
             structure.visual_domain_leaves,
             structure.expected_visual_domains,
         ),
-        ("duplicate coordinates", structure.duplicate_coordinates, 0),
-    )
-    mismatches = [
-        f"{name}: {measured} (expected {expected})"
-        for name, measured, expected in checks
-        if measured != expected
-    ]
-    if not mismatches:
+    ):
+        if expected is not None:
+            checks.append((label, measured, expected, ">="))
+    return checks
+
+
+def structure_mismatch(structure: StructureReadout) -> str | None:
+    """Return one line naming every structure count that disagrees, or ``None``.
+
+    The acceptance phase publishes this as a WARNING instead of aborting a run
+    whose anchors are already on disk: "the plan is not the rule's plan" is a
+    reading about the artifact, and the reader must be able to see it.
+
+    A ``>=`` check is the cycle rule's guarantee, so a legitimate cross-round
+    coordinate recurrence — which can lower the distinct-coordinate count below
+    ``N`` — is **not** a mismatch.  Repetition is never named here.
+    """
+    failed: list[str] = []
+    for name, measured, expected, relation in structure_checks(structure):
+        if relation == ">=":
+            if measured < expected:
+                failed.append(f"{name}: {measured} (expected >= {expected})")
+        elif measured != expected:
+            failed.append(f"{name}: {measured} (expected {expected})")
+    if not failed:
         return None
-    return "plan does not match the construction rule — " + "; ".join(mismatches)
+    return "plan does not match the construction rule — " + "; ".join(failed)
 
 
 def user_turn_text(content: object, where: str) -> str:
@@ -807,14 +952,16 @@ def metric_readout(
     )
 
 
-def _status(measured: int, expected: int) -> str:
+def _status(measured: int, expected: int, relation: CheckRelation) -> str:
     """``OK`` / ``MISMATCH`` marker for one counted-vs-expected row."""
-    return "OK" if measured == expected else "MISMATCH"
+    ok = measured >= expected if relation == ">=" else measured == expected
+    return "OK" if ok else "MISMATCH"
 
 
 def render_markdown(report: AcceptanceReport) -> str:
     """Render *report* as the human-readable ``coverage.md`` companion."""
     structure = report.structure
+    coverage = structure.coverage
     signature = structure.prompt_signature_distinct
     projection = structure.effective_projection_distinct
     lines: list[str] = [
@@ -826,43 +973,65 @@ def render_markdown(report: AcceptanceReport) -> str:
         "",
         "## Structure readout (zero model calls)",
         "",
+        "### Coverage and rounds",
+        "",
+        "| reading | value |",
+        "|---|---:|",
+        f"| coverage unit total U | {coverage.unit_total} |",
+        f"| U = text units + image units | {coverage.text_unit_total} + "
+        f"{coverage.image_unit_total} |",
+        f"| planned count N | {coverage.plan_count} |",
+        f"| plan entries | {structure.plan_total} |",
+        f"| full rounds | {coverage.full_rounds} |",
+        f"| coordinates in the final round | {coverage.last_round_size} |",
+        f"| rounds the plan touches | {coverage.rounds} |",
+        f"| distinct coordinates | {coverage.distinct_coordinates} |",
+        f"| **coverage** = min(distinct coordinates, U) / U | **{coverage.coverage:.6f}** |",
+        f"| **density** = plan entries / U | **{coverage.density:.6f}** |",
+        "",
+        "- reading note: a coordinate sampled again in a later round counts "
+        "**once** for coverage (a repeat never pushes it above 1.0) and **every "
+        "entry** counts for density. Coordinate repetition is a legitimate "
+        "resample under the v5 id rule, not a defect, and is never reported as "
+        "one.",
+        "",
+        "### Rule checks",
+        "",
         "| reading | measured | expected | status |",
         "|---|---:|---:|---|",
-        f"| plan entries | {structure.plan_total} | {structure.expected_total} | "
-        f"{_status(structure.plan_total, structure.expected_total)} |",
-        f"| text-only plan entries | {structure.plan_text_entries} | "
-        f"{structure.expected_text_blocks} | "
-        f"{_status(structure.plan_text_entries, structure.expected_text_blocks)} |",
-        f"| image plan entries | {structure.plan_image_entries} | "
-        f"{structure.expected_image_blocks} | "
-        f"{_status(structure.plan_image_entries, structure.expected_image_blocks)} |",
-        f"| legal restricted blocks (text) | {structure.text_block_count} | "
-        f"{structure.expected_text_blocks} | "
-        f"{_status(structure.text_block_count, structure.expected_text_blocks)} |",
-        f"| legal restricted blocks (image) | {structure.image_block_count} | "
-        f"{structure.expected_image_blocks} | "
-        f"{_status(structure.image_block_count, structure.expected_image_blocks)} |",
-        f"| prompt signature distinct (text_only) | {signature.text_only} | "
-        f"{structure.expected_text_blocks} | "
-        f"{_status(signature.text_only, structure.expected_text_blocks)} |",
-        f"| prompt signature distinct (image) | {signature.image} | "
-        f"{structure.expected_image_blocks} | "
-        f"{_status(signature.image, structure.expected_image_blocks)} |",
-        f"| effective restricted projection distinct (text_only) | "
-        f"{projection.text_only} | {structure.expected_text_blocks} | "
-        f"{_status(projection.text_only, structure.expected_text_blocks)} |",
-        f"| effective restricted projection distinct (image) | "
-        f"{projection.image} | {structure.expected_image_blocks} | "
-        f"{_status(projection.image, structure.expected_image_blocks)} |",
-        f"| knowledge_domain leaves | {structure.knowledge_domain_leaves} | "
-        f"{structure.expected_knowledge_domains} | "
-        f"{_status(structure.knowledge_domain_leaves, structure.expected_knowledge_domains)} |",
-        f"| visual_domain leaves | {structure.visual_domain_leaves} | "
-        f"{structure.expected_visual_domains} | "
-        f"{_status(structure.visual_domain_leaves, structure.expected_visual_domains)} |",
-        f"| duplicate coordinates | {structure.duplicate_coordinates} | 0 | "
-        f"{_status(structure.duplicate_coordinates, 0)} |",
+    ]
+    for name, measured, expected, relation in structure_checks(structure):
+        wanted = f">= {expected}" if relation == ">=" else f"{expected}"
+        lines.append(
+            f"| {name} | {measured} | {wanted} | {_status(measured, expected, relation)} |"
+        )
+    lines += [
         "",
+        "### Reported readings",
+        "",
+        "| reading | value |",
+        "|---|---:|",
+        f"| text-only plan entries | {structure.plan_text_entries} |",
+        f"| image plan entries | {structure.plan_image_entries} |",
+        f"| prompt signature distinct (text_only) | {signature.text_only} |",
+        f"| prompt signature distinct (image) | {signature.image} |",
+        f"| effective restricted projection distinct (text_only) | {projection.text_only} |",
+        f"| effective restricted projection distinct (image) | {projection.image} |",
+        f"| knowledge_domain leaves | {structure.knowledge_domain_leaves} of "
+        f"{coverage.knowledge_leaf_total} |",
+        f"| visual_domain leaves | {structure.visual_domain_leaves} of "
+        f"{coverage.visual_leaf_total} |",
+        "",
+    ]
+    if structure.expected_text_blocks is None:
+        lines += [
+            "- reading note: below one full round the shuffle order — not the "
+            "rule — sets the per-modality split and the leaves reached, so no "
+            "per-modality block count and no leaf count is expected here; those "
+            "checks are omitted rather than guessed.",
+            "",
+        ]
+    lines += [
         "## Conventions",
         "",
         f"- constants read from `{structure.conventions.sampling_module}` at report time",
