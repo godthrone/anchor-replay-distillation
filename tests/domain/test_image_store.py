@@ -380,6 +380,131 @@ def test_select_domain_image_refuses_an_empty_candidate_list(tmp_path: Path) -> 
         select_domain_image([], "animals", 42)
 
 
+# ── cycle rotation (v5: 1 domain, many images, one per round) ──────────────────
+
+
+def _five_image_domain(tmp_path: Path, domain: str = "vehicles") -> list[Path]:
+    directory = tmp_path / domain
+    directory.mkdir()
+    return [_make_png(directory / f"img_{index}.png", color=index * 10) for index in range(5)]
+
+
+def test_select_domain_image_rotates_one_step_per_cycle_and_wraps(tmp_path: Path) -> None:
+    """Every image of the domain participates; the sequence wraps at K."""
+    candidates = _five_image_domain(tmp_path)
+
+    picks = [select_domain_image(candidates, "vehicles", 0, cycle=cycle) for cycle in range(7)]
+
+    assert picks[5] == picks[0], "cycle K must wrap back to the first pick"
+    assert picks[6] == picks[1], "the rotation continues after the wrap"
+    assert len(set(picks[:5])) == 5, "all five images must be shown over five rounds"
+    assert set(picks[:5]) == set(candidates), "the rotation must cover the whole directory"
+
+
+def test_select_domain_image_is_deterministic_per_cycle_and_cycle_zero_is_pre_v5(
+    tmp_path: Path,
+) -> None:
+    """Same ``(seed, domain, cycle)`` ⇒ same file; ``cycle=0`` is the old pick.
+
+    The ``cycle=0`` expectation is a golden record of the pre-v5 behaviour
+    (``sha256(f"{seed}:{visual_domain}")`` seeds ``random.Random``, whose first
+    ``randrange`` indexes the name-sorted candidates).  Freezing it here is what
+    keeps an existing directory / sample reading the picture it already
+    documents — and it is also what makes the negative control bite: a
+    "rotation removed, always the first file" implementation fails this line.
+    """
+    candidates = _five_image_domain(tmp_path)
+
+    assert select_domain_image(candidates, "vehicles", 0, cycle=0) == candidates[2]
+    for cycle in range(4):
+        first = select_domain_image(candidates, "vehicles", 0, cycle=cycle)
+        assert select_domain_image(candidates, "vehicles", 0, cycle=cycle) == first
+    assert select_domain_image(candidates, "vehicles", 0, cycle=1) == candidates[3]
+    assert select_domain_image(candidates, "vehicles", 0, cycle=2) == candidates[4]
+
+
+def test_select_domain_image_reuses_a_lone_candidate_in_every_cycle(tmp_path: Path) -> None:
+    """A one-image domain legitimately reuses that image; the path says so."""
+    directory = tmp_path / "animals"
+    directory.mkdir()
+    only = _make_png(directory / "only.png")
+
+    picks = {select_domain_image([only], "animals", 7, cycle=cycle) for cycle in range(4)}
+
+    assert picks == {only}, "one candidate cannot rotate; it is reused, not invented"
+
+
+def test_select_domain_image_refuses_a_negative_cycle(tmp_path: Path) -> None:
+    """The round index is 0-based (§2.3): a negative cycle is a caller bug."""
+    candidates = _five_image_domain(tmp_path)
+
+    with pytest.raises(ValueError, match="cycle must be >= 0"):
+        select_domain_image(candidates, "vehicles", 0, cycle=-1)
+
+
+def test_select_domain_image_case_mixed_names_rotate_in_sorted_order(tmp_path: Path) -> None:
+    """Name sorting is the canonical order, whatever the case of name/extension."""
+    directory = tmp_path / "animals"
+    directory.mkdir()
+    names = ["b.PNG", "A.jpeg", "c.WebP"]
+    for name in names:
+        (directory / name).write_bytes(b"junk")
+    (directory / "notes.txt").write_bytes(b"not an image")
+    candidates = list_domain_images(tmp_path, "animals")
+
+    picks = [select_domain_image(candidates, "animals", 3, cycle=cycle).name for cycle in range(3)]
+
+    assert picks[0] == "A.jpeg"
+    assert set(picks) == set(names), "each round takes the next name-sorted file"
+
+
+def test_resolve_domain_images_rotates_by_cycle_and_reports_the_readout(
+    tmp_path: Path,
+) -> None:
+    """The per-round resolution, plus the counts that separate real from fake variety."""
+    candidates = _five_image_domain(tmp_path)
+    specs = [_image_spec(f"a{index}", "vehicles") for index in range(3)]
+    specs.append(_image_spec("t1", None))
+
+    raised = resolve_domain_images(tmp_path, specs, seed=0, cycle=0)
+    next_round = resolve_domain_images(tmp_path, specs, seed=0, cycle=1)
+
+    assert raised.cycle == 0
+    assert next_round.cycle == 1
+    assert raised.candidate_counts == {"vehicles": 5}
+    assert set(raised.selected) == {"vehicles"}
+    assert raised.selected["vehicles"] in candidates
+    assert next_round.selected["vehicles"] != raised.selected["vehicles"]
+    assert raised.selected["vehicles"] == select_domain_image(candidates, "vehicles", 0, cycle=0), (
+        "the resolution must report the file it actually selected"
+    )
+
+
+def test_resolve_domain_images_counts_candidates_for_a_missing_domain(tmp_path: Path) -> None:
+    """A missing domain still reports its (zero) candidate count, next to ``missing``."""
+    _five_image_domain(tmp_path)
+    specs = [_image_spec("a1", "vehicles"), _image_spec("p1", "plants")]
+
+    resolution = resolve_domain_images(tmp_path, specs, seed=0, cycle=2)
+
+    assert set(resolution.selected) == {"vehicles"}
+    assert resolution.missing == {"plants": ["p1"]}
+    assert resolution.candidate_counts == {"vehicles": 5, "plants": 0}
+
+
+def test_list_domain_images_orders_mixed_case_names_and_extensions(tmp_path: Path) -> None:
+    """Determinism does not depend on ``os.listdir`` order or extension case."""
+    domain = tmp_path / "animals"
+    domain.mkdir()
+    for name in ("b.PNG", "A.jpeg", "c.WebP", "d.JPG"):
+        (domain / name).write_bytes(b"junk")
+    (domain / "notes.txt").write_bytes(b"not an image")
+
+    names = [p.name for p in list_domain_images(tmp_path, "animals")]
+
+    assert names == ["A.jpeg", "b.PNG", "c.WebP", "d.JPG"]
+
+
 def test_resolve_domain_images_maps_each_leaf_to_its_own_directory(tmp_path: Path) -> None:
     for domain in ("animals", "plants"):
         directory = tmp_path / domain

@@ -3,7 +3,8 @@
 Responsibility: own the **image addressing convention** of a run — an
 image-modality anchor's picture is looked up under
 ``<image_dir>/<visual_domain>/`` so the content actually matches the
-``visual_domain`` coordinate the anchor is labelled with — plus the copying /
+``visual_domain`` coordinate the anchor is labelled with — plus which of that
+domain's files a round shows (``cycle`` rotation, v5) and the copying /
 format-conversion of the selected files into ``<output_dir>/images/``.
 
 The addressing convention is the only layout the pipeline uses.  The flat
@@ -20,7 +21,7 @@ import logging
 import random
 import shutil
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from ard.core.types import AnchorSpec, StringList
@@ -119,7 +120,9 @@ def sample_images(
 #     <image_dir>/<visual_domain>/<image file>
 #
 # This section owns that convention end to end: which files a domain directory
-# offers, which single file a run picks, and which required domains are missing.
+# offers, which file a round (``cycle``) picks, and which required domains are
+# missing.  v5 rotates the pick by round, so a domain with K images shows all K
+# of them over K rounds instead of pinning the whole run to one file.
 
 #: The addressing convention, spelled out for error messages and docs.
 VISUAL_DOMAIN_LAYOUT = "<image_dir>/<visual_domain>/<image file>"
@@ -164,37 +167,62 @@ def list_domain_images(
     )
 
 
-def select_domain_image(candidates: list[Path], visual_domain: str, seed: int) -> Path:
-    """Pick one image from *candidates*, deterministically (§6 复现).
+def select_domain_image(
+    candidates: list[Path],
+    visual_domain: str,
+    seed: int,
+    *,
+    cycle: int = 0,
+) -> Path:
+    """Pick the image round *cycle* shows for *visual_domain*, deterministically (§6 复现).
 
     The candidates are first put in a canonical order (file name), then indexed
     by a generator derived from ``sha256(f"{seed}:{visual_domain}")``.  Hashing
     instead of seeding ``random.Random(str)`` keeps the pick stable across
     Python versions and free of ``hash()``'s per-process salt, and mixing the
     domain in means two domains that happen to hold the same file names do not
-    simply pick the same index.  Same ``(candidates, visual_domain, seed)`` ⇒
-    same file, on any platform and any run; a different seed picks differently.
+    simply pick the same index.
+
+    **Rotation (v5).**  ``cycle`` advances the index by one per round:
+    ``ordered[(offset + cycle) % len(ordered)]``.  Since the index wraps, a
+    domain whose directory holds ``K`` usable images shows **all K of them over
+    K rounds** — a run's image variety grows with its round count instead of
+    being pinned to one file per domain.  ``cycle=0`` reproduces the pre-v5 pick
+    exactly, so an existing directory or sample keeps the picture it already
+    documents.  Same ``(candidates, visual_domain, seed, cycle)`` ⇒ same file,
+    on any platform and any run.
+
+    Every anchor of the domain shares that round's one image by design (the v5
+    ruling rotates by round, not by anchor).  The returned path is the caller's
+    evidence of *which* file that is, so "this domain really has several images"
+    and "this domain has one image, necessarily reused" stay distinguishable.
 
     Args:
         candidates: Non-empty list from :func:`list_domain_images`.
         visual_domain: The leaf, mixed into the seed.
         seed: The run's generation seed (recorded in ``<output_dir>/config.toml``).
+        cycle: The 0-based round index, with the same meaning as the sampling
+            layer's "第 c 轮" (``c, _ = divmod(plan_index, U)``).  Default 0.
 
     Raises:
         ValueError: If *candidates* is empty — a caller must have refused the
-            missing domain at the boundary instead of asking to select from it.
+            missing domain at the boundary instead of asking to select from it —
+            or if *cycle* is negative (the round index is 0-based).
     """
     if not candidates:
         raise ValueError(f"visual_domain {visual_domain!r} has no candidate image")
+    if cycle < 0:
+        raise ValueError(f"cycle must be >= 0 (a 0-based round index), got {cycle}")
     ordered = sorted(candidates, key=lambda p: p.name)
     digest = hashlib.sha256(f"{seed}:{visual_domain}".encode()).digest()
     rng = random.Random(int.from_bytes(digest, "big"))
-    return ordered[rng.randrange(len(ordered))]
+    offset = rng.randrange(len(ordered))
+    return ordered[(offset + cycle) % len(ordered)]
 
 
 @dataclass(frozen=True, slots=True)
 class DomainImageResolution:
-    """The images a plan's visual domains resolved to, and what is missing.
+    """The images one round's visual domains resolved to, and what is missing.
 
     Attributes:
         selected: ``visual_domain -> source image`` for every required domain
@@ -202,10 +230,18 @@ class DomainImageResolution:
         missing: ``visual_domain -> anchor ids`` for every required domain that
             has none.  The ids are exactly the samples a skipping run drops, so
             the caller can count them and name them one by one.
+        cycle: The 0-based round this resolution describes — the ``cycle`` it
+            was asked for.
+        candidate_counts: ``visual_domain -> number of usable files`` for every
+            required domain (0 for a missing one).  This is the readout that
+            separates a domain which can rotate (more than one candidate) from
+            one that necessarily reuses its single image.
     """
 
     selected: dict[str, Path]
     missing: dict[str, StringList]
+    cycle: int = 0
+    candidate_counts: dict[str, int] = field(default_factory=dict)
 
 
 def resolve_domain_images(
@@ -213,19 +249,36 @@ def resolve_domain_images(
     specs: Iterable[AnchorSpec],
     *,
     seed: int,
+    cycle: int = 0,
     extensions: set[str] | None = None,
 ) -> DomainImageResolution:
-    """Resolve one source image per ``visual_domain`` the *specs* require.
+    """Resolve the source image each ``visual_domain`` uses in round *cycle*.
+
+    The resolution is **per round**, because v5 rotates a domain's images: the
+    same domain resolves to a different file in cycle 0, 1, 2, … .  A caller
+    whose specs span several rounds must therefore call this once per round
+    (group the specs by their cycle) and keep the results apart — passing a
+    multi-round spec list to one call would silently pin every round to the same
+    image.
 
     Only anchors whose coordinate names a ``visual_domain`` are considered:
     a text-only anchor has no visual coordinate, so attaching an image to it
     would be the same coordinate/content mismatch this addressing exists to
     prevent.
 
+    A domain directory that is **missing, empty, or holds no usable image**
+    keeps its pre-v5 behaviour: it is *not* an error here — the domain is
+    reported through ``missing`` (with the anchor ids it affects) and the run
+    decides at its boundary, either refusing the plan up front or, with
+    ``[images] skip_missing_images = true``, dropping those anchors with one
+    WARNING each and declaring them in ``manifest.json``.
+
     Args:
         image_dir: Root of the image tree (``--image-dir``).
-        specs: The anchors this run will generate.
+        specs: The anchors this run will generate **in round** *cycle*.
         seed: The run seed, forwarded to :func:`select_domain_image`.
+        cycle: The 0-based round index, forwarded to
+            :func:`select_domain_image`.  Default 0.
         extensions: Allowed extensions; defaults to ``SUPPORTED_EXTENSIONS``.
 
     Returns:
@@ -241,13 +294,29 @@ def resolve_domain_images(
 
     selected: dict[str, Path] = {}
     missing: dict[str, StringList] = {}
+    candidate_counts: dict[str, int] = {}
     for domain, anchor_ids in required.items():
         candidates = list_domain_images(image_dir, domain, extensions=extensions)
+        candidate_counts[domain] = len(candidates)
         if candidates:
-            selected[domain] = select_domain_image(candidates, domain, seed)
+            chosen = select_domain_image(candidates, domain, seed, cycle=cycle)
+            selected[domain] = chosen
+            logger.info(
+                "visual_domain %r: round %d uses %s (%d usable image(s) under %s)",
+                domain,
+                cycle,
+                chosen.name,
+                len(candidates),
+                domain_directory(image_dir, domain),
+            )
         else:
             missing[domain] = anchor_ids
-    return DomainImageResolution(selected=selected, missing=missing)
+    return DomainImageResolution(
+        selected=selected,
+        missing=missing,
+        cycle=cycle,
+        candidate_counts=candidate_counts,
+    )
 
 
 def _images_dir(output_dir: str | Path, subdir: str | None) -> Path:
