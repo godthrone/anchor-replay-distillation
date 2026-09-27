@@ -1,15 +1,15 @@
 # Examples
 
 Everything in this directory is **real pipeline output**, checked in so you can see what ARD
-produces without spending endpoint time. `anchor_bank.sample.jsonl` is the complete anchor
-bank of one real `--smoke` run — every line is that run's own output, copied byte for byte,
-nothing trimmed, reordered or re-worded. `manifest.sample.json` is the manifest that same run
-wrote, with a handful of environment-specific fields normalised (listed below).
+produces without spending endpoint time. `anchor_bank.sample.jsonl` is the complete anchor bank of
+one real `--smoke` run — every line is that run's own output, copied byte for byte, nothing
+trimmed, reordered or re-worded. `manifest.sample.json` is the manifest that same run wrote, with a
+handful of environment-specific fields normalised (listed below).
 
 | Path | What it is |
 |------|------------|
-| `anchor_bank.sample.jsonl` | The 8 anchors one real `--smoke` run produced, one JSON object per line (`schema_version 4.0.0`) |
-| `manifest.sample.json` | The manifest that run wrote next to its bank (smoke declaration, `plan_identity` and `status` included) |
+| `anchor_bank.sample.jsonl` | The anchors one real `--smoke` run produced, one JSON object per line (`schema_version 5.0.0`) |
+| `manifest.sample.json` | The manifest that run wrote next to its bank (`plan_identity` v2, the `plan` section and `status` included) |
 | `images/` | 10 small placeholder JPEGs, one subdirectory per `visual_domain` |
 | `images/README.md` | What those pictures are (placeholders) and the addressing convention |
 
@@ -20,65 +20,63 @@ wrote, with a handful of environment-specific fields normalised (listed below).
 ./run.sh --config configs/config.toml --smoke --image-dir examples/images
 ```
 
-`--smoke` is the standard construction rule at reduced scale: **8 restricted blocks** (4 text
-blocks + 4 image blocks, evenly spaced over the block enumeration, first and last included).
-That is 8 plan slots but only **6 distinct `RestrictedBlock`s** — two blocks appear once per
-modality, the same 891⊂935 subset identity behind the 1,826-anchor count in the main README.
-Those blocks are a subset of the blocks the full plan enumerates (**8/8 block-level coverage**),
-but their coordinates are re-rotated at smoke scale, so the 8 slots are **not rows of the
-1,826-anchor plan** (only 1/8 coincide coordinate-wise): a smoke artifact is **not a subset** of
-the full plan's rows. The run directory name carried the `_smoke` suffix, the log carried a
-WARNING, and the manifest below declares `smoke: true`. Generation is stochastic, so re-running
-that command reproduces the same *shape* — 8 planned anchors, 4 per modality,
-`schema_version 4.0.0`, the same addressing — but neither the same questions and answers nor,
-if the endpoint hiccups the same way, the same number of written records.
+The run pinned `[generation] seed = 7360` in the gitignored local override so the *plan* is
+reproducible; the seed is kept verbatim in the sample because it names the plan, not the
+deployment. `[generation] count` was left unset, as a smoke run always does.
 
-**Provenance — which build produced these files.** Both sample files are the artifacts of one
-run of this repository at commit `13a13a2e5fcc633007ba4a12cfe6ff8bb5ebf426`, made on 2026-09-27
-against a real deployment endpoint (credentials taken from the gitignored
-`.local/config.override.toml`; the run held the metric readout wired to a real target set). The
-run's `manifest.json` records the identity of the plan it drew:
+**Why eight anchors.** `--smoke` is the standard cycle-shuffle rule at reduced scale: it takes the
+**first four units of each modality from round 0's shuffle order** — **4 text-only + 4
+image-capable = 8 planned anchors**, under the same ids and the same coordinate rule a full run
+uses. A smoke plan is *not* a prefix of the full plan: the full plan takes the first `N` units of
+the single round-0 order, while smoke takes the first four *of each modality*, so an id the two
+share can point at a different coordinate. All 8 planned anchors are present in the bank.
+
+**The bank was completed in two invocations.** Anchor generation calls a live endpoint, and an
+anchor is only written when the whole conversation is obtained. The first invocation met a
+transient transport error and wrote 6 of the 8 anchors; re-running the same command against the
+same `output.directory` resumed it — the resume guard verified that each existing record still sat
+at its own plan position, then appended the 2 missing anchors. This is why the sample's
+`generation.counters` reads `requested 2 / succeeded 2 / written 2` while `total_anchors` and
+`plan.planned_anchors` are **8**: the counters describe the invocation that finished the run, the
+totals describe the whole bank (see `manifest.sample.json` below).
+
+**Re-running the command does not promise the same number of records.** Generation is stochastic
+and an anchor whose conversation fails — a transport error, empty generated content, or a teacher
+that returns only reasoning when the configuration asked for both — is **discarded for that
+invocation and counted** in `generation.counters.abandoned_by_reason`; it is never written with a
+placeholder value. A smoke run may therefore write fewer than 8 records on any given attempt, and
+the count is a property of *that run*, not of the smoke scale. The manifest is where the
+difference is declared. Re-running an incomplete directory appends the missing records rather than
+rewriting the ones already there.
+
+## Provenance — which build produced these files
+
+Both sample files are the artifacts of one `--smoke` run of this repository's v5 working tree
+(cycle-shuffle sampling, position-serial anchor ids, `schema_version 5.0.0`), made on 2026-09-27
+against a real deployment endpoint (credentials taken from the gitignored local override). The
+metric readout was wired to the bundled wiring sample `examples/target_set.sample.jsonl`, so its
+`acceptance.metric_readout` is `true` and `q95` is a real number.
+
+The run's manifest records the identity of the plan it drew:
 
 ```json
 "plan_identity": {
   "algorithm": "sha256",
-  "version": 1,
+  "version": 2,
+  "sampling": "cycle-shuffle/v1",
+  "ontology_sha256": "ab03156945150011d7c0815927ed59113d13c98d642b3d302f54f89f153019b7",
+  "seed": 7360,
+  "count": 8,
+  "unit_total": 1826,
   "plan_size": 8,
-  "digest": "3f5424395d78d8a16bb87a41163043d387569880bbf3032755fcde74beb50d06"
+  "digest": "412a399580112315e942923b49ccdc412fe256f7113ebd9df843d78a42253944"
 }
 ```
 
 `plan_identity` describes the *plan*, not the endpoint or the deployment, so it is kept in the
-sample on purpose: it is what lets a later run prove it is appending to the same plan rather
-than to a different one.
-
-**Why eight records?** The run planned **8** anchors and wrote **all 8** — no anchor was
-abandoned: `generation.counters` is `requested 8 / succeeded 8 / written 8`, with no
-`abandoned_by_reason` key at all. The bank therefore holds 4 text-only + 4 image = **8**
-records. (An earlier sample of this directory came from the run at commit `12690b3`, which
-lost one `animals` image anchor to a transient `transport_error` and so held 7 records with
-`abandoned_by_reason` = `{ "transport_error": 1 }`; this refresh met no such failure. The
-record count is a property of *that one run*, not of the smoke scale — a smoke run may write
-between 0 and 8 records, and the manifest is where the difference is declared.)
-
-| # | Record id | `data_source` | `modality` | `visual_domain` | Image | Messages (user turns) | Language | Knowledge domain | Capability | `system_prompt_mode` | `conversation_type` |
-|---|-----------|---------------|-----------|-----------------|-------|:---:|----------|------------------|------------|----------------------|---------------------|
-| 1 | `anchor_3a5bb496d89d3b1c` | `ard_text` | `text_only` | – | – | 1 (1) | Español | origin of the universe | qa | `none` | single_turn |
-| 2 | `anchor_a2017869ecd6d9ce` | `ard_multi` | `image` | everyday_objects | `images/everyday_objects/sample_03.jpg` | 1 (1) | 简体中文 | deep ocean unknowns | qa | `none` | single_turn |
-| 3 | `anchor_15ec1474fbc89ee0` | `ard_multi` | `image` | animals | `images/animals/sample_06.jpg` | 2 (1) | 日本語 | planetary habitability | reasoning | `detailed_persona` | single_turn |
-| 4 | `anchor_6e94bf911182bfa3` | `ard_multi` | `image` | plants | `images/plants/sample_08.jpg` | 2 (1) | 日本語 | complex systems emergence | debugging | `domain_style` | single_turn |
-| 5 | `anchor_9291b177c120deba` | `ard_text` | `text_only` | – | – | 8 (4) | 简体中文 | dark matter hypotheses | structured_response | `task_constraint` | tool_assisted |
-| 6 | `anchor_07d1410cfb3491f5` | `ard_text` | `text_only` | – | – | 6 (3) | Español | origin of life | reasoning | `detailed_persona` | iterative_revision |
-| 7 | `anchor_94c11400295c9edc` | `ard_multi` | `image` | vehicles | `images/vehicles/sample_10.jpg` | 8 (4) | 日本語 | consciousness research | structured_response | `task_constraint` | tool_assisted |
-| 8 | `anchor_07715d0d58a6eea7` | `ard_text` | `text_only` | – | – | 6 (3) | 日本語 | limits of scientific measurement | debugging | `domain_style` | iterative_revision |
-
-"Messages" counts every entry of `messages`, including an optional leading `system` turn, so
-it is `2n − 1` (or `2n`) for `n` user turns — see the shape invariant below. This mixture is
-simply what the smoke plan drew; nothing was steered. The language / domain / capability mix
-of a full run is much broader.
-
-All eight records ran with `enable_thinking = true`, so every `reasoning` here is a non-empty
-string. A record whose teacher ran without thinking carries `"reasoning": null` — never `""`.
+sample on purpose: it is what lets a later run prove it is appending to the same plan rather than
+to a different one. Version 2 adds the ontology fingerprint, the requested `count`, `U` and the
+sampling algorithm to the digest inputs.
 
 ## The record schema
 
@@ -86,10 +84,10 @@ Each line of `anchor_bank.sample.jsonl` is one anchor:
 
 ```jsonc
 {
-  "id": "anchor_3a5bb496d89d3b1c", // sha256 over the sampled axes
+  "id": "2c6e1114-c00000p00000",   // plan-position serial number: run_key + round + position
   "source": "ard",                 // dataset tag of the ARD anchor-bank format
   "data_source": "ard_text",       // controlled vocabulary: ard_text | ard_multi
-  "schema_version": "4.0.0",       // the record format version — same for every record
+  "schema_version": "5.0.0",       // the record format version — same for every record
   "messages": [ /* the conversation, see below */ ],
   "targets": [
     {
@@ -107,7 +105,23 @@ Each line of `anchor_bank.sample.jsonl` is one anchor:
 ```
 
 Both model fields name the **deployed** models in a real run. In this sample they are the
-placeholder `your-model-name` — see the normalised-fields table below.
+placeholder `your-model-name` (and `your-embedding-model-name` for the embedder) — see the
+normalised-fields table below.
+
+### `id` is a plan position, not a coordinate fingerprint
+
+An id is `` `run_key` + "-c" + round + "p" + position `` — here
+`2c6e1114-c00000p00000` through `2c6e1114-c00000p00007`. `run_key` is
+`H(ontology hash, seed, sampling algorithm)[:8]`; `c00000` is the round and `p00000` the position
+inside it. The id deliberately does **not** contain `N`, so raising `[generation] count` later
+leaves every id already on disk byte-identical and a resumed run can append cleanly. Because the
+id is a position and not a fingerprint of the coordinate, **two records may carry the same
+`anchor_meta` with different ids** — the generator is stochastic, so resampling a coordinate
+produces a new, legitimate sample — and both are kept.
+
+The eight ids in this bank are the eight positions of the smoke plan. The bank's line order is
+write order (the two anchors appended by the resume come last), not plan order; sort by `id`, or by
+the `p…` field, to see the plan order.
 
 `anchor_meta` carries the sample field `modality` (`text_only` | `image`) and every axis
 value: `language`, `knowledge_domain`, `capability`, `system_prompt_mode`,
@@ -140,7 +154,8 @@ two separate keys on purpose. `content` is the answer to the final user turn; `r
 the thinking chain (`str | null`). Thinking is not the answer, so it is never merged into
 `content`. If a run cannot obtain the reasoning an anchor's configuration asked for, the
 anchor is discarded and counted in the run's `manifest.json` — it is never written with an
-empty value.
+empty value. All eight records here ran with thinking enabled, so every `reasoning` is a
+non-empty string; a record whose teacher ran without thinking carries `"reasoning": null`.
 
 ### Images are addressed by `visual_domain`
 
@@ -150,15 +165,15 @@ A multimodal user turn looks like this:
 {
   "role": "user",
   "content": [
-    { "type": "image", "image": "images/everyday_objects/sample_03.jpg" },
+    { "type": "image", "image": "images/vehicles/sample_10.jpg" },
     { "type": "text",  "text": "…the generated user question…" }
   ]
 }
 ```
 
 The path is relative to the run directory, so `outputs/<run_name>/images/<visual_domain>/…`
-resolves directly; the run copies (and, unless `[images] convert = false`, converts) the picture there.
-It was drawn from `<image_dir>/<visual_domain>/<file>` — the anchor's own `visual_domain`
+resolves directly; the run copies (and, unless `[images] convert = false`, converts) the picture
+there. It was drawn from `<image_dir>/<visual_domain>/<file>` — the anchor's own `visual_domain`
 coordinate, never a flat pool, because a flat pool cannot guarantee that the image matches
 the label attached to it. The four files the sample bank references exist in this directory at
 exactly those paths, so pointing your own run at `--image-dir examples/images` resolves them.
@@ -169,50 +184,69 @@ A run also writes a manifest next to its bank. Read it to answer "did this run a
 produce healthy data?":
 
 - `total_anchors`, `domains`, `languages`, `capabilities`, `system_prompt_modes`,
-  `data_sources` — the produced mix;
-- `generation.counters` — what happened to every requested anchor (`requested` / `succeeded`
-  / `written`, plus abandonment and rejection counters when non-zero);
-- `acceptance` — pointers to `results/coverage.{json,md}`, plus `metric_readout` and `q95`;
-- `plan_identity` — the identity of the plan the run drew (`algorithm` / `version` /
-  `plan_size` / `digest`); a resumed run compares it before appending to an existing bank, so a
-  record of it is what makes a bank auditable against a plan;
+  `data_sources` — the produced mix of the **whole bank**;
+- `status` — `"complete"` once the run finished; an unfinished run has no `manifest.json` yet
+  and keeps only the intermediate `plan_identity.in_progress.json` next to its bank;
+- `plan_identity` (**v2**) — the identity of the plan the run drew (`algorithm` / `version` /
+  `sampling` / `ontology_sha256` / `seed` / `count` / `unit_total` / `plan_size` / `digest`); a
+  resumed run compares it — and, more strictly, the coordinate at each existing id — before
+  appending to an existing bank, so a record of it is what makes a bank auditable against a plan;
+- `plan` — the plan's shape and readouts: `count` (the requested `N`, or `null` for one full
+  round), `unit_total`, `full_cycles`, `last_cycle_size`, `planned_anchors`, `written_anchors`,
+  `distinct_coordinates`, `coverage_ratio`, `density`, `smoke`;
+- `generation.counters` — what happened to every anchor *this invocation* requested (`requested` /
+  `succeeded` / `written`, plus `abandoned_by_reason` when non-zero). It is an invocation-level
+  counter, not a bank total: here it reads `requested 2 / written 2` because the finishing
+  invocation was the resume, while `total_anchors` is 8;
+- `acceptance` — pointers to `results/coverage.{json,md}` (the acceptance report schema is
+  `ard-acceptance-3`), plus `metric_readout` and `q95`;
 - `config` — the merged configuration the run actually used, with credential fields already
   redacted (`api_key = "***REDACTED***"`); `config.images.convert` is part of it;
-- `images` — the addressing convention, the domains it resolved and any it skipped;
-- `smoke` / `smoke_plan` — the self-declaration of a `--smoke` run;
-- `status` — `"complete"` once the run finished; an unfinished run has no `manifest.json` yet
-  and keeps only the intermediate `plan_identity.in_progress.json` next to its bank.
+- `images` — the addressing convention, the domains it resolved and any it skipped. It is written
+  by the invocation that finished the run, so in this sample it lists the two images that the
+  **resume** resolved; the bank itself references four `visual_domain` directories (see the record
+  table below);
+- `smoke` / `smoke_plan` — the self-declaration of a `--smoke` run.
 
-**Normalised fields.** Thirteen fields that identify the machine, the endpoint, the deployed
+### The eight sample records
+
+| # | Record id | `data_source` | `modality` | `visual_domain` | Image | Messages (user turns) | Language | Knowledge domain | Capability | `system_prompt_mode` | `conversation_type` |
+|---|-----------|---------------|-----------|-----------------|-------|:---:|----------|------------------|------------|----------------------|---------------------|
+| 1 | `2c6e1114-c00000p00000` | `ard_text` | `text_only` | – | – | 1 (1) | Español | origin of the universe | qa | `none` | single_turn |
+| 2 | `2c6e1114-c00000p00001` | `ard_text` | `text_only` | – | – | 2 (1) | English | causal reasoning | translation | `domain_style` | single_turn |
+| 3 | `2c6e1114-c00000p00002` | `ard_text` | `text_only` | – | – | 2 (1) | 简体中文 | collective mourning | explanation | `minimal_persona` | single_turn |
+| 4 | `2c6e1114-c00000p00003` | `ard_text` | `text_only` | – | – | 6 (3) | 日本語 | tone adaptation | planning | `domain_style` | iterative_revision |
+| 5 | `2c6e1114-c00000p00004` | `ard_multi` | `image` | animals | `images/animals/sample_05.jpg` | 5 (2) | 简体中文 | oral storytelling | debugging | `none` | iterative_revision |
+| 6 | `2c6e1114-c00000p00007` | `ard_multi` | `image` | plants | `images/plants/sample_07.jpg` | 6 (3) | Español | evidence interpretation | rewriting | `task_constraint` | iterative_revision |
+| 7 | `2c6e1114-c00000p00005` | `ard_multi` | `image` | vehicles | `images/vehicles/sample_10.jpg` | 1 (1) | English | percentage calculation | reasoning | `none` | single_turn |
+| 8 | `2c6e1114-c00000p00006` | `ard_multi` | `image` | everyday_objects | `images/everyday_objects/sample_03.jpg` | 6 (3) | 简体中文 | consciousness research | coding | `domain_style` | iterative_revision |
+
+This mixture is simply what the smoke plan drew; nothing was steered. The language / domain /
+capability mix of a full run is much broader.
+
+**Normalised fields.** Five literal strings that identify the machine, the endpoint, the deployed
 model or the run location were replaced so the sample carries no deployment details; everything
-else is verbatim. The endpoint, the credential and the model name are **placeholders**
-throughout this directory:
+else is verbatim. The endpoint, the credentials and the model names are **placeholders**:
 
-| Field | Sample value | Why |
+| What was replaced | Sample value | Why |
 |-------|--------------|-----|
-| `config.input_generator.api_base` | `https://your-endpoint.example/v1` | The real endpoint is deployment-specific |
-| `config.target_model.api_base` | `https://your-endpoint.example/v1` | Same |
-| `config.coverage.embedding.api_base` | `https://your-endpoint.example/v1` | Same |
-| `config.input_generator.model_name` | `your-model-name` | The served model's name is deployment-specific |
-| `config.target_model.model_name` | `your-model-name` | Same |
-| `config.coverage.embedding.model` | `your-model-name` | Same (the embedder that measured `q95`) |
-| `input_generator_model` (all 8 records) | `your-model-name` | Same, per record |
-| `teacher_id` (all 8 records) | `your-model-name` | Same, per record |
-| `output_dir` | `outputs/ard_dataset_<timestamp>_smoke` | Run location |
-| `config.output.directory` | `outputs/ard_dataset_<timestamp>` | The real value pinned the run directory on the machine that ran it |
-| `smoke_plan.run_name` | `ard_dataset_<timestamp>_smoke` | The real value was the run name on the machine that ran it |
-| `images.image_dir` | `examples/images` | The real value is an absolute path on the machine that ran it |
-| `config.coverage.target_set_path` | `/path/to/your/target_set.jsonl` | The real value is an absolute path on the machine that ran it; a placeholder keeps the wiring visible |
+| `config.input_generator.api_base`, `config.target_model.api_base`, `config.coverage.embedding.api_base` | `https://your-endpoint.example/v1` | The real endpoint is deployment-specific |
+| `config.input_generator.model_name`, `config.target_model.model_name`, and the per-record `input_generator_model` / `teacher_id` | `your-model-name` | The served generator/teacher model's name is deployment-specific |
+| `config.coverage.embedding.model` | `your-embedding-model-name` | Same (the embedder that measured `q95`) |
+| `images.image_dir` (an absolute path on the machine that ran it) | `examples/images` | The run location |
+| `output_dir`, `config.output.directory`, `smoke_plan.run_name` (the pinned run directory) | `outputs/ard_dataset_<timestamp>` / `outputs/ard_dataset_<timestamp>_smoke` / `ard_dataset_<timestamp>_smoke` | The real value pinned the run directory on the machine that ran it |
 
-Otherwise the sample is the run artifact **byte for byte**: the normalisation is a literal
-string substitution, and reversing the substitutions above reproduces the run's own
-`anchor_bank.jsonl` / `manifest.json` exactly.
+Otherwise the sample is the run artifact **byte for byte**: the normalisation is a literal string
+substitution, and reversing the substitutions above reproduces the run's own `anchor_bank.jsonl`
+and `manifest.json` exactly. The two model placeholders are distinct on purpose, so the reversal
+stays unambiguous.
 
 `plan_identity` and `config.generation.seed` are kept verbatim: they identify the plan (and the
-sampling order it was drawn in), not the deployment. This run had the metric readout wired —
-hence `config.coverage.enabled = true` with a target set and a 4096-dimension embedder — so its
-`acceptance.metric_readout` is `true` and `q95` is a real number, not `null`. A run with no
-target set configured reports `metric_readout: false` / `q95: null` and says so in a WARNING.
+sampling order it was drawn in), not the deployment. `config.coverage.target_set_path` is also
+kept verbatim because the run was pointed at the repository's own wiring sample
+(`examples/target_set.sample.jsonl`), which is portable — hence `metric_readout: true` with a real
+`q95`. A run with no target set configured reports `metric_readout: false` / `q95: null` and says
+so in a WARNING.
 
 `config.*.api_key` already reads `***REDACTED***`: the pipeline redacts credentials before
 writing any manifest or `config.toml`, so no key has ever been written to an output
@@ -223,13 +257,14 @@ would create a second source of truth that could drift.
 ## Using these files
 
 - Read `anchor_bank.sample.jsonl` to see the record schema without running anything.
-- Validate your own tooling against a real `4.0.0` record.
+- Validate your own tooling against a real `5.0.0` record.
 - Run the smoke command above with `--image-dir examples/images` to see the same shape
   produced locally.
 
-`images/` covers exactly the four `visual_domain` directories a `--smoke` run requires
-(`everyday_objects`, `animals`, `plants`, `vehicles`). **A full run needs all 21 visual
-domains** — supply your own image directory and pass it with `--image-dir`.
+`images/` covers the four `visual_domain` directories this sample's smoke plan required
+(`animals`, `everyday_objects`, `plants`, `vehicles`). Which domains a smoke run needs depends on
+its seed, because it takes round 0's shuffled order; **a full run needs all 21 visual domains** —
+supply your own image directory and pass it with `--image-dir`.
 
 > The ten JPEGs are **placeholders**, not representatives of their domain, and their
 > provenance is not documented in this repository. See

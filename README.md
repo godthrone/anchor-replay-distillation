@@ -7,15 +7,21 @@ teacher's answer — and, when enabled, its reasoning — beside the question th
 ARD is the *data-generation* half of a distillation pipeline: it does not train, distil or
 evaluate a student model.
 
-The plan comes from the v4 ontology (`ontology/anchor_ontology.v4.json`) and is derived, not
-configured: **935 legal text-modality restricted blocks + 891 legal image-modality restricted
-blocks = 1,826 anchors** — one anchor per block *within each modality group*, with the 209
-`knowledge_domain` leaves (and, for image coordinates, the 21 `visual_domain` leaves) rotated
-across them. The 891 image-capable blocks are a subset of the 935, so those coordinates appear
-twice, once per modality; the two are told apart by `modality`, which is part of the identity a
-duplicate check uses. That fixed
-target set is what makes a run auditable: every accepted coordinate is either covered exactly
-once or the run refuses to proceed.
+The plan is built from the v4 ontology (`ontology/anchor_ontology.v4.json`) by one rule —
+**cycle-shuffle**: every *coverage unit* is a `(modality, legal restricted block)` pair; each
+round shuffles the whole unit set, walks it without replacement, then reshuffles for the next
+round. The unit count `U` is enumerated at runtime, never written into the ontology or the code
+(one unit for every legal text block, plus one for every image-capable block; the image-capable
+blocks are a subset of the legal blocks, so those coordinates appear once per modality, told apart
+by `modality`).
+The recompute command is in [docs/algorithm.md](docs/algorithm.md) §1.
+
+**How many anchors a run produces is yours to decide.** `N` is set in exactly one place —
+`[generation] count` in `configs/config.toml`; leaving it unset means one full round (`U`), and
+there is **no upper bound**: a larger `N` simply rolls into round 1, 2, … Each anchor's `id` is a
+*plan-position serial number* (`run_key` + round + position), so raising `N` leaves every
+already-generated id byte-identical and a resumed run appends cleanly. See
+[Choosing how many anchors](#choosing-how-many-anchors-n).
 
 ## Quick start
 
@@ -100,35 +106,41 @@ entry point:
 uv run python -m ard --config configs/config.toml --smoke --image-dir examples/images
 ```
 
-**What `--smoke` means.** It materialises the *same* construction rule at a reduced scale —
-8 restricted blocks (4 text blocks + 4 image blocks, evenly spaced over the enumeration, first
-and last included). Those are 8 plan slots but only **6 distinct `RestrictedBlock`s**: two blocks
-appear once per modality, the same 891⊂935 subset identity behind the 1,826 count above. Those
-blocks are a subset of the blocks the full plan enumerates (8/8
-block-level coverage), but their coordinates are re-rotated at smoke scale, so the 8 anchors
-are **not** rows of the 1,826-anchor plan (only 1/8 coincide coordinate-wise). Its point is
-that a fresh checkout can see a complete artifact in minutes. The
-artifact is deliberately incomplete and says so in three independent places: the run
-directory name gets the `_smoke` suffix, the log carries a WARNING naming the scale, and
-`manifest.json` sets `smoke: true` plus a `smoke_plan` block. `--smoke` is a CLI run-boundary
-flag, not a configuration field, and changes nothing about a run without it.
+**What `--smoke` means.** It materialises the *same* cycle-shuffle rule at a reduced scale:
+**8 anchors — 4 text-only + 4 image-capable**, taken from round 0's shuffle order (the first four
+units of each modality). Its point is that a fresh checkout can see a complete artifact in
+minutes, and it is a real endpoint run, not an offline demo. The artifact is deliberately small
+and says so in three independent places: the run directory name gets the `_smoke` suffix, the log
+carries a WARNING naming the scale, and `manifest.json` sets `smoke: true` plus a `smoke_plan`
+block. `--smoke` is a CLI run-boundary flag, not a configuration field, and changes nothing about
+a run without it.
+
+A smoke plan is **not a prefix of the full plan**: the full plan takes the first `N` units of the
+single round-0 order, while smoke takes the first four units *of each modality* — so a shared id
+can point at a different coordinate. That is exactly why the resume guard compares coordinates
+position by position instead of comparing id sets, and why a smoke directory and a full directory
+must not be mixed.
 
 The artifact lands in `outputs/<run_name>/` (default `ard_dataset_<YYYYmmdd_HHMMSS>_smoke`;
 set `[output] directory` in config to pin the name). After a few minutes you should have:
 
-- `anchor_bank.jsonl` — the 8 anchors, `schema_version 4.0.0`;
-- `results/coverage.json` + `results/coverage.md` — the acceptance readout. The **structure
-  readout** (plan counts vs. the construction rule) needs no model call and is always
-  written; with no target set configured it reports `within_rule: false` against the full
-  plan and `metrics: null`, which is exactly what a smoke run should say — 8 anchors are not
-  the 1,826-anchor plan, and the report does not pretend otherwise;
-- `manifest.json` — composition plus the smoke declaration;
+- `anchor_bank.jsonl` — the 8 anchors, `schema_version 5.0.0`;
+- `results/coverage.json` + `results/coverage.md` — the acceptance readout, `report_schema
+  "ard-acceptance-3"`. The **structure readout** (plan counts vs. this run's own `N` and round
+  decomposition) needs no model call and is always written. A smoke plan is judged as what it is —
+  an 8-entry plan — so `within_rule` is `true` and the coverage line reads the ratio of those 8
+  entries to this run's own unit total `U` (a small number);
+  with no target set configured, `metrics: null` and a WARNING say the metric readout was not
+  measured. The report never pretends 8 anchors are a full-round delivery;
+- `manifest.json` — composition plus `plan_identity` (v2) and the `plan` section;
 - `config.toml` and `logs/`. While the run is still going there is also
   `plan_identity.in_progress.json`, an intermediate record that binds the directory to the
   plan; a finished run keeps only `manifest.json` as its declaration.
 
-**Full run** — all 1,826 anchors, one endpoint call per turn. Supply your own image directory
-laid out as `<image_dir>/<visual_domain>/<image file>` with all 21 visual domains present:
+**Full run** — one full round is `U` anchors (the runtime-enumerated unit count; set
+`[generation] count` for any other `N`), one endpoint call per turn. Supply your own image
+directory laid out as `<image_dir>/<visual_domain>/<image file>` with every visual domain the
+ontology declares present:
 
 ```bash
 ./run.sh --config configs/config.toml --image-dir /path/to/images
@@ -136,16 +148,44 @@ laid out as `<image_dir>/<visual_domain>/<image file>` with all 21 visual domain
 
 A full run costs hours of endpoint time; run the smoke test first to validate the setup.
 
+## Choosing how many anchors (N)
+
+`N` has exactly one source — the `[generation] count` field in `configs/config.toml`:
+
+```toml
+[generation]
+# Omit (the default) = one full round = U, the runtime-enumerated unit count.
+# Set any integer >= 1 to produce exactly that many anchors; N rolls on across
+# rounds (finishing a round starts the next one).
+count = 5000
+```
+
+- **No CLI flag, no `run.sh` passthrough, no environment variable.** A CLI flag and a config field
+  for the same value would be two sources of truth, so the value lives only in the config.
+- **No upper bound.** A large `N` is not refused; the run logs how many full rounds it spans and
+  how many anchors fall in the last, partial round.
+- **What is refused**: `count < 1`, and non-integer types (`0`, negatives, `true`, `"1826"`,
+  `1.5`). The error names the field and tells you to remove the line to get one full round.
+- **Raising `N` on an existing directory appends.** Anchor ids are plan-position serial numbers
+  that do not contain `N`, so running the same `output.directory` with a larger `count` keeps every
+  existing record and appends the new ones. Changing the seed, the ontology, or the smoke/full
+  shape is refused with a message telling you to use a new directory.
+- **Coverage and density are read separately.** *Coverage* counts coordinates and saturates at
+  `1.0` once every unit has been visited (`min(distinct, U) / U`); *density* counts entries and
+  keeps growing with `N` (`N / U`). Revisiting a coordinate in a later round is a legitimate new
+  sample — the generator is stochastic, so the same labels yield a different question — and is
+  never dropped. Definitions: [docs/measurement.md](docs/measurement.md) §6.
+
 ## Data format
 
 `anchor_bank.jsonl` holds one JSON object per line:
 
 ```jsonc
 {
-  "id": "anchor_…",                 // sha256 over the sampled axes
+  "id": "1a2b3c4d-c00000p00137",    // plan-position serial number: run_key + round + position
   "source": "ard",
   "data_source": "ard_text",        // controlled vocabulary: ard_text | ard_multi
-  "schema_version": "4.0.0",
+  "schema_version": "5.0.0",
   "messages": [ /* the conversation */ ],
   "targets": [
     { "id": "primary",
@@ -157,6 +197,12 @@ A full run costs hours of endpoint time; run the smoke test first to validate th
   "teacher_id": "…"                 // the model whose output is the target
 }
 ```
+
+`id` is a **plan position**, not a coordinate fingerprint: `run_key` is
+`H(ontology hash, seed, sampling algorithm)[:8]`, `c00000` is the round and `p00137` the position
+inside it. It deliberately does **not** contain `N`, which is what makes "raise `count` and re-run
+the same directory" a clean append. Two records may therefore carry the same `anchor_meta` with
+different ids; both are kept.
 
 `anchor_meta` carries the sample field `modality` and every axis value: `language`,
 `knowledge_domain`, `capability`, `system_prompt_mode`, `conversation_type`,
@@ -199,15 +245,15 @@ input locations and run boundaries only: `--config`, `--override`, `--image-dir`
 |---|---|
 | `[input_generator]` | The question-generator endpoint (`api_base`, `model_name`, `api_key`), sampling temperature, timeouts, retries |
 | `[target_model]` | The teacher endpoint — its answer is the supervision target. `enable_thinking` switches the reasoning channel on (`targets[0].output.reasoning`) |
-| `[generation]` | `concurrency`, the optional `seed` (omit it and every run draws a fresh seed; the seed actually used is recorded in the run's `config.toml`), backpressure thresholds. The anchor count and the turn counts are **not** configurable — they come from the ontology |
+| `[generation]` | `count` (the anchor count `N`: omit = one full round = `U`; any integer `>= 1`, **no upper bound**), `concurrency`, the optional `seed` (omit it and every run draws a fresh seed; the seed actually used is recorded in the run's `config.toml`), backpressure thresholds. Turn counts are **not** configurable — they come from the ontology |
 | `[ontology]` | Path to the v4 ontology (`ontology/anchor_ontology.v4.json`) |
 | `[output]` | `directory` (empty = `outputs/ard_dataset_<timestamp>`), `overwrite` (default `false`: an existing bank is resumed, not replaced) |
 | `[images]` | `convert` (default **`true`**): accept RAW/BMP/TIFF/GIF/WebP and normalise every selected picture to JPEG (RAW additionally needs the optional `raw` extra); `false` accepts only the already-web formats and copies them verbatim. `skip_missing_images` (default **`false`**): a missing `visual_domain` directory is refused, not skipped |
 | `[coverage]` | `enabled` (default `true`) and `target_set_path` — the target set for the metric readout; empty means structure readout only |
 | `[coverage.embedding]` | The OpenAI-compatible `/embeddings` endpoint, model, expected `dimension`, batch size and timeouts used by the metric readout |
 
-`configs/config.override.sample.toml` mirrors every field as a commented template; it is the
-file step 2 copies.
+`configs/config.override.sample.toml` is the commented template step 2 copies; it is where
+deployment values (endpoints, model names, credentials) go, never `configs/config.toml` itself.
 
 ### Interface change: image conversion moved into the config
 
@@ -226,22 +272,32 @@ by the override.
 
 ```text
 outputs/<run_name>/          # default ard_dataset_<YYYYmmdd_HHMMSS>; --smoke appends _smoke
-├── anchor_bank.jsonl        # one record per line, schema_version 4.0.0
+├── anchor_bank.jsonl        # one record per line, schema_version 5.0.0
 ├── config.toml              # merged config snapshot, credentials redacted
 ├── plan_identity.in_progress.json  # only while a run is unfinished: its plan-identity record
 ├── images/                  # where image-modality anchors' pictures land: images/<visual_domain>/<file> (transcoded or copied); created only when this run has image anchors
 ├── logs/                    # ard.log / ard_debug.log / ard_error.log
 ├── results/
-│   ├── coverage.json        # machine-readable acceptance readout
+│   ├── coverage.json        # machine-readable acceptance readout (report_schema ard-acceptance-3)
 │   └── coverage.md          # the same readout, human-readable
-└── manifest.json            # composition, run health, config, acceptance pointer (the authoritative one)
+└── manifest.json            # composition, run health, config, plan_identity v2, plan, images, acceptance pointer (the authoritative one)
 ```
 
 `manifest.json` is the **authoritative** declaration: `status: "complete"`, the bank's composition, the
-run-health counters and the `acceptance` pointer. `plan_identity.in_progress.json` is an intermediate
+run-health counters and the `acceptance` pointer. Three sections describe the plan itself:
+
+- `plan_identity` (**v2**) — the plan's name: `algorithm`, `version`, `sampling`, `ontology_sha256`,
+  `seed`, `count` (your `N` exactly as requested; `null` = one full round), `unit_total` (`U`),
+  `plan_size` and `digest` (sha256 over the ordered coordinate list and those inputs);
+- `plan` — shape and readouts: `unit_total`, `full_cycles`, `last_cycle_size`, `planned_anchors`,
+  `written_anchors`, `distinct_coordinates`, `coverage_ratio`, `density`, `smoke`;
+- `images` — `resolved_images` (one `{cycle, visual_domain, image}` row per resolved picture) and
+  `domain_candidate_counts` (how many usable files each domain offered).
+
+`plan_identity.in_progress.json` is an intermediate
 record, written once the plan exists and before the first endpoint call, and deleted when the run
 finishes. It carries `status: "in_progress"` and the run's `plan_identity` — **not** run health, because
-none exists yet. It is what makes an interrupted run auditable: the 1,826-anchor path is routinely
+none exists yet. It is what makes an interrupted run auditable: a large-`N` path is routinely
 stopped and resumed, and this record binds such a directory to the plan that produced it. Its `counters`
 are fixed before the first endpoint call and describe the *plan*, not progress: `existing` is what the
 bank already held, `new` and `written` are the number of anchors this invocation set out to generate and
@@ -249,20 +305,23 @@ write (the same number). They must never be read as a completion, progress or ac
 count of records actually persisted is `manifest.json`'s `total_anchors` — the full bank, records that
 were already on disk included; `generation.counters.written` counts only what this invocation wrote,
 so the two differ on a resumed run. The plan identity
-in it can be verified by recomputing `PlanIdentity.of(plan)` and comparing digests. See
+in it can be verified by recomputing `PlanIdentity.of(...)` and comparing digests. See
 [docs/architecture.md](docs/architecture.md) section 4.
 
-`results/coverage.{json,md}` is the acceptance readout, not training data:
+`results/coverage.{json,md}` is the acceptance readout, not training data
+(`report_schema "ard-acceptance-3"`):
 
-- the **structure readout** (plan counts vs. the construction rule) is always produced and
-  costs nothing — no model call;
+- the **structure readout** (plan counts vs. this run's own `N` and round decomposition,
+  including `coverage` / `density` / `full_rounds`) is always produced and costs nothing — no model
+  call. A smoke run is judged against its own 8-entry plan, so it reports `within_rule: true` and a
+  coverage of those 8 entries over this run's own unit total `U` (a small ratio);
 - the **metric readout** (`q95`, `Extent(ε)` with the ε±5% band, paired bootstrap CI, noise
   band) requires both `coverage.target_set_path` and `[coverage.embedding]`.
 
 Without them the run writes the structure readout only and announces the gap in a WARNING
 (`metric readout not measured …`), with `metric_readout: false` and `q95: null` in the
-manifest — never a silently clean report. The definitions of the ruler and its resolution
-limits are in [docs/measurement.md](docs/measurement.md).
+manifest — never a silently clean report. The definitions of the ruler, of coverage vs. density,
+and of its resolution limits are in [docs/measurement.md](docs/measurement.md).
 
 The metric space holds **text only**: an image-modality anchor takes part through the text
 parts of its final user turn, and its image pixels never enter the space, so the readout
@@ -299,6 +358,15 @@ structure readout + a WARNING; `target_set_path` set but `[coverage.embedding]` 
 the run is refused at config load with the missing field(s) named, before any output
 directory exists; **both** set → the metric readout.
 
+## Adding a knowledge domain
+
+**Adding one `knowledge_domain` leaf means editing the leaf list in the ontology and nothing
+else.** There are no hand-written counts to update and no constant to bump: the coverage units,
+the leaf rotations and the acceptance expectations are all enumerated from the ontology at
+runtime, so a new leaf is picked up on the next run without touching `configs/`, `src/` or the
+code. (Adding a leaf changes the ontology hash, so it is a *different plan* — a directory
+produced before the edit cannot be resumed; use a new `output.directory`.)
+
 ## Development
 
 ```bash
@@ -311,7 +379,7 @@ uv run mypy src/ard/
 The same workflow is described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 **`--smoke` vs. a full run:** the construction rule, the sampling and the per-anchor
-generation path are identical; only the plan scale differs (8 anchors vs. 1,826). A smoke
+generation path are identical; only the plan scale differs (8 anchors vs. one full round). A smoke
 artifact is deliberately incomplete and must not be delivered as a dataset — the `_smoke`
 suffix, the log WARNING and `manifest.json: smoke` exist so it cannot be mistaken for one.
 Both paths call the configured endpoints; neither is an offline demo.
@@ -363,13 +431,23 @@ numeric upper bound. The implementation reads "multi" as the largest turn count 
 itself declares (`constraint_update` = 4), keeps that number in a single constant, and raises
 an error if the ontology ever declares more — it never silently clamps. Turns are not a
 config field: to change them, change the ontology (or that constant), not
-`configs/config.toml`. See [docs/algorithm.md](docs/algorithm.md) §3.
+`configs/config.toml`. See [docs/algorithm.md](docs/algorithm.md) §4.
 
-**The ontology md5 changed — do earlier readings need recomputing?**
-No. The v4 ontology's md5 changed once, over a one-line `supersedes` provenance edit. The
-four counts, the unreachable-pair group and the 1,826-line plan are unchanged, so existing
-`q95` readings, counts and plans do not need recomputing. The hashes and the item-by-item
-check are in [docs/algorithm.md](docs/algorithm.md) §5.
+**Can I make a very large dataset — is there a ceiling on `N`?**
+There is no ceiling. `N` comes from `[generation] count` and anything `>= 1` is accepted; a value
+larger than one round simply rolls on into the next round. Coverage stops growing once every unit
+has been visited (`min(distinct, U) / U`, saturating at `1.0`) while density (`N / U`) keeps
+growing, because a coordinate revisited in a later round is a new, legitimate sample — the
+question generator is stochastic, so the same coordinate yields a different question. Nothing is
+dropped as a "duplicate". The one thing to know is that a very large `N` is a very large amount of
+endpoint time, not a limit of the tool.
+
+**Why do anchor ids look like `1a2b3c4d-c00000p00137`?**
+Because an id is a **plan position**, not a fingerprint of the coordinate. `run_key` mixes the
+ontology hash, the seed and the sampling algorithm; `c00000` is the round and `p00137` the position
+inside it. Since `N` is not part of it, enlarging `count` leaves existing ids unchanged and lets a
+run append to its own bank. The coordinate is a separate, fully recorded field (`anchor_meta`), and
+two records may share one coordinate with two different ids — both are kept on purpose.
 
 ## License and contributing
 

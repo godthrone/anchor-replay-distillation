@@ -2,30 +2,35 @@
   "total_anchors": 8,
   "domains": {
     "origin of the universe": 1,
-    "deep ocean unknowns": 1,
-    "planetary habitability": 1,
-    "complex systems emergence": 1,
-    "dark matter hypotheses": 1,
-    "origin of life": 1,
-    "consciousness research": 1,
-    "limits of scientific measurement": 1
+    "causal reasoning": 1,
+    "collective mourning": 1,
+    "tone adaptation": 1,
+    "oral storytelling": 1,
+    "evidence interpretation": 1,
+    "percentage calculation": 1,
+    "consciousness research": 1
   },
   "languages": {
     "Español": 2,
-    "简体中文": 2,
-    "日本語": 4
+    "English": 2,
+    "简体中文": 3,
+    "日本語": 1
   },
   "capabilities": {
-    "qa": 2,
-    "reasoning": 2,
-    "debugging": 2,
-    "structured_response": 2
+    "qa": 1,
+    "translation": 1,
+    "explanation": 1,
+    "planning": 1,
+    "debugging": 1,
+    "rewriting": 1,
+    "reasoning": 1,
+    "coding": 1
   },
   "system_prompt_modes": {
-    "none": 2,
-    "detailed_persona": 2,
-    "domain_style": 2,
-    "task_constraint": 2
+    "none": 3,
+    "domain_style": 3,
+    "minimal_persona": 1,
+    "task_constraint": 1
   },
   "data_sources": {
     "ard_text": 4,
@@ -59,8 +64,9 @@
       "enable_thinking": true
     },
     "generation": {
-      "seed": 121684216,
-      "concurrency": 4,
+      "count": null,
+      "seed": 7360,
+      "concurrency": 2,
       "backpressure_threshold": 3,
       "backpressure_cooldown": 60.0
     },
@@ -77,11 +83,11 @@
     },
     "coverage": {
       "enabled": true,
-      "target_set_path": "/path/to/your/target_set.jsonl",
+      "target_set_path": "examples/target_set.sample.jsonl",
       "embedding": {
         "api_base": "https://your-endpoint.example/v1",
         "api_key": "***REDACTED***",
-        "model": "your-model-name",
+        "model": "your-embedding-model-name",
         "dimension": 4096,
         "batch_size": 32,
         "connect_timeout": 10.0,
@@ -93,35 +99,54 @@
   },
   "plan_identity": {
     "algorithm": "sha256",
-    "version": 1,
+    "version": 2,
+    "sampling": "cycle-shuffle/v1",
+    "ontology_sha256": "ab03156945150011d7c0815927ed59113d13c98d642b3d302f54f89f153019b7",
+    "seed": 7360,
+    "count": 8,
+    "unit_total": 1826,
     "plan_size": 8,
-    "digest": "3f5424395d78d8a16bb87a41163043d387569880bbf3032755fcde74beb50d06"
+    "digest": "412a399580112315e942923b49ccdc412fe256f7113ebd9df843d78a42253944"
+  },
+  "plan": {
+    "ontology_sha256": "ab03156945150011d7c0815927ed59113d13c98d642b3d302f54f89f153019b7",
+    "seed": 7360,
+    "count": 8,
+    "unit_total": 1826,
+    "full_cycles": 0,
+    "last_cycle_size": 8,
+    "planned_anchors": 8,
+    "written_anchors": 8,
+    "distinct_coordinates": 8,
+    "coverage_ratio": 0.004381161007667032,
+    "density": 0.004381161007667032,
+    "smoke": true
   },
   "generation": {
     "counters": {
-      "requested": 8,
-      "succeeded": 8,
-      "written": 8
+      "requested": 2,
+      "succeeded": 2,
+      "written": 2
     },
     "failures": {
-      "responses": 42,
-      "reasoning_responses": 18,
-      "reasoning_chars": 179583
+      "reasoning_responses": 4,
+      "reasoning_chars": 8471,
+      "responses": 9
     }
   },
   "acceptance": {
     "coverage_json": "results/coverage.json",
     "coverage_md": "results/coverage.md",
     "metric_readout": true,
-    "q95": 0.8320091814348234
+    "q95": 0.7627489853962606
   },
   "smoke": true,
   "smoke_plan": {
     "run_name": "ard_dataset_<timestamp>_smoke",
     "planned_anchors": 8,
-    "full_expected_anchors": 1826,
     "text_blocks": 4,
     "image_blocks": 4,
+    "full_expected_anchors": 1826,
     "note": "SMOKE RUN — deliberately incomplete; not a deliverable."
   },
   "images": {
@@ -129,11 +154,25 @@
     "addressing": "<image_dir>/<visual_domain>/<image file>",
     "skip_missing_images": false,
     "resolved_visual_domains": [
-      "animals",
       "everyday_objects",
-      "plants",
       "vehicles"
     ],
+    "resolved_images": [
+      {
+        "cycle": 0,
+        "visual_domain": "everyday_objects",
+        "image": "sample_03.jpg"
+      },
+      {
+        "cycle": 0,
+        "visual_domain": "vehicles",
+        "image": "sample_10.jpg"
+      }
+    ],
+    "domain_candidate_counts": {
+      "everyday_objects": 3,
+      "vehicles": 2
+    },
     "skipped_anchor_count": 0,
     "skipped_visual_domains": []
   },
