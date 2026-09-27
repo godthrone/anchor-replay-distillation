@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from ard.core.sampling import generate_anchor_id
+from ard.core.sampling import format_anchor_id
 from ard.core.types import DataSource, GeneratedAnchor
 from ard.domain.anchor_shape import message_shape_error
 from ard.domain.append_outcome import AppendOutcome
@@ -93,7 +93,7 @@ def test_anchor_to_dict_persists_top_level_fields():
     )
     d = anchor_to_dict(a)
     assert d["data_source"] == "ard_multi"
-    assert d["schema_version"] == "4.0.0"
+    assert d["schema_version"] == "5.0.0"
     assert d["input_generator_model"] == "input-model"
     assert d["teacher_id"] == "target"  # untouched sibling key
 
@@ -108,7 +108,7 @@ def test_anchor_to_dict_defaults_data_source_to_ard_text():
     """A text-only anchor defaults to the ``ard_text`` routing key."""
     d = anchor_to_dict(_make_anchor("d"))
     assert d["data_source"] == "ard_text"
-    assert d["schema_version"] == "4.0.0"
+    assert d["schema_version"] == "5.0.0"
 
 
 def test_persisted_record_carries_top_level_fields(tmp_path):
@@ -118,7 +118,7 @@ def test_persisted_record_carries_top_level_fields(tmp_path):
     append_anchor(_make_anchor("e", input_generator_model="pin-model"), path)
     records = read_anchor_bank(path)
     assert records[0]["data_source"] == "ard_text"
-    assert records[0]["schema_version"] == "4.0.0"
+    assert records[0]["schema_version"] == "5.0.0"
     assert records[0]["input_generator_model"] == "pin-model"
 
 
@@ -383,24 +383,18 @@ def test_write_anchor_bank_refuses_invalid_shape(tmp_path):
 
 
 # ── Output gates: id de-duplication ─────────────────────────────────────────
+#
+# v5: the anchor id is an opaque primary key — a plan-position serial number
+# (``ard.core.sampling.format_anchor_id``), not a digest of the anchor's
+# coordinates.  ``generate_anchor_id`` / ``ANCHOR_ID_DIMENSIONS`` are gone, so
+# the metadata is no longer an input to the id at all.  De-duplication is
+# therefore strictly by id, and two samples that happen to share coordinates are
+# **not** duplicates: they sit at different plan positions and carry different
+# ids, and the bank keeps both.
 
 
-def test_generate_anchor_id_is_metadata_derived():
-    """Ids are a pure function of the 4 metadata dimensions (must not change)."""
-    meta = {
-        "language": "English",
-        "knowledge_domain": "math",
-        "capability": "qa",
-        "conversation_type": "single_turn",
-    }
-    anchor_id = generate_anchor_id(meta)
-    assert anchor_id.startswith("anchor_")
-    assert len(anchor_id) == len("anchor_") + 16
-    assert generate_anchor_id(dict(meta)) == anchor_id
-
-
-def test_append_anchor_deduplicates_by_id(tmp_path, caplog):
-    """Two distinct anchors sharing an id produce exactly one bank row."""
+def test_identical_coordinates_under_different_ids_are_both_kept(tmp_path):
+    """坐标相同、id 不同 ⇒ 两条都留下（坐标相同 ≠ 样本重复，v5 裁定）。"""
     path = tmp_path / "bank.jsonl"
     meta = {
         "language": "English",
@@ -408,10 +402,22 @@ def test_append_anchor_deduplicates_by_id(tmp_path, caplog):
         "capability": "qa",
         "conversation_type": "single_turn",
     }
-    anchor_id = generate_anchor_id(meta)
+    first = _make_anchor(format_anchor_id("c4f4aa6f", 0, 3), anchor_meta=meta)
+    second = _make_anchor(format_anchor_id("c4f4aa6f", 7, 3), anchor_meta=meta)
 
-    first = _make_anchor(anchor_id, anchor_meta=meta, target_answer="first answer")
-    second = _make_anchor(anchor_id, anchor_meta=meta, target_answer="second answer")
+    assert append_anchor(first, path) is AppendOutcome.APPENDED
+    assert append_anchor(second, path) is AppendOutcome.APPENDED
+
+    assert count_existing_anchors(path) == count_unique_anchor_ids(path) == 2
+
+
+def test_append_anchor_deduplicates_by_id(tmp_path, caplog):
+    """Two distinct anchors sharing an id produce exactly one bank row."""
+    path = tmp_path / "bank.jsonl"
+    anchor_id = format_anchor_id("c4f4aa6f", 0, 0)
+
+    first = _make_anchor(anchor_id, target_answer="first answer")
+    second = _make_anchor(anchor_id, target_answer="second answer")
 
     with caplog.at_level("WARNING"):
         assert append_anchor(first, path) is AppendOutcome.APPENDED
@@ -435,6 +441,39 @@ def test_append_anchor_dedup_survives_across_calls_without_cache(tmp_path):
     path.unlink()
     assert append_anchor(_make_anchor("a"), path) is AppendOutcome.APPENDED
     assert len(read_anchor_bank(path)) == 1
+
+
+def test_append_anchor_sees_ids_written_by_another_writer(tmp_path):
+    """The id cache resumes a scan; it must never hide a row someone else added.
+
+    The cache remembers how far into the bank it read, so the two failure modes
+    of that shortcut are pinned here: an id appended behind our back must still
+    be seen (else we write a duplicate), and a bank replaced behind our back must
+    still be re-read (else we keep suppressing an id it no longer contains).
+    """
+    path = tmp_path / "bank.jsonl"
+    assert append_anchor(_make_anchor("first"), path) is AppendOutcome.APPENDED
+
+    # Another writer (a second process, a different run) appends directly.
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(anchor_to_dict(_make_anchor("second")), ensure_ascii=False) + "\n")
+
+    assert append_anchor(_make_anchor("second"), path) is AppendOutcome.DUPLICATE_SKIPPED
+    # The row the other writer added is still there, and the retry added nothing.
+    assert [r["id"] for r in read_anchor_bank(path)] == ["first", "second"]
+
+
+def test_append_anchor_rereads_a_bank_replaced_by_another_writer(tmp_path):
+    """A shorter bank at the same path invalidates the cached scan."""
+    path = tmp_path / "bank.jsonl"
+    assert append_anchor(_make_anchor("a"), path) is AppendOutcome.APPENDED
+    assert append_anchor(_make_anchor("b"), path) is AppendOutcome.APPENDED
+
+    # The bank is replaced by an unrelated one: "a" is no longer in it.
+    write_anchor_bank([_make_anchor("c")], path)
+
+    assert append_anchor(_make_anchor("a"), path) is AppendOutcome.APPENDED
+    assert [r["id"] for r in read_anchor_bank(path)] == ["c", "a"]
 
 
 def test_write_anchor_bank_deduplicates_ids(tmp_path, caplog):

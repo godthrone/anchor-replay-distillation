@@ -19,7 +19,7 @@ import pytest
 
 from ard.backends.api_client import ARDTimeoutError, ChatAPIClient, ChatResponse
 from ard.core.quota import allocate_images
-from ard.core.sampling import generate_anchor_id
+from ard.core.sampling import format_anchor_id
 from ard.core.types import AnchorSpec, GeneratedAnchor, TurnSpec
 from ard.domain.anchor_shape import message_shape_error
 from ard.domain.bank import append_anchor, read_anchor_bank
@@ -618,12 +618,13 @@ class TestRoleDrivenGeneration:
         assert [m["role"] for m in records[0]["messages"]] == ["user", "assistant", "user"]
 
     def test_duplicate_ids_across_specs_are_banked_once(self, tmp_path: Path) -> None:
-        """Anchors whose metadata collides share an id and must not double the bank.
+        """Specs sharing an id must not double the bank; the writer says so.
 
-        Anchor ids are derived from 4-dimensional metadata
-        (``generate_anchor_id``), so two genuinely different specs can carry the
-        same id.  A historical run produced 70 bank lines for 55 real anchors;
-        the streaming writer must now keep one row per id and say so.
+        The id is an opaque primary key — a plan-position serial number
+        (``format_anchor_id``), no longer a digest of the anchor's metadata — so
+        the writer's one-row-per-id gate is what keeps a replayed plan position
+        from inflating the bank.  A historical run produced 70 bank lines for 55
+        real anchors; the streaming writer must keep one row per id and warn.
         """
         output_path = tmp_path / "anchor_bank.jsonl"
         colliding_meta = {
@@ -632,7 +633,7 @@ class TestRoleDrivenGeneration:
             "capability": "qa",
             "conversation_type": "single_turn",
         }
-        anchor_id = generate_anchor_id(colliding_meta)
+        anchor_id = format_anchor_id("c4f4aa6f", 0, 0)
         specs = [
             AnchorSpec(
                 id=anchor_id,

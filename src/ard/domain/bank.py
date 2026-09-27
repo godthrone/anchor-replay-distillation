@@ -13,10 +13,15 @@ reaches the anchor bank has passed three gates here:
    the OPD routing key, and a value outside
    :class:`~ard.core.types.DataSource` is a record no consumer routes.  It used
    to be an unconstrained string, so a typo was persisted silently.
-3. **Id uniqueness** — one record per anchor id.  ``anchor id`` is derived
-   from 5-dimensional metadata (see :func:`ard.core.sampling.generate_anchor_id`),
-   so two specs can legitimately carry the same id; writing both inflates the
-   bank while the resume logic in :mod:`ard.pipeline` counts records, not ids.
+3. **Id uniqueness** — one record per anchor id.  An anchor id is an opaque
+   *primary key*: a plan-position serial number minted by
+   :func:`ard.core.sampling.format_anchor_id`, which carries no coordinate
+   content at all.  Two plan positions therefore always carry different ids, and
+   the same id twice means the same plan position was written twice — writing
+   both would inflate the bank while the resume logic in :mod:`ard.pipeline`
+   counts records, not ids.  Coordinates play no part in this gate: two samples
+   that happen to share a coordinate are two different plan positions and are
+   both kept (§1.4 单一真相源: the id is the only identity a record has).
 
 All three read paths — :func:`count_existing_anchors` (the resume counter),
 :func:`read_anchor_bank` and the id scan behind :func:`append_anchor` — agree on
@@ -53,33 +58,66 @@ logger = logging.getLogger(__name__)
 
 # Output-schema version of every record persisted through this module.
 # Single source of truth (§1.4): the anchor format's version is written here,
-# once, as a top-level ``schema_version`` field on each record.  The v4 format
-# is the 11-axis (text) / 12-axis (image) coordinate set with the
-# restricted-block sampling semantics; no other module writes this literal.
-SCHEMA_VERSION = "4.0.0"
+# once, as a top-level ``schema_version`` field on each record; no other module
+# writes this literal.
+#
+# ``5.0.0`` is the v5 bump, and it is a MAJOR bump because the sampling rule and
+# the anchor-id formula are both incompatible changes (§18.1 不留负债): ids are
+# now plan-position serial numbers instead of coordinate digests, and the same
+# coordinate may legitimately appear at two plan positions.  A ``4.0.0`` record
+# is therefore *not* interchangeable with a ``5.0.0`` one even though the
+# per-record field shape is unchanged.  Nothing is migrated: already-published
+# banks keep the version they were written with, and no reader is asked to
+# rewrite them.
+SCHEMA_VERSION = "5.0.0"
 
 
-#: A bank file's identity at read time: ``(st_mtime_ns, st_size)``, or ``None``
-#: when the file did not exist yet.
-FileFingerprint: TypeAlias = tuple[int, int]
+#: A bank file's identity at scan time: ``(st_ino, st_size, st_mtime_ns)``, or
+#: ``None`` when the file did not exist.  The inode and the size say *which*
+#: file this is and how long it was, the mtime says when it last changed; a
+#: deleted-and-recreated bank therefore gets a different identity instead of
+#: inheriting the ids cached for the file it replaced.
+FileIdentity: TypeAlias = tuple[int, int, int]
 
-#: One bank file's cache entry: the fingerprint it was read at, plus its ids.
-BankIdCacheEntry: TypeAlias = tuple[FileFingerprint | None, StringSet]
+#: One bank file's cached id scan:
+#: ``(identity, bytes_scanned, lines_scanned, ids)``.  ``bytes_scanned`` and
+#: ``lines_scanned`` record how far into the file the scan got, so the next scan
+#: can continue from there instead of re-parsing the whole bank — without them
+#: the append path is O(N²) in the number of records (see :func:`_known_ids`).
+BankIdCacheEntry: TypeAlias = tuple[FileIdentity | None, int, int, StringSet]
 
-# Ids already present per bank file.  The fingerprint makes an externally
-# truncated/rewritten bank invalidate the cache instead of silently suppressing
-# legitimate anchors.
+# Ids already present per bank file.  The identity makes an externally
+# truncated/rewritten/replaced bank invalidate the cache instead of silently
+# suppressing legitimate anchors; the scanned extent lets an append continue the
+# scan instead of repeating it.
 _seen_ids_cache: dict[str, BankIdCacheEntry] = {}
 _seen_ids_lock = threading.Lock()
 
 
-def _bank_fingerprint(path: Path) -> tuple[int, int] | None:
-    """Return ``(mtime_ns, size)`` for *path*, or ``None`` if it is absent."""
+def _bank_identity(path: Path) -> FileIdentity | None:
+    """Return ``(inode, size, mtime_ns)`` for *path*, or ``None`` if it is absent."""
     try:
         stat = path.stat()
     except FileNotFoundError:
         return None
-    return (stat.st_mtime_ns, stat.st_size)
+    return (stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+
+def _warn_unreadable_line(path: Path, line_no: int, length: int) -> None:
+    """Announce one damaged line without failing the read (§3.2 透明退路).
+
+    One place, so every reader of the bank — the record reader and the id scan
+    behind the append gate — calls the same thing a damaged line and says so in
+    the same words.
+    """
+    logger.warning(
+        "Ignoring unreadable line %d in %s (%d byte(s)) — it is "
+        "excluded from the bank's record count; the remaining "
+        "records are kept",
+        line_no,
+        path,
+        length,
+    )
 
 
 def _parsed_records(path: Path) -> JsonObjectList:
@@ -110,14 +148,7 @@ def _parsed_records(path: Path) -> JsonObjectList:
             try:
                 record = json.loads(line)
             except json.JSONDecodeError:
-                logger.warning(
-                    "Ignoring unreadable line %d in %s (%d byte(s)) — it is "
-                    "excluded from the bank's record count; the remaining "
-                    "records are kept",
-                    line_no,
-                    path,
-                    len(line),
-                )
+                _warn_unreadable_line(path, line_no, len(line))
                 continue
             records.append(record)
     return records
@@ -163,31 +194,133 @@ def _ensure_line_boundary(fh: Any, path: Path) -> bool:
     return True
 
 
+def _scan_ids(path: Path, offset: int, start_line_no: int) -> tuple[set[str], int, int]:
+    """Collect the ids stored in *path* from byte *offset* on.
+
+    Returns ``(ids, bytes_consumed, lines_consumed)``.  The two counts say how
+    far into the file the scan reached, which is what lets the next scan
+    continue from there instead of re-parsing the whole bank; *start_line_no* is
+    the file's line number at *offset*, so a damaged line is reported with the
+    number it really has.
+
+    Read in binary on purpose: the byte extent has to be exact and re-usable, and
+    iterating a text stream disables ``tell()`` (its value is an opaque cookie by
+    contract, not a byte offset).  Lines are decoded as UTF-8, the encoding every
+    writer of this file uses, and a line that is not valid JSON is skipped by the
+    same :func:`_warn_unreadable_line` the record reader uses — so the append
+    gate and the reader continue to agree on what a record is.
+    """
+    ids: set[str] = set()
+    lines = 0
+    with open(path, "rb") as f:
+        f.seek(offset)
+        for raw in f:
+            lines += 1
+            text = raw.decode("utf-8").strip()
+            if not text:
+                continue
+            try:
+                record = json.loads(text)
+            except json.JSONDecodeError:
+                _warn_unreadable_line(path, start_line_no + lines - 1, len(text))
+                continue
+            record_id = record.get("id")
+            if isinstance(record_id, str):
+                ids.add(record_id)
+        consumed = f.tell()
+    return ids, consumed, lines
+
+
 def _read_ids(path: Path) -> set[str]:
     """Collect the anchor ids already stored in *path* (tolerating bad lines)."""
-    ids: set[str] = set()
-    for record in _parsed_records(path):
-        record_id = record.get("id")
-        if isinstance(record_id, str):
-            ids.add(record_id)
-    return ids
+    if not path.exists():
+        return set()
+    return _scan_ids(path, 0, 1)[0]
+
+
+def _ends_on_line_boundary(path: Path, offset: int) -> bool:
+    """Whether the first *offset* bytes of *path* end exactly on a line end.
+
+    Callers must hold :data:`_seen_ids_lock`.  An offset that stops inside a line
+    is not a safe place to resume from: the fragment would be split from — and
+    would absorb — the bytes written after it, so those bytes could no longer be
+    parsed as a line of their own.
+    """
+    if offset == 0:
+        return True
+    with open(path, "rb") as f:
+        f.seek(offset - 1)
+        return f.read(1) == b"\n"
+
+
+def _is_appended_suffix(
+    cached: FileIdentity | None, current: FileIdentity | None, scanned: int
+) -> bool:
+    """Whether *current* is demonstrably *cached* plus appended bytes.
+
+    Callers must hold :data:`_seen_ids_lock`.  Every way of being something other
+    than that returns ``False``, which sends the caller back through a full
+    re-read: a different inode (the bank was deleted and recreated), a file no
+    longer than the part already scanned (truncated), an mtime that went
+    backwards (rewritten in place).
+    """
+    if cached is None or current is None:
+        return False
+    if cached[0] != current[0]:  # inode: a recreated bank is a different file
+        return False
+    if current[1] <= scanned:  # no longer than what was already scanned
+        return False
+    return current[2] >= cached[2]  # mtime never went backwards
 
 
 def _known_ids(path: Path) -> set[str]:
     """Return (and cache) the ids present in *path*.
 
-    Callers must hold :data:`_seen_ids_lock`.  The cache is keyed by path and
-    invalidated whenever the file's mtime/size changed, which happens exactly
-    when a row was appended (by us) or the bank was rewritten (by someone
-    else / a new run).
+    Callers must hold :data:`_seen_ids_lock`.
+
+    The scan is **incremental**: the cache remembers the file's identity and how
+    far into it the scan reached, so an append parses only the bytes added since
+    the last one.  Re-reading the whole bank on every append made the write path
+    O(N²) — measured at 2.7 ms per anchor for N=500 and 26.3 ms for N=5000, i.e.
+    quadratic growth that gets worse the longer the run.
+
+    Speed is bought by dropping "always re-read the disk's truth", so the
+    fast path is taken only when the file on disk is *demonstrably* the scanned
+    file plus an appended suffix (:func:`_is_appended_suffix`) ending on a line
+    boundary (:func:`_ends_on_line_boundary`).  Anything else falls back to a
+    full re-read, so a bank that someone else truncated or rewrote can never
+    shadow ids through a stale cache.  On the accepted path the appended bytes
+    *are* read, so a row another process appended between two of our appends is
+    still seen — the cache never hides ids, it only remembers where to resume.
+
+    The one thing neither the identity nor the extent can see is a rewrite that
+    preserves inode, size and mtime exactly; no scheme that avoids re-reading
+    the file can, and the previous implementation had the same blind spot.
     """
     key = str(path)
-    fingerprint = _bank_fingerprint(path)
+    identity = _bank_identity(path)
     cached = _seen_ids_cache.get(key)
-    if cached is not None and cached[0] == fingerprint:
-        return cached[1]
-    ids = _read_ids(path)
-    _seen_ids_cache[key] = (fingerprint, ids)
+    if cached is not None:
+        cached_identity, scanned, lines, ids = cached
+        if cached_identity == identity and (identity is None or identity[1] == scanned):
+            return ids
+        if _is_appended_suffix(cached_identity, identity, scanned) and _ends_on_line_boundary(
+            path, scanned
+        ):
+            tail, consumed, tail_lines = _scan_ids(path, scanned, lines + 1)
+            ids |= tail
+            _seen_ids_cache[key] = (_bank_identity(path), consumed, lines + tail_lines, ids)
+            return ids
+    if identity is None:
+        ids = set()
+        _seen_ids_cache[key] = (None, 0, 0, ids)
+        return ids
+    ids, consumed, lines = _scan_ids(path, 0, 1)
+    # Re-stat *after* reading: if the bank grew while we scanned it, the stored
+    # identity is longer than what we consumed, so the next call continues the
+    # scan from ``consumed`` instead of trusting a fingerprint that covers bytes
+    # this scan never saw.
+    _seen_ids_cache[key] = (_bank_identity(path), consumed, lines, ids)
     return ids
 
 
@@ -314,7 +447,7 @@ def anchor_to_dict(anchor: GeneratedAnchor) -> dict[str, Any]:
     field-level lineage of the OPD v3.0.0 additions):
     ```json
     {
-      "id": "anchor_<sha256_hex16>",
+      "id": "<run_key>-c<cycle:05d>p<position:05d>",
       "source": "ard",
       "data_source": "ard_text",
       "schema_version": SCHEMA_VERSION,

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ard.core.sampling import generate_anchor_id
+from ard.core.sampling import format_anchor_id
 from ard.core.types import AnchorGenerationConfig, GeneratedAnchor
 
 # ── Types ───────────────────────────────────────────────────────────────────
@@ -56,24 +56,43 @@ def test_anchor_generation_config_custom():
     assert c.concurrency == 8
 
 
-# ── Anchor ids ──────────────────────────────────────────────────────────────
+# ── Anchor ids (v5: the id is a plan position, not a coordinate digest) ─────
+#
+# ``generate_anchor_id`` / ``ANCHOR_ID_DIMENSIONS`` are gone.  An id no longer
+# hashes the anchor's coordinates; it is the sample's serial number in the plan:
+# ``run_key`` mixes only (ontology fingerprint, seed, sampling algorithm), and
+# ``format_anchor_id`` appends the zero-padded ``(cycle, position)``.  The two
+# properties the rest of the system is built on — pure determinism and stable
+# prefixes as N grows — live in ``run_key``/``format_anchor_id`` and are covered
+# in depth by ``tests/core/test_sampling.py``; what follows pins the format
+# contract at this module's boundary.
 
 
-def test_generate_anchor_id_stable():
-    """generate_anchor_id produces stable hashes."""
-    meta = {"language": "English", "knowledge_domain": "math", "capability": "qa"}
-    id1 = generate_anchor_id(meta)
-    id2 = generate_anchor_id(meta)
-    assert id1 == id2
-    assert id1.startswith("anchor_")
-    assert len(id1) == 23  # "anchor_" + 16 hex chars
+def test_anchor_id_format_is_a_position_serial():
+    """id 形如 ``<run_key>-c<cycle:05d>p<position:05d>``，是位置的纯函数。"""
+    anchor_id = format_anchor_id("c4f4aa6f", 0, 959)
+    assert anchor_id == "c4f4aa6f-c00000p00959"
+    # Pure: the same (run, cycle, position) is byte-identical every call.
+    assert format_anchor_id("c4f4aa6f", 0, 959) == anchor_id
 
 
-def test_generate_anchor_id_different_inputs():
-    """Different meta produces different IDs."""
-    id1 = generate_anchor_id({"language": "English", "knowledge_domain": "a", "capability": "x"})
-    id2 = generate_anchor_id({"language": "English", "knowledge_domain": "b", "capability": "x"})
-    assert id1 != id2
+def test_anchor_id_distinguishes_position_cycle_and_run():
+    """位置 / 轮次 / run 任一不同 ⇒ id 不同（id 是主键，不承载坐标）。"""
+    anchor_id = format_anchor_id("c4f4aa6f", 0, 959)
+    assert format_anchor_id("c4f4aa6f", 0, 960) != anchor_id
+    assert format_anchor_id("c4f4aa6f", 1, 959) != anchor_id
+    assert format_anchor_id("1a2b3c4d", 0, 959) != anchor_id
+
+
+def test_anchor_id_is_not_derived_from_coordinates():
+    """同一坐标在不同位置的 id 必须**不同** —— 坐标相同 ≠ 样本重复（v5 裁定）。
+
+    旧口径下 id 是坐标的哈希，同一个坐标处处得到同一个 id；v5 把 id 换成位置
+    序号后，重复坐标是新样本，两个位置各自持有自己的 id，银行两条都留下。
+    """
+    first_occurrence = format_anchor_id("c4f4aa6f", 0, 3)
+    second_occurrence = format_anchor_id("c4f4aa6f", 7, 3)
+    assert first_occurrence != second_occurrence
 
 
 # ── Config ──────────────────────────────────────────────────────────────────
