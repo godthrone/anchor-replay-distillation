@@ -83,7 +83,10 @@ from ard.domain.image_store import (
     convert_and_copy_images,
     copy_images_to_output,
     domain_directory,
+    list_domain_images,
+    list_pool_images,
     resolve_domain_images,
+    select_domain_image,
 )
 from ard.domain.text_anchor import AnchorGenerationStats, generate_text_anchors
 from ard.logging import configure_file_logging
@@ -546,6 +549,17 @@ def _build_progress_record(
     asked for (``len(specs)``), and ``written`` the same number as ``new`` — the
     output planned, not records on disk, which is the manifest's ``total_anchors``.
 
+    **The counters are not a counting truth source, and say so.**  Nothing in
+    this module refreshes the file while the generator runs — the write loop
+    lives in :mod:`ard.domain.text_anchor`, which does not know about the
+    progress record — so its numbers can only ever describe the plan as this
+    invocation saw it at the start.  A reader that wants the bank's current size
+    reads ``anchor_bank.jsonl`` (``written`` records) or the finished
+    ``manifest.json``'s ``total_anchors`` / ``generation``; the record's
+    ``counters_are_live: false`` makes that a machine-readable statement rather
+    than a convention, so a live-looking ``written`` can no longer be read as
+    "this many records are on disk" (§3.2 透明退路).
+
     Args:
         identity: The plan's identity (``PlanIdentity.of(plan, ontology_sha256=...,
             seed=..., count=..., unit_total=...)``).
@@ -567,6 +581,12 @@ def _build_progress_record(
             "Intermediate record of a run that has not finished. It binds this "
             "directory to a plan, but its counters are incomplete and it is NOT "
             "the final declaration — read manifest.json for that. Safe to delete."
+        ),
+        "counters_are_live": False,
+        "counters_note": (
+            "counters is a snapshot of the plan as this invocation started, not "
+            "of the bank on disk; the counting truth sources are "
+            "anchor_bank.jsonl and the finished manifest.json."
         ),
         "started_at": started_at,
         "plan_identity": identity.as_dict(),
@@ -981,30 +1001,48 @@ def _declare_images(
     *,
     image_dir: str,
     config: ARDConfig,
-    resolutions: dict[int, DomainImageResolution],
-    skipped: dict[str, StringList],
+    records: JsonObjectList,
+    plan: list[AnchorSpec],
+    cycle_of: dict[str, int],
+    seed: int,
 ) -> None:
-    """Declare the run's image addressing and any skipped anchors (§3.2/§3.3).
+    """Declare the run directory's image addressing and any skipped anchors (§3.2/§3.3).
 
     A dataset with anchors missing is a different artifact from the one the
     construction rule describes, so the difference is machine-readable: the
     skipped count and the affected ``visual_domain`` values travel with the
     manifest, where a consumer reads them without parsing logs.
 
+    **The readout is over the whole run directory, not over one invocation.**
+    Every field is derived from what the directory actually holds — the
+    ``anchor_bank.jsonl`` records plus the image tree — rather than from the
+    pending set of the call that happened to write this manifest.  A segmented
+    or resumed run (a first segment that generates the image anchors, a second
+    that only appends a text-only one) used to restate the whole ``images``
+    section from the *last* segment's handful of anchors, so a real 10-picture
+    tree was declared as ``pool_candidate_count = 0`` and every reuse count as
+    empty.  Deriving from the bank + tree makes the single-segment, the
+    segmented and the resumed path agree, and makes the numbers recomputable
+    offline (list the bank's ``(round, visual_domain)`` keys, then read the
+    tree).
+
     v5 rotates a domain's images by round, so the pick is declared per
     ``(cycle, visual_domain)`` as well as aggregated:
 
     * ``resolved_images`` — one ``{cycle, visual_domain, image, fallback}`` row
-      per round and domain, sorted by ``(cycle, domain)``.  Two rounds with one
-      image each are visibly different rows, so "the rotation happened" is
-      checkable; ``fallback`` on the row says whether that round's picture is
-      the domain's own or a reuse from the tree-wide pool.
+      per ``(round, domain)`` the bank holds a record for, sorted by
+      ``(cycle, domain)``.  The picture is the deterministic v5 pick for that
+      ``(tree, domain, seed, round)``, so it is the file the run actually
+      placed.  Two rounds with one image each are visibly different rows, so
+      "the rotation happened" is checkable; ``fallback`` on the row says whether
+      that round's picture is the domain's own or a reuse from the tree-wide
+      pool.
     * ``domain_candidate_counts`` — ``visual_domain -> usable files in its own
-      directory``.  This is the readout that separates **real** variety (a
-      domain with more than one candidate actually showed different files) from
-      **fake** variety (a domain with one candidate necessarily reused it,
-      however many rounds ran).
-    * ``pool_candidate_count`` — how many usable images the fallback pool holds
+      directory``, for every domain the bank holds an anchor of.  This is the
+      readout that separates **real** variety (a domain with more than one
+      candidate actually showed different files) from **fake** variety (a domain
+      with one candidate necessarily reused it, however many rounds ran).
+    * ``pool_candidate_count`` — how many usable images the tree-wide pool holds
       altogether.  ``1`` is the one-picture tree, where every domain and round
       necessarily shows that single file; ``0`` is the only state in which
       anchors are genuinely without a picture.
@@ -1013,38 +1051,100 @@ def _declare_images(
       directory holds none.  Reuse must be visible: the user judges whether the
       substituted picture is good enough for their dataset, which they cannot
       do if the run quietly passes it off as a domain-matched one.
+    * ``skipped_anchor_count`` / ``skipped_visual_domains`` — the planned image
+      coordinates the bank does **not** hold, which happens in exactly one
+      served state: the tree holds no usable image at all and
+      ``[images] skip_missing_images`` is on, so the run dropped them before
+      generation.  Anything the bank does not hold is dropped for no other
+      reason, because with a usable picture anywhere no anchor is skipped.
+
+    Args:
+        manifest: The manifest dict to add the ``images`` section to (in place).
+        image_dir: The image tree the run was pointed at (``--image-dir``).
+        config: The run's config; its ``[images]`` section decides the accepted
+            input extensions (the same set the copy step used) and whether
+            skipping was pre-authorised.
+        records: The run directory's bank records, in file order.
+        plan: The run's plan, used only to name the image coordinates that a
+            skipping run left out of *records*.
+        cycle_of: ``spec id -> plan round`` (``index // U`` over the full plan),
+            the same map the copy/assignment steps use.
+        seed: The run seed, so a recomputed pick equals the placed one.
     """
-    selected_by_cycle = {
-        cycle: {domain: source.name for domain, source in sorted(resolution.selected.items())}
-        for cycle, resolution in sorted(resolutions.items())
+    extensions = CONVERTABLE_EXTENSIONS if config.images.convert else SUPPORTED_EXTENSIONS
+    image_root = Path(image_dir)
+    pool = list_pool_images(image_root, extensions=extensions)
+
+    # The ``(cycle, visual_domain)`` pairs the directory actually holds records
+    # for, in canonical order.  A record whose round is not derivable (a
+    # hand-written or legacy record) is read as round 0 rather than dropped: the
+    # readout describes the bank, so a record must never vanish from it.
+    held: dict[tuple[int, str], StringList] = {}
+    for record in records:
+        meta = record.get("anchor_meta")
+        domain = meta.get("visual_domain") if isinstance(meta, dict) else None
+        if not isinstance(domain, str):
+            continue
+        cycle = cycle_of.get(record.get("id"))
+        held.setdefault((cycle if isinstance(cycle, int) else 0, domain), []).append(
+            record.get("id")
+        )
+
+    # Scanned once per domain, not once per round: the candidates of a domain do
+    # not depend on the round (only the pick does).
+    candidates_by_domain: dict[str, list[Path]] = {}
+    for domain in sorted({domain for _, domain in held}):
+        candidates_by_domain[domain] = list_domain_images(image_root, domain, extensions=extensions)
+    candidate_counts = {
+        domain: len(candidates) for domain, candidates in candidates_by_domain.items()
     }
-    resolved_images = [
-        {
-            "cycle": cycle,
-            "visual_domain": domain,
-            "image": name,
-            "fallback": domain in resolutions[cycle].fallback,
-        }
-        for cycle, by_domain in selected_by_cycle.items()
-        for domain, name in by_domain.items()
-    ]
-    candidate_counts: dict[str, int] = {}
-    fallback_domains: set[str] = set()
-    fallback_anchors = 0
-    pool_count = 0
-    for resolution in resolutions.values():
-        candidate_counts.update(resolution.candidate_counts)
-        fallback_domains |= resolution.fallback
-        fallback_anchors += resolution.fallback_anchor_count
-        pool_count = max(pool_count, resolution.pool_candidate_count)
+    # A domain is served by reuse when its own directory holds nothing and the
+    # tree holds something; with an empty tree every domain is `missing`
+    # instead, and the anchors are skipped (or the run was refused earlier).
+    fallback_domains = {
+        domain for domain, candidates in candidates_by_domain.items() if not candidates and pool
+    }
+    fallback_anchors = sum(
+        len(anchor_ids) for (_, domain), anchor_ids in held.items() if domain in fallback_domains
+    )
+
+    resolved_images: list[JsonObject] = []
+    for (cycle, domain), _anchor_ids in sorted(held.items()):
+        candidates = candidates_by_domain[domain]
+        if candidates:
+            chosen = select_domain_image(candidates, domain, seed, cycle=cycle)
+        elif pool:
+            chosen = select_domain_image(pool, domain, seed, cycle=cycle)
+        else:
+            # No usable image anywhere: this anchor has no picture to declare.
+            continue
+        resolved_images.append(
+            {
+                "cycle": cycle,
+                "visual_domain": domain,
+                "image": chosen.name,
+                "fallback": domain in fallback_domains,
+            }
+        )
+
+    skipped: dict[str, StringList] = {}
+    if config.images.skip_missing_images and not pool:
+        held_ids = {record.get("id") for record in records}
+        for spec in plan:
+            domain = spec.anchor_meta.get("visual_domain")
+            if isinstance(domain, str) and spec.id not in held_ids:
+                skipped.setdefault(domain, []).append(spec.id)
+
     manifest["images"] = {
         "image_dir": str(Path(image_dir).resolve()),
         "addressing": VISUAL_DOMAIN_LAYOUT,
         "skip_missing_images": config.images.skip_missing_images,
         "resolved_visual_domains": sorted({row["visual_domain"] for row in resolved_images}),
         "resolved_images": resolved_images,
-        "domain_candidate_counts": {key: candidate_counts[key] for key in sorted(candidate_counts)},
-        "pool_candidate_count": pool_count,
+        "domain_candidate_counts": {
+            domain: candidate_counts[domain] for domain in sorted(candidate_counts)
+        },
+        "pool_candidate_count": len(pool),
         "fallback_visual_domains": sorted(fallback_domains),
         "fallback_anchor_count": fallback_anchors,
         "skipped_anchor_count": sum(len(anchor_ids) for anchor_ids in skipped.values()),
@@ -1856,22 +1956,24 @@ def run(
     # which sample) — declared again, in aggregate, in manifest.json below.
     if image_dir is not None:
         for domain in sorted(skipped_domains):
-            expected = domain_directory(image_dir, domain)
             for anchor_id in skipped_domains[domain]:
                 logger.warning(
-                    "Skipping anchor %s: visual_domain %r has no usable image under %s "
+                    "Skipping anchor %s: the image tree under %s holds no usable "
+                    "picture; visual_domain %r therefore has none either "
                     "([images] skip_missing_images = true).",
                     anchor_id,
+                    image_dir,
                     domain,
-                    expected,
                 )
 
     if not specs:
         if remaining > 0:
             logger.warning(
-                "Every remaining anchor (%d) was skipped because its visual_domain "
-                "has no image; nothing to generate.",
+                "Every remaining anchor (%d) was skipped because the image tree under %s "
+                "holds no usable picture; the visual_domains that need one therefore "
+                "have none either. Nothing to generate.",
                 remaining,
+                image_dir,
             )
         else:
             logger.info(
@@ -1905,8 +2007,10 @@ def run(
                 manifest,
                 image_dir=image_dir,
                 config=config,
-                resolutions=image_resolutions,
-                skipped=skipped_domains,
+                records=all_records,
+                plan=plan,
+                cycle_of=cycle_of,
+                seed=gen_config.seed,
             )
         # No generation happens on this path, so there are no run counters to
         # report.  A manifest that already names this plan is therefore left
@@ -2105,8 +2209,10 @@ def run(
             manifest,
             image_dir=image_dir,
             config=config,
-            resolutions=image_resolutions,
-            skipped=skipped_domains,
+            records=all_records,
+            plan=plan,
+            cycle_of=cycle_of,
+            seed=gen_config.seed,
         )
     write_manifest(
         _declare_manifest_status(manifest, status=MANIFEST_STATUS_COMPLETE),

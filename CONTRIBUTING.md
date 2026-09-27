@@ -57,6 +57,14 @@ Use conventional commits: `type: description`
 - `test:` — test additions/changes
 - `chore:` — build/config changes
 
+## Referencing Code in New Text
+
+When a new code comment, docstring, test, or document points at a spot in the source,
+name the symbol (function, class, constant, config key) — do **not** write `file:line`.
+Line numbers drift with every edit, so a `file:line` reference is stale the moment the
+file changes; the repository has deliberately dropped its line-reference guard, and no
+test scanning for `file:line` references should be added back.
+
 ## License
 
 By contributing, you agree that your contributions will be licensed

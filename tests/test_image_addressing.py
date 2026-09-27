@@ -186,6 +186,47 @@ def _manifest(output_dir: Path) -> dict:
     return json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
 
 
+def _offline_image_readout(bank: Path, image_dir: Path) -> dict[str, Any]:
+    """Recompute the run directory's image readout from the bank + tree alone.
+
+    Deliberately independent of ``pipeline._declare_images``: it reads the
+    records of ``anchor_bank.jsonl``, lists the tree through the public
+    ``image_store`` helpers, and applies the documented meaning once (a domain's
+    own directory wins; the tree-wide pool is the reuse source; a domain with
+    neither is missing).  A manifest that reports anything else — in particular
+    zeros from an invocation that only touched a text anchor — fails the
+    comparison.
+
+    Returns the four readouts the WP-16 pre-registration names:
+    ``pool_candidate_count`` / ``fallback_visual_domains`` /
+    ``fallback_anchor_count`` / ``domain_candidate_counts``.
+    """
+    from ard.domain.bank import read_anchor_bank
+    from ard.domain.image_store import list_domain_images, list_pool_images
+
+    records = read_anchor_bank(bank)
+    pool = list_pool_images(image_dir)
+    domains = sorted(
+        {
+            record["anchor_meta"]["visual_domain"]
+            for record in records
+            if isinstance(record.get("anchor_meta", {}).get("visual_domain"), str)
+        }
+    )
+    candidates = {domain: list_domain_images(image_dir, domain) for domain in domains}
+    fallback = {domain for domain, files in candidates.items() if not files and pool}
+    return {
+        "pool_candidate_count": len(pool),
+        "domain_candidate_counts": {domain: len(candidates[domain]) for domain in domains},
+        "fallback_visual_domains": sorted(fallback),
+        "fallback_anchor_count": sum(
+            1
+            for record in records
+            if record.get("anchor_meta", {}).get("visual_domain") in fallback
+        ),
+    }
+
+
 # ── 1. per-domain addressing ──────────────────────────────────────────────────
 
 
@@ -422,6 +463,73 @@ def test_a_three_domain_plan_runs_on_a_one_picture_tree(
     assert images_section["skipped_anchor_count"] == 0
 
 
+# ── 2b. the readout belongs to the directory, not to one segment ─────────────
+
+
+def test_a_segmented_run_declares_the_whole_directorys_image_readout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """★ WP-16: a segment that resolves no image must not zero the readout.
+
+    Segment 1 generates the two image anchors (``animals`` has its own picture,
+    ``vehicles`` has none and reuses the pool); segment 2 appends a single
+    text-only anchor, so its own pending set contains no image coordinate at
+    all.  The old aggregation described exactly that empty pending set, so the
+    manifest of the finished directory declared a three-picture tree as
+    ``pool_candidate_count = 0`` and no reuse whatsoever.
+
+    The manifest must instead equal the value recomputed offline from
+    ``anchor_bank.jsonl`` + the image tree, and both segments must agree — the
+    readout is a property of the run directory, not of the invocation.
+    """
+    from ard.pipeline import run
+
+    images = _image_dir(tmp_path, {"animals": 2, "plants": 1})
+    segment_one = [_spec("a1", "animals"), _spec("v1", "vehicles")]
+    whole_plan = [*segment_one, _spec("t1", None)]
+
+    # Segment 1: the image anchors only.
+    output_dir, first_spy, plan_one = _rig(tmp_path, monkeypatch, segment_one)
+    run(load_config(tmp_path / "config.toml"), image_dir=str(images), generate_specs=plan_one)
+    assert first_spy.requested == [["a1", "v1"]]
+    first = _manifest(output_dir)["images"]
+
+    # Segment 2: the same directory, one text-only anchor still pending.
+    output_dir, second_spy, plan_two = _rig(tmp_path, monkeypatch, whole_plan)
+    run(load_config(tmp_path / "config.toml"), image_dir=str(images), generate_specs=plan_two)
+    assert second_spy.requested == [["t1"]], "only the text anchor is left to generate"
+
+    bank = output_dir / "anchor_bank.jsonl"
+    assert len(bank.read_text(encoding="utf-8").splitlines()) == 3
+    expected = _offline_image_readout(bank, images)
+    second = _manifest(output_dir)["images"]
+
+    assert expected == {
+        "pool_candidate_count": 3,
+        "domain_candidate_counts": {"animals": 2, "vehicles": 0},
+        "fallback_visual_domains": ["vehicles"],
+        "fallback_anchor_count": 1,
+    }, "the offline recomputation itself must describe the real tree"
+    for key, value in expected.items():
+        assert second[key] == value, (
+            f"the whole-run readout must survive a segment that resolves no image "
+            f"({key} was {second[key]!r}, offline value {value!r})"
+        )
+    assert second["skipped_anchor_count"] == 0, "a stocked tree skips nothing"
+    assert second["skipped_visual_domains"] == []
+    assert (
+        second["resolved_visual_domains"]
+        == first["resolved_visual_domains"]
+        == [
+            "animals",
+            "vehicles",
+        ]
+    )
+    assert second["resolved_images"] == first["resolved_images"]
+    for key, value in expected.items():
+        assert first[key] == value, "the single-segment manifest agrees on the same fields"
+
+
 # ── 3. the opt-in skip switch ─────────────────────────────────────────────────
 
 
@@ -458,6 +566,12 @@ def test_skip_missing_images_warns_and_declares_each_dropped_anchor(
     assert len(skipped) == 2, "one WARNING per dropped anchor"
     assert any("a1" in message and "animals" in message for message in skipped)
     assert any("v1" in message and "vehicles" in message for message in skipped)
+    for message in skipped:
+        assert "image tree under" in message and "holds no usable picture" in message, (
+            "the reason must name the whole tree, not one domain's directory: a "
+            "single unstocked domain no longer skips anything"
+        )
+        assert str(root) in message, "the tree the user pointed at must be named"
 
     manifest = _manifest(output_dir)
     assert manifest["images"]["skip_missing_images"] is True
@@ -489,8 +603,10 @@ def test_resuming_a_skip_run_stays_declared_and_writes_no_new_record(
     bank = output_dir / "anchor_bank.jsonl"
     assert (bank.read_text(encoding="utf-8") if bank.exists() else None) == before
     assert any(
-        "Every remaining anchor (2) was skipped" in record.getMessage() for record in caplog.records
-    )
+        "Every remaining anchor (2) was skipped because the image tree under" in record.getMessage()
+        and "holds no usable picture" in record.getMessage()
+        for record in caplog.records
+    ), "the run-level warning must say the whole tree holds nothing, not 'a domain has no image'"
     assert _manifest(output_dir)["images"]["skipped_visual_domains"] == ["animals", "vehicles"]
 
 

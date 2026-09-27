@@ -341,6 +341,7 @@ def test_interrupted_run_leaves_a_progress_record_with_the_plan_identity(
     assert record["plan_identity"]["version"] == 2
     assert record["plan_identity"]["plan_size"] == _PLAN_SIZE
     assert record["counters"] == {"existing": 0, "new": _PLAN_SIZE, "written": _PLAN_SIZE}
+    assert record["counters_are_live"] is False, "the counters must say they are not live"
     assert record["output_dir"] == str(output_dir)
     # The record is self-describing: its status is readable, not inferred.
     time.strptime(record["started_at"], "%Y-%m-%d %H:%M:%S")
@@ -355,6 +356,36 @@ def test_interrupted_run_leaves_a_progress_record_with_the_plan_identity(
     subset = _identity_from_bank(bank)
     assert subset != expected
     assert len(_records(bank)) == 1, "one record survived the interruption"
+
+
+def test_the_progress_record_declares_its_counters_are_not_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """★ WP-16: the counters are a plan snapshot, and the record says so.
+
+    The record is written before the first endpoint call and nothing refreshes
+    it as the bank grows (the write loop lives in the generator), so a reader
+    must not take ``counters`` for "this many records are on disk".  Making that
+    explicit — ``counters_are_live: false`` plus a pointer to the truth sources —
+    is the honesty fix: the run was killed after one record while the record
+    still reports the full plan, and no reader can now read that as progress.
+    """
+    from ard.config import load_config
+    from ard.pipeline import run
+
+    output_dir, bank, _, plan = _rig(tmp_path, monkeypatch, interrupt_after=1)
+
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        run(load_config(tmp_path / "config.toml"), generate_specs=plan)
+
+    record = _progress_record(output_dir)
+    assert record["counters_are_live"] is False
+    assert "anchor_bank.jsonl" in record["counters_note"]
+    assert "manifest.json" in record["counters_note"]
+    # The stale value a live reader would misread: the plan's size, not the
+    # bank's one surviving record.
+    assert record["counters"]["written"] == _PLAN_SIZE
+    assert len(_records(bank)) == 1
 
 
 # ── (b) finished run → one authoritative declaration, same digest ───────────
