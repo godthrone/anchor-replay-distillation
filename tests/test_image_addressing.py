@@ -23,6 +23,7 @@ import copy
 import hashlib
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,11 @@ from ard.config import ARDConfig, ConfigError, load_config
 from ard.core.types import AnchorSpec, DataSource, GeneratedAnchor, StringList, TurnSpec
 from ard.domain.bank import append_anchor
 from ard.domain.text_anchor import AnchorGenerationStats
+
+#: The production ontology.  The acceptance phase is enabled in these configs
+#: and its structure readout is defined against the run's own sampling space, so
+#: the config must point at a real ontology even though the plan is injected.
+_ONTOLOGY = str(Path(__file__).resolve().parents[1] / "ontology" / "anchor_ontology.v4.json")
 
 
 def _spec(anchor_id: str, visual_domain: str | None) -> AnchorSpec:
@@ -109,7 +115,7 @@ def _write_config(
         "concurrency = 1",
         "",
         "[ontology]",
-        'path = "unused.json"',
+        f'path = "{_ONTOLOGY}"',
         "",
         "[output]",
         f'directory = "{output_dir}"',
@@ -196,6 +202,50 @@ def test_each_image_anchor_gets_a_picture_from_its_own_domain(
     assert plant_path is not None and "/images/plants/" in plant_path
     assert (output_dir / "images" / "animals").is_dir()
     assert (output_dir / "images" / "plants").is_dir()
+
+
+def test_images_rotate_by_round_through_the_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v5: one domain's picture advances by round, and the rounds are resolved apart.
+
+    Reaching round 1 through the real rule needs more than ``U`` anchors, so the
+    plan context is forced to ``U = 1``: two positions then span two rounds.  The
+    code under test is the real wiring — group the pending specs by
+    ``cycle_of``, call ``resolve_domain_images`` once per round, copy each
+    ``(round, domain)`` source, and assign every spec its own round's file.
+    """
+    from ard import pipeline
+    from ard.pipeline import run
+
+    images = _image_dir(tmp_path, {"animals": 2})
+    specs = [_spec("r0", "animals"), _spec("r1", "animals")]
+    output_dir, spy, plan = _rig(tmp_path, monkeypatch, specs)
+
+    original_context = pipeline._injected_plan_context
+
+    def forced_two_rounds(injected: list[AnchorSpec], *, ontology: object = None) -> object:
+        context = original_context(injected, ontology=ontology)
+        return replace(context, unit_total=1, rounds=(len(context.specs), 0))
+
+    monkeypatch.setattr(pipeline, "_injected_plan_context", forced_two_rounds)
+
+    run(load_config(tmp_path / "config.toml"), image_dir=str(images), generate_specs=plan)
+
+    first, second = spy.image_paths
+    assert first is not None and second is not None
+    assert first != second, (
+        "each round must use its own file: grouping by domain alone pins both "
+        "rounds to the same picture"
+    )
+    manifest = _manifest(output_dir)
+    assert manifest["images"]["domain_candidate_counts"] == {"animals": 2}
+    assert [
+        (row["cycle"], row["visual_domain"]) for row in manifest["images"]["resolved_images"]
+    ] == [(0, "animals"), (1, "animals")]
+    files = {Path(first).name, Path(second).name}
+    assert len(files) == 2
+    assert (output_dir / "images" / "animals").is_dir()
 
 
 def test_the_output_records_reference_the_domain_subdirectory(

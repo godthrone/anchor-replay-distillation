@@ -1,5 +1,26 @@
 """Main pipeline orchestrator for ARD anchor generation.
 
+Responsibility: turn a validated :class:`~ard.config.ARDConfig` into one run
+directory — plan the anchors, refuse an unusable boundary before any side
+effect, resume a previous bank, generate the anchors, and write the artifact
+(``anchor_bank.jsonl``, ``config.toml``, ``manifest.json``, ``results/``,
+``images/``).
+
+Boundaries:
+
+* **N and every other content parameter come from the config** (``[generation]
+  count``); this module adds no CLI knob of its own (§10.1).  ``--smoke`` is the
+  one run-boundary flag and only changes the plan's *size*, never a second
+  construction rule.
+* **Identity is not content.**  An anchor id is the plan *position*
+  (``sampling.format_anchor_id``), so the pipeline never derives a coordinate
+  from an id and never treats a repeated coordinate as a duplicate.  The one
+  place ids and coordinates meet is the resume guard, and it compares them
+  *per id* (§2.3).
+* **The sampling rule lives in** :mod:`ard.core.sampling`; the image-addressing
+  rule in :mod:`ard.domain.image_store`.  This module wires them together and
+  owns only the run-level decisions (boundary checks, resume, manifest).
+
 Phase 3 unified flow: all anchors (text + multimodal) are generated from
 :class:`AnchorSpec` objects via a single code path.
 """
@@ -13,7 +34,6 @@ import re
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -33,14 +53,13 @@ from ard.core import acceptance
 from ard.core.ontology import OntologyV4
 from ard.core.quota import allocate_images
 from ard.core.sampling import (
-    EXPECTED_TOTAL,
     PLAN_IDENTITY_ALGORITHM,
-    SMOKE_IMAGE_BLOCKS,
-    SMOKE_SCALE,
-    SMOKE_TEXT_BLOCKS,
+    PLAN_IDENTITY_AXES,
     PlanIdentity,
-    PlanScale,
+    ontology_sha256,
+    plan_rounds,
     sample_anchors,
+    unit_total,
 )
 from ard.core.types import (
     AnchorGenerationConfig,
@@ -446,9 +465,20 @@ def _identity_from_record(data: object) -> PlanIdentity | None:
     """The well-formed ``plan_identity`` inside *data*, or ``None``.
 
     One reader for both sinks (the final ``manifest.json`` and the intermediate
-    progress record): the identity is the same four-field object either way, and
-    validating it in one place is what keeps "no recorded identity" a different
-    fact from "identity 0" (§3.2).
+    progress record): the identity is the same object either way, and validating
+    it in one place is what keeps "no recorded identity" a different fact from
+    "identity 0" (§3.2).
+
+    **Version tolerance.** A ``version: 1`` record — written by a v4 run — has
+    only ``algorithm`` / ``version`` / ``plan_size`` / ``digest``.  Those four
+    fields are the ones the resume guard compares, so a v1 record stays
+    *readable*; the v2-only fields it does not carry (``sampling``,
+    ``ontology_sha256``, ``seed``, ``count``, ``unit_total``) are read as
+    explicit "unknown" placeholders rather than recomputed.  Recomputing them
+    would mean re-deriving a v4 plan with a v5 rule and inventing a history the
+    artifact never had (§1.4 单一真相源); "unknown" is the honest value, and a
+    v1 directory is refused on its *ids* (see
+    :func:`_refuse_foreign_records_on_resume`), not on these placeholders.
     """
     recorded = data.get("plan_identity") if isinstance(data, dict) else None
     if not isinstance(recorded, dict):
@@ -462,8 +492,28 @@ def _identity_from_record(data: object) -> PlanIdentity | None:
         return None
     if not isinstance(plan_size, int) or not isinstance(version, int):
         return None
+
+    def _text(key: str) -> str:
+        value = recorded.get(key)
+        return value if isinstance(value, str) else ""
+
+    def _integer(key: str, *, default: int) -> int:
+        value = recorded.get(key)
+        if isinstance(value, bool) or not isinstance(value, int):
+            return default
+        return value
+
+    count = recorded.get("count")
     return PlanIdentity(
-        algorithm=PLAN_IDENTITY_ALGORITHM, version=version, plan_size=plan_size, digest=digest
+        algorithm=PLAN_IDENTITY_ALGORITHM,
+        version=version,
+        sampling=_text("sampling"),
+        ontology_sha256=_text("ontology_sha256"),
+        seed=_integer("seed", default=0),
+        count=None if count is None else _integer("count", default=0),
+        unit_total=_integer("unit_total", default=0),
+        plan_size=plan_size,
+        digest=digest,
     )
 
 
@@ -497,7 +547,8 @@ def _build_progress_record(
     output planned, not records on disk, which is the manifest's ``total_anchors``.
 
     Args:
-        identity: The plan's identity (``PlanIdentity.of(plan)``).
+        identity: The plan's identity (``PlanIdentity.of(plan, ontology_sha256=...,
+            seed=..., count=..., unit_total=...)``).
         started_at: Local start time, ``%Y-%m-%d %H:%M:%S``.
         existing: Anchors already in the bank when this invocation started.
         new: Anchors this invocation asked the generator for.
@@ -622,84 +673,150 @@ def _refresh_manifest_for_no_generation(
     return True
 
 
-def _refuse_plan_change_on_resume(
+def _coordinate_matches(record: JsonObject, spec: AnchorSpec) -> bool:
+    """Whether *record* holds the same coordinate as *spec* on every plan axis.
+
+    The comparison is restricted to :data:`~ard.core.sampling.PLAN_IDENTITY_AXES`
+    — the canonical coordinate axes — because a bank record's ``anchor_meta``
+    carries pipeline bookkeeping on top of the coordinate (``has_image``,
+    ``image_count``, added by image assignment).  Comparing the full mappings
+    would call every real record a mismatch; comparing the axes compares the
+    coordinate, which is what the guard is about.
+
+    An axis absent on both sides compares equal (a text-only coordinate names no
+    ``visual_domain``), and a value present on only one side is a mismatch.  Axis
+    values are rendered through ``str`` so a JSON scalar and its Python
+    equivalent (``1`` vs ``"1"``) do not read as two different coordinates.
+    """
+    meta = record.get("anchor_meta")
+    if not isinstance(meta, dict):
+        return False
+    for axis in PLAN_IDENTITY_AXES:
+        in_record = axis in meta
+        in_spec = axis in spec.anchor_meta
+        if in_record != in_spec:
+            return False
+        if in_record and str(meta[axis]) != str(spec.anchor_meta[axis]):
+            return False
+    return True
+
+
+def _refuse_foreign_records_on_resume(
     output_dir: Path,
     identity: PlanIdentity,
-    plan_ids: set[str],
+    plan: list[AnchorSpec],
     existing_records: JsonObjectList,
     recorded: PlanIdentity | None,
 ) -> None:
-    """Refuse a resume that would append a *different* plan to the bank (§2.3).
+    """Refuse a resume whose bank does not line up with this run's plan (§2.3).
 
-    The guard keys on the plan's identity, never on ``[generation] seed``: the
-    seed is a process-level config value that does not name a plan (two runs can
-    share one seed and still build different plans, and a run directory's
-    recorded seed is rewritten by every later invocation, including ones that
-    generate nothing — see ``docs/algorithm.md`` §6).  The identity is the one
-    the run directory already records: the finished run's ``manifest.json``
-    ``plan_identity``, or — when the previous run never got that far — the
-    ``plan_identity`` in :data:`PROGRESS_RECORD_FILENAME`.  Both describe the
-    plan actually sampled, and both are checked before any side effect.
+    A resume may append to *output_dir* exactly when every record already on
+    disk is at its **own plan position**: its id is an id of this plan **and**
+    the coordinate that plan position carries is the coordinate the record
+    holds.  A record that fails either half is refused; nothing is ever
+    "repaired" or overwritten.
 
-    A resume whose directory records no identity (a hand-assembled or
-    pre-identity bank) falls back to the structural fact that proves it safe:
-    every anchor id already in the bank must be part of *this* run's plan.  A
-    bank holding a foreign coordinate is refused; a bank that is a subset is
-    resumed with a WARNING, so "cannot verify" never silently becomes "mixed".
+    Why both halves are needed.  The v5 id is a *position serial number*
+    (``run_key + cycle + position``), deliberately independent of N, so raising
+    ``[generation] count`` leaves every existing id byte-identical and
+    "raise N and re-run the same directory" appends cleanly.  But a position id
+    is **not a content fingerprint**: two different plans can mint the *same*
+    ids for **different** coordinates.  The case that must not slip through is
+    the smoke plan — it takes the first ``k`` units of *each modality* from
+    cycle 0, while the full plan takes the first ``N`` units of the single
+    cycle-0 order.  The smoke ids are a subset of the full plan's ids, yet the
+    coordinate behind a shared id can differ, so an id-subset test would happily
+    mix smoke records into a full-plan directory.  Comparing the coordinate at
+    the id's own position catches seed changes, ontology changes *and* plan
+    shape changes (smoke vs full) with one rule.
+
+    The coordinate is compared only **at the same id**; it is never used to
+    decide uniqueness.  Two samples with the same coordinate at two different
+    ids are two legitimate samples (the generator is stochastic), and a bank
+    holding both appends cleanly.
 
     Args:
         output_dir: The run directory being resumed.
-        identity: This run's plan identity.
-        plan_ids: Every anchor id of this run's plan.
+        identity: This run's plan identity (used for the diagnostic message).
+        plan: This run's plan, in plan order (ids and their coordinates).
         existing_records: The records already in the bank.
         recorded: The identity the directory already records, or ``None``.
 
     Raises:
-        ConfigError: If records already exist for *output_dir* and either the
-            recorded identity differs from this run's, or no identity is
-            recorded and the bank holds an id outside this run's plan.
+        ConfigError: If the bank holds an id outside this plan, or an id whose
+            recorded coordinate differs from the plan's coordinate there.
     """
     if not existing_records:
         return
-    existing_ids = {
-        record["id"] for record in existing_records if isinstance(record.get("id"), str)
+    by_id = {spec.id: spec for spec in plan}
+    existing_by_id = {
+        record["id"]: record for record in existing_records if isinstance(record.get("id"), str)
     }
-    if recorded is not None:
-        if (
-            recorded.digest == identity.digest
-            and recorded.plan_size == identity.plan_size
-            and recorded.version == identity.version
-        ):
-            return
-        raise ConfigError(
-            f"refusing to resume {output_dir}: the bank already on disk holds a "
-            f"different plan. Recorded plan identity {recorded.digest} "
-            f"(version {recorded.version}, {recorded.plan_size} coordinates); this "
-            f"run's plan identity is {identity.digest} (version {identity.version}, "
-            f"{identity.plan_size} coordinates). Appending would mix two datasets in "
-            "one run directory while every counter stays green. Re-run with the plan "
-            "that produced this bank, or give the new plan its own output.directory "
-            "(or set output.overwrite = true to replace this one deliberately)."
-        )
-    foreign = sorted(existing_ids - plan_ids)
+    if not existing_by_id:
+        return
+    foreign = sorted(set(existing_by_id) - set(by_id))
+    mismatched = sorted(
+        anchor_id
+        for anchor_id, record in existing_by_id.items()
+        if anchor_id in by_id and not _coordinate_matches(record, by_id[anchor_id])
+    )
+    if not foreign and not mismatched:
+        if recorded is None:
+            logger.warning(
+                "%s has %d record(s) but no recorded plan_identity (checked %s and "
+                "manifest.json); verified every existing anchor id and coordinate "
+                "belongs to this run's plan, so this resume appends within one plan.",
+                output_dir,
+                len(existing_by_id),
+                PROGRESS_RECORD_FILENAME,
+            )
+        elif recorded.digest != identity.digest:
+            logger.info(
+                "Resume extends the plan recorded in %s: %d existing anchor(s) all "
+                "keep their plan position and coordinate (recorded %d coordinate(s), "
+                "version %d -> this run %d coordinate(s), version %d). Appending the "
+                "%d new anchor(s).",
+                output_dir,
+                len(existing_by_id),
+                recorded.plan_size,
+                recorded.version,
+                identity.plan_size,
+                identity.version,
+                identity.plan_size - len(existing_by_id),
+            )
+        return
+
+    reasons: list[str] = []
     if foreign:
-        raise ConfigError(
-            f"refusing to resume {output_dir}: its anchor_bank.jsonl holds "
+        reasons.append(
             f"{len(foreign)} anchor id(s) that are not part of this run's plan "
-            f"(first: {foreign[0]}), and neither manifest.json nor "
-            f"{PROGRESS_RECORD_FILENAME} records a plan_identity to verify. "
-            "Appending would mix two datasets in one run directory; give "
-            "the new plan its own output.directory (or set output.overwrite = true "
-            "to replace this one deliberately)."
+            f"(first: {foreign[0]})"
         )
-    if existing_ids:
-        logger.warning(
-            "%s has %d record(s) but no recorded plan_identity; verified every "
-            "existing anchor id belongs to this run's plan, so this resume appends "
-            "within one plan.",
-            output_dir,
-            len(existing_ids),
+    if mismatched:
+        reasons.append(
+            f"{len(mismatched)} anchor id(s) whose recorded coordinate differs from "
+            f"this run's plan at that position (first: {mismatched[0]}; the id names a "
+            "plan position, not coordinate content, so an id that is present does not "
+            "by itself mean the same sample)"
         )
+    recorded_name = (
+        f"plan identity {recorded.digest} (version {recorded.version}, "
+        f"{recorded.plan_size} coordinates)"
+        if recorded is not None
+        else f"no recorded plan_identity (checked {PROGRESS_RECORD_FILENAME} and manifest.json)"
+    )
+    raise ConfigError(
+        f"refusing to resume {output_dir}: its anchor_bank.jsonl holds "
+        + " and ".join(reasons)
+        + f". The run directory records {recorded_name}; this run's plan identity is "
+        f"{identity.digest} (version {identity.version}, {identity.plan_size} "
+        "coordinates). Appending would mix two datasets in one run directory while "
+        "every counter stays green. A resume may only append to a bank whose ids and "
+        "coordinates both line up with this plan — raising [generation] count keeps "
+        "that true, changing [generation] seed, the ontology, or smoke/full shape does "
+        "not. Give this batch of anchors its own output.directory (or set "
+        "output.overwrite = true to replace this one deliberately)."
+    )
 
 
 def _declare_plan_identity(manifest: dict[str, Any], identity: PlanIdentity) -> None:
@@ -711,21 +828,113 @@ def _declare_plan_identity(manifest: dict[str, Any], identity: PlanIdentity) -> 
     manifest["plan_identity"] = identity.as_dict()
 
 
-def _declare_smoke(manifest: dict[str, Any], *, plan_size: int, output_dir: Path) -> None:
+SMOKE_PER_MODALITY: tuple[int, int] = (4, 4)
+"""The smoke plan's ``(text, image)`` subset, taken from cycle 0's shuffle order.
+
+``--smoke`` is a run-boundary parameter (constitution §10.1), not a config
+field, so the *size* of the smoke artifact is defined here, next to the marker
+that keeps it from looking like a delivery.  The two numbers are the pipeline's
+one definition of "smoke scale"; the sampling rule itself takes them as the
+``per_modality`` argument and has no smoke constant of its own (§1.4).
+"""
+
+
+def _declare_smoke(
+    manifest: dict[str, Any],
+    *,
+    plan_size: int,
+    unit_total: int,
+    output_dir: Path,
+) -> None:
     """Declare in *manifest* that this artifact is a smoke run (§3.2 透明退路).
 
-    Writes the machine-readable claim (``smoke: true``) next to the counts that
-    prove it: what this run planned, and what a full run plans.  A reader of the
-    artifact alone can tell a smoke run from a delivery.
+    Writes the machine-readable claim (``smoke: true``) next to the numbers that
+    prove it: what this run planned, and what one full cycle of this ontology
+    holds.  A reader of the artifact alone can tell a smoke run from a delivery.
     """
     manifest["smoke"] = True
     manifest["smoke_plan"] = {
         "run_name": output_dir.name,
         "planned_anchors": plan_size,
-        "full_expected_anchors": EXPECTED_TOTAL,
-        "text_blocks": SMOKE_TEXT_BLOCKS,
-        "image_blocks": SMOKE_IMAGE_BLOCKS,
+        "text_blocks": SMOKE_PER_MODALITY[0],
+        "image_blocks": SMOKE_PER_MODALITY[1],
+        "full_expected_anchors": unit_total,
         "note": "SMOKE RUN — deliberately incomplete; not a deliverable.",
+    }
+
+
+def _distinct_coordinate_count(plan: list[AnchorSpec]) -> int:
+    """How many *different coordinates* the plan holds (§4 readout).
+
+    A coordinate is the sample's full axis mapping (``spec.anchor_meta``) — the
+    ``id`` is deliberately left out, because the id is the plan *position*, and
+    two positions legitimately carry the same coordinate.  Counting the ids
+    would answer "how many samples", which is ``len(plan)``; counting the
+    coordinates answers "how much of the sample space this plan touches".
+
+    The key is the mapping's items sorted by axis name, so the count is
+    independent of dict insertion order and of any axis the ontology adds.  The
+    count spans the whole plan, not just the records written: it describes what
+    the run *asked for*, and a partially failed run's coverage is still the
+    plan's coverage (§3.2 — the shortfall is reported separately).
+    """
+    seen: set[tuple[tuple[str, str], ...]] = set()
+    for spec in plan:
+        seen.add(tuple(sorted((str(key), str(value)) for key, value in spec.anchor_meta.items())))
+    return len(seen)
+
+
+def _declare_plan_readout(
+    manifest: dict[str, Any],
+    *,
+    plan: list[AnchorSpec],
+    count: int | None,
+    unit_total: int,
+    rounds: tuple[int, int],
+    written: int,
+    seed: int,
+    ontology_fingerprint: str,
+    smoke: bool,
+) -> None:
+    """Publish the plan's shape and its coverage/density readouts (§4).
+
+    One machine-readable section next to ``plan_identity``, so a consumer reads
+    "what was planned, how far it reaches and how dense it is" without parsing
+    logs or re-deriving the plan:
+
+    * ``count`` — N exactly as requested; ``None`` is the "one full cycle"
+      default, kept as ``None`` rather than silently replaced by ``U``.
+    * ``unit_total`` — ``U``, one full cycle's unit count for this ontology.
+    * ``full_cycles`` / ``last_cycle_size`` — the ``plan_rounds`` decomposition
+      (``last_cycle_size == 0`` means the plan ends on a cycle boundary).
+    * ``coverage_ratio`` — ``min(distinct coordinates, U) / U``, the same
+      saturated-coverage convention the acceptance report uses
+      (``ard.core.acceptance.structure_readout``).  A coordinate repeated in a
+      later cycle is counted once, so this is a property of the plan's
+      coordinate **set**, not of the bank; the raw count is published next to it
+      as ``distinct_coordinates``.
+    * ``density`` — ``count / U`` (with the unset default read as one cycle).
+      Unlike coverage this is a *sample* count and repeats count again.
+
+    ``ontology_fingerprint`` is the explicit "unknown" ``""`` only on the
+    injected-plan test seam (``generate_specs``), which never loads an ontology;
+    every real run carries the digest.
+    """
+    resolved_count = unit_total if count is None else count
+    distinct = _distinct_coordinate_count(plan)
+    manifest["plan"] = {
+        "ontology_sha256": ontology_fingerprint,
+        "seed": seed,
+        "count": count,
+        "unit_total": unit_total,
+        "full_cycles": rounds[0],
+        "last_cycle_size": rounds[1],
+        "planned_anchors": len(plan),
+        "written_anchors": written,
+        "distinct_coordinates": distinct,
+        "coverage_ratio": min(distinct, unit_total) / unit_total,
+        "density": resolved_count / unit_total,
+        "smoke": smoke,
     }
 
 
@@ -772,7 +981,7 @@ def _declare_images(
     *,
     image_dir: str,
     config: ARDConfig,
-    resolution: DomainImageResolution | None,
+    resolutions: dict[int, DomainImageResolution],
     skipped: dict[str, StringList],
 ) -> None:
     """Declare the run's image addressing and any skipped anchors (§3.2/§3.3).
@@ -781,12 +990,37 @@ def _declare_images(
     construction rule describes, so the difference is machine-readable: the
     skipped count and the affected ``visual_domain`` values travel with the
     manifest, where a consumer reads them without parsing logs.
+
+    v5 rotates a domain's images by round, so the pick is declared per
+    ``(cycle, visual_domain)`` as well as aggregated:
+
+    * ``resolved_images`` — one ``{cycle, visual_domain, image}`` row per round
+      and domain, sorted by ``(cycle, domain)``.  Two rounds with one image each
+      are visibly different rows, so "the rotation happened" is checkable.
+    * ``domain_candidate_counts`` — ``visual_domain -> usable file count``.  This
+      is the readout that separates **real** variety (a domain with more than
+      one candidate actually showed different files) from **fake** variety (a
+      domain with one candidate necessarily reused it, however many rounds ran).
     """
+    selected_by_cycle = {
+        cycle: {domain: source.name for domain, source in sorted(resolution.selected.items())}
+        for cycle, resolution in sorted(resolutions.items())
+    }
+    resolved_images = [
+        {"cycle": cycle, "visual_domain": domain, "image": name}
+        for cycle, by_domain in selected_by_cycle.items()
+        for domain, name in by_domain.items()
+    ]
+    candidate_counts: dict[str, int] = {}
+    for resolution in resolutions.values():
+        candidate_counts.update(resolution.candidate_counts)
     manifest["images"] = {
         "image_dir": str(Path(image_dir).resolve()),
         "addressing": VISUAL_DOMAIN_LAYOUT,
         "skip_missing_images": config.images.skip_missing_images,
-        "resolved_visual_domains": sorted(resolution.selected) if resolution else [],
+        "resolved_visual_domains": sorted({row["visual_domain"] for row in resolved_images}),
+        "resolved_images": resolved_images,
+        "domain_candidate_counts": {key: candidate_counts[key] for key in sorted(candidate_counts)},
         "skipped_anchor_count": sum(len(anchor_ids) for anchor_ids in skipped.values()),
         "skipped_visual_domains": sorted(skipped),
     }
@@ -794,29 +1028,43 @@ def _declare_images(
 
 def _assign_images_by_domain(
     specs: list[AnchorSpec],
-    rel_by_domain: dict[str, str],
+    rel_by_cycle_domain: dict[tuple[int, str], str],
+    cycle_of: dict[str, int],
     output_dir: Path,
     rng: random.Random,
 ) -> None:
-    """Give every image-modality spec the image of its own ``visual_domain``.
+    """Give every image-modality spec the image of its own round and domain.
 
-    One domain = one group; :func:`ard.core.quota.allocate_images` is reused per
-    group so the turn-filling rule (earliest eligible ``user`` turn, at most
-    :data:`IMAGES_PER_ANCHOR` images) keeps a single implementation.  Text-only
-    specs are stamped ``has_image=False`` and never receive an image: their
-    coordinate names no visual domain, so an image would be the same
-    coordinate/content mismatch the addressing exists to prevent.
+    v5 rotates a domain's picture by round, so the group key is
+    ``(cycle, visual_domain)`` — not ``visual_domain`` alone.  Grouping by the
+    domain only would hand every round the *same* file (the copy step keeps them
+    apart, this step must too), which is exactly the "one run, one picture per
+    domain" behaviour the rotation replaces.
+
+    One ``(cycle, domain)`` = one group; :func:`ard.core.quota.allocate_images`
+    is reused per group so the turn-filling rule (earliest eligible ``user``
+    turn, at most :data:`IMAGES_PER_ANCHOR` images) keeps a single
+    implementation.  Text-only specs are stamped ``has_image=False`` and never
+    receive an image: their coordinate names no visual domain, so an image would
+    be the same coordinate/content mismatch the addressing exists to prevent.
+
+    ``cycle_of`` maps a spec's primary key to its plan round (``index // U`` over
+    the full plan).  A spec whose round is unknown, or whose ``(cycle, domain)``
+    has no resolved file, is stamped text-only rather than being given some
+    other round's picture.
     """
-    groups: dict[str, AnchorSpecList] = {}
+    groups: dict[tuple[int, str], AnchorSpecList] = {}
     for spec in specs:
         domain = spec.anchor_meta.get("visual_domain")
-        if isinstance(domain, str) and domain in rel_by_domain:
-            groups.setdefault(domain, []).append(spec)
+        cycle = cycle_of.get(spec.id)
+        key = (cycle, domain) if isinstance(cycle, int) and isinstance(domain, str) else None
+        if key is not None and key in rel_by_cycle_domain:
+            groups.setdefault(key, []).append(spec)
         else:
             spec.anchor_meta["has_image"] = False
             spec.anchor_meta["image_count"] = 0
-    for domain, group in groups.items():
-        allocate_images(group, [rel_by_domain[domain]], IMAGES_PER_ANCHOR, rng)
+    for key, group in groups.items():
+        allocate_images(group, [rel_by_cycle_domain[key]], IMAGES_PER_ANCHOR, rng)
 
     # Resolve image paths relative to output_dir for base64 encoding.
     for spec in specs:
@@ -825,19 +1073,102 @@ def _assign_images_by_domain(
                 turn.image_path = str(output_dir / turn.image_path)
 
 
-def sample_specs(config: ARDConfig, *, scale: PlanScale | None = None) -> list[AnchorSpec]:
+@dataclass(frozen=True, slots=True)
+class _PlanContext:
+    """A plan plus the facts needed to name and describe it.
+
+    ``PlanIdentity`` v2 and the manifest's coverage/density readouts need more
+    than the spec list: the ontology fingerprint, ``U``, the requested ``count``
+    and the round decomposition.  They are computed once, here, next to the plan
+    they describe, so the naming and the reporting cannot disagree with the
+    plan (§1.4 单一真相源).
+
+    Attributes:
+        specs: The plan, in plan order.
+        count: N exactly as requested; ``None`` means "one full cycle".  On the
+            injected-plan seam it is the plan's length.
+        unit_total: ``U`` — one full cycle's coverage-unit count.
+        rounds: ``(full_cycles, last_cycle_size)``.
+        ontology_sha256: The ontology fingerprint, or ``""`` on the
+            injected-plan seam, which never loads an ontology.
+        ontology: The validated v4 ontology the plan's reporting is about, or
+            ``None`` when the injected-plan seam ran with the acceptance phase
+            disabled (then nothing needs it).  The acceptance readout takes it
+            from here, so the pipeline loads it once and never re-loads
+            (§1.4 单一真相源).
+    """
+
+    specs: list[AnchorSpec]
+    count: int | None
+    unit_total: int
+    rounds: tuple[int, int]
+    ontology_sha256: str
+    ontology: OntologyV4 | None = None
+
+
+def _build_plan(config: ARDConfig, *, smoke: bool) -> _PlanContext:
+    """Build the run's plan from the ontology and describe it (production path).
+
+    The ontology is loaded once and its two derived facts (``U`` via
+    :func:`~ard.core.sampling.unit_total`, the fingerprint via
+    :func:`~ard.core.sampling.ontology_sha256`) are read from it; the plan
+    itself comes from the one sampling entry point, so a smoke run and a full
+    run differ only in the ``per_modality`` / ``count`` argument — never in a
+    second construction rule (§18.1 不留负债).
+
+    Args:
+        config: Validated ARD configuration.
+        smoke: ``True`` builds the reduced ``(4, 4)`` cycle-0 plan.
+
+    Returns:
+        The plan and its descriptive facts.
+    """
+    ontology: OntologyV4 = load_ontology_v4(config.ontology.path)
+    gen_config = AnchorGenerationConfig(
+        seed=config.generation.resolved_seed,
+        concurrency=config.generation.concurrency,
+    )
+    total = unit_total(ontology)
+    if smoke:
+        specs = sample_anchors(ontology, gen_config, per_modality=SMOKE_PER_MODALITY)
+        # A smoke plan is a subset of cycle 0, so its length is the requested
+        # count and it spans one (partial) cycle.
+        return _PlanContext(
+            specs=specs,
+            count=len(specs),
+            unit_total=total,
+            rounds=divmod(len(specs), total),
+            ontology_sha256=ontology_sha256(ontology),
+            ontology=ontology,
+        )
+    count = config.generation.count
+    specs = sample_anchors(ontology, gen_config, count=count)
+    return _PlanContext(
+        specs=specs,
+        count=count,
+        unit_total=total,
+        # ``count=None`` is one full cycle by definition (§2.2); ``plan_rounds``
+        # takes the resolved number so the decomposition is always exact.
+        rounds=plan_rounds(ontology, total if count is None else count),
+        ontology_sha256=ontology_sha256(ontology),
+        ontology=ontology,
+    )
+
+
+def sample_specs(config: ARDConfig) -> list[AnchorSpec]:
     """Build the run's anchor plan from the v4 ontology (the production seam).
 
     The ontology is loaded here — not before the checkpoint check in
     :func:`run` — so a run whose bank is already complete never pays for the
-    rule's enumeration.  The count is the plan's length: the v4 construction
-    rule derives it, so no config field hands it in.
+    rule's enumeration.  N comes from ``[generation] count`` and nowhere else;
+    ``None`` means one full cycle (``U``), and there is no upper bound.
+
+    Kept as a list-returning function because it is the seam existing callers
+    and tests use; :func:`_build_plan` is the same construction with the plan's
+    descriptive facts attached, and is what :func:`run` calls.
 
     Args:
         config: Validated ARD configuration.
-        scale: Which subset of each modality's legal blocks to plan.  ``None``
-            means every legal block; ``--smoke`` passes
-            :data:`~ard.core.sampling.SMOKE_SCALE` through the same rule.
 
     Returns:
         The plan's :class:`~ard.core.types.AnchorSpec` objects, in plan order.
@@ -846,12 +1177,64 @@ def sample_specs(config: ARDConfig, *, scale: PlanScale | None = None) -> list[A
         OntologySchemaError: If the ontology is not a readable v4 document.
         SamplingError: If the ontology cannot produce the rule's coordinate set.
     """
-    ontology: OntologyV4 = load_ontology_v4(config.ontology.path)
-    gen_config = AnchorGenerationConfig(
-        seed=config.generation.resolved_seed,
-        concurrency=config.generation.concurrency,
+    return _build_plan(config, smoke=False).specs
+
+
+def _injected_plan_context(
+    specs: list[AnchorSpec],
+    *,
+    ontology: OntologyV4 | None = None,
+) -> _PlanContext:
+    """Describe a plan handed in through the ``generate_specs`` seam.
+
+    The seam exists so a test can exercise the pipeline's resume/imaging
+    arithmetic without materialising the real plan.  The sampling facts are
+    therefore taken from the plan itself: the whole injected list is treated as
+    **one cycle** (every spec is cycle 0), ``count`` is its length, and the
+    fingerprint is the explicit "unknown" ``""`` rather than a fabricated digest
+    (§2.2 显式即防呆).  An empty injected plan has no N (and N is never ``0``), so
+    its ``count`` is ``None``.
+
+    *ontology* is supplied by the caller only when the acceptance phase is
+    enabled — that phase's structure readout is defined against the run's
+    sampling space, so it needs the real ontology even though the plan was
+    injected.  When it is present, ``unit_total`` is the ontology's real ``U``
+    (the honest cycle length even for an injected prefix); with coverage
+    disabled the ontology is not loaded at all, which keeps the pure
+    resume/imaging tests free of the half-second enumeration.
+
+    Args:
+        specs: The injected plan, in plan order.
+        ontology: The run's ontology when the acceptance phase needs it, else
+            ``None``.
+
+    Returns:
+        The plan and the described facts.
+    """
+    ordered = list(specs)
+    if ontology is not None:
+        total = unit_total(ontology)
+    else:
+        total = len(ordered) if ordered else 1
+    if ordered:
+        count: int | None = len(ordered)
+        rounds = divmod(len(ordered), total)
+    else:
+        # An empty injected plan requests nothing; ``count`` must not be ``0``
+        # (no run has N = 0), so it is the "unspecified" ``None`` and the
+        # acceptance readout falls back to the ontology's ``U``.  This shape is
+        # reachable only through the test seam, whose point is to take the
+        # pipeline's no-work branch without loading a plan.
+        count = None
+        rounds = (0, 0)
+    return _PlanContext(
+        specs=ordered,
+        count=count,
+        unit_total=total,
+        rounds=rounds,
+        ontology_sha256="",
+        ontology=ontology,
     )
-    return sample_anchors(ontology, gen_config, scale=scale)
 
 
 @dataclass(frozen=True, slots=True)
@@ -965,6 +1348,7 @@ def _run_acceptance(
     plan: list[AnchorSpec],
     records: JsonObjectList,
     output_path: Path,
+    plan_context: _PlanContext,
 ) -> dict[str, Any] | None:
     """Write ``results/coverage.json`` + ``coverage.md`` and return the manifest pointer.
 
@@ -974,6 +1358,18 @@ def _run_acceptance(
     produced only when :func:`_prepare_coverage` resolved an embedding endpoint
     and a target set — otherwise the report carries an explicit WARNING instead
     of a silently missing number (§3.2 透明退化).
+
+    The structure readout compares the plan against **this run's own sampling
+    space** (:func:`ard.core.acceptance.structure_readout`), so it is handed the
+    ontology the pipeline already loaded and the run's own ``count``:
+
+    * the ontology comes from *plan_context* — one load per run, the single
+      source of ``U`` / ``K`` / ``V`` (§1.4).  It is present whenever this
+      function can be reached (coverage enabled ⇒ :func:`run` loaded it);
+    * ``count`` is ``None`` only for "one full cycle" (the readout applies ``U``
+      itself).  A ``per_modality`` smoke plan is *not* one full cycle, so
+      :attr:`_PlanContext.count` is its length (8) and the smoke readout is
+      measured against 8, not against 1,826.
 
     Returns:
         The manifest's ``acceptance`` section, or ``None`` when the phase is
@@ -986,7 +1382,20 @@ def _run_acceptance(
     results_dir = output_dir / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    structure = acceptance.structure_readout([spec.anchor_meta for spec in plan])
+    if plan_context.ontology is None:
+        # Coverage is enabled, so ``run`` loaded the ontology for this plan
+        # (including on the injected-plan seam); reaching here means a caller
+        # bypassed that wiring.  Refusing beats inventing an expectation set.
+        raise ConfigError(
+            "the acceptance phase is enabled but the run's ontology is not "
+            "available: the structure readout is defined against the run's own "
+            "sampling space and cannot be computed without it"
+        )
+    structure = acceptance.structure_readout(
+        [spec.anchor_meta for spec in plan],
+        ontology=plan_context.ontology,
+        count=plan_context.count,
+    )
     warnings: list[str] = []
     # The structure readout describes the *plan*; it must not claim the artifact
     # is within the rule while the bank is short a planned coordinate (F1).  A
@@ -1083,19 +1492,20 @@ def run(
             ``<output_dir>/images`` is ``[images] convert`` (§10.1) — not an
             argument of this function.
         generate_specs: Optional override for the plan builder, defaulting to
-            :func:`sample_specs`.  Tests inject a small deterministic plan here
-            so the resume arithmetic can be exercised without materialising the
-            1,826-coordinate plan or loading the ontology.  It is not used to
-            implement ``--smoke``: a smoke run goes through the real builder with
-            the real scale knob.
+            the ontology-backed rule.  Tests inject a small deterministic plan
+            here so the resume arithmetic can be exercised without materialising
+            a full plan or loading the ontology.  An injected plan is described
+            as **one cycle** (every spec is round 0) and its ontology fingerprint
+            is recorded as ``""``; it is not used to implement ``--smoke`` — a
+            smoke run goes through the real builder with ``per_modality=(4, 4)``.
         smoke: Run-boundary flag (``--smoke``, constitution §10.1).  The
-            **same** construction rule is materialised at a reduced scale
-            (:data:`~ard.core.sampling.SMOKE_SCALE`, 8 of 1,826 anchors) so a
-            clone can see an artifact quickly.  A smoke run is tagged in three
-            places: the run directory gets ``_smoke``, the log carries a
-            WARNING, and ``manifest.json`` declares ``smoke: true`` with its
-            planned count against the full one.  ``False`` (the default) changes
-            nothing about a full run.
+            **same** construction rule materialises a reduced plan (the first
+            :data:`SMOKE_PER_MODALITY` units of each modality from cycle 0's
+            shuffle order — 8 of one full cycle) so a clone can see an artifact
+            quickly.  A smoke run is tagged in three places: the run directory
+            gets ``_smoke``, the log carries a WARNING, and ``manifest.json``
+            declares ``smoke: true`` with its planned count against one full
+            cycle.  ``False`` (the default) changes nothing about a full run.
 
     Returns:
         Path to the output directory.
@@ -1106,11 +1516,11 @@ def run(
             without a usable embedder, if an image-modality anchor's
             ``visual_domain`` has no image under ``--image-dir`` while
             ``[images] skip_missing_images`` is false, or if the bank already
-            holds records and this run's plan identity differs from the plan
-            identity recorded in the previous run's ``manifest.json`` (a
-            different plan would mix two datasets in one run directory).  All are
-            checked before the output directory is created, so a refused run
-            leaves no side effect behind (§2.3).
+            holds a record that does not sit at its own position in this run's
+            plan — a foreign id or a coordinate that differs from the plan's
+            coordinate at that id (a different plan would mix two datasets in one
+            run directory).  All are checked before the output directory is
+            created, so a refused run leaves no side effect behind (§2.3).
         CoverageWiringError: If ``coverage.target_set_path`` names a file that
             is missing, unreadable, unparsable, empty, or whose declared count
             / dimension contradicts the file or the config — also before any
@@ -1122,13 +1532,6 @@ def run(
             "deliberately incomplete and must not be delivered as a dataset."
         )
 
-    if generate_specs is not None:
-        spec_sampler: SpecSampler = generate_specs
-    elif smoke:
-        # The very same builder, one named scale knob — never a second rule.
-        spec_sampler = partial(sample_specs, scale=SMOKE_SCALE)
-    else:
-        spec_sampler = sample_specs
     # ── Credential boundary check (§2.3 边界校验即防呆) ─────────────────────
     # Done *before* the output directory exists: a config without an endpoint
     # used to explode later inside ChatAPIConfig, after a half-built output dir
@@ -1156,52 +1559,82 @@ def run(
     # the run paid for every anchor costs the run (§2.3).
     coverage_inputs = _prepare_coverage(config)
 
-    # ── Plan (v4 construction rule) — built before any side effect ──────────
-    # v4 only: the parsing layer refuses a schema it cannot read, so a v3 file
-    # (or a damaged one) stops the run here instead of silently sampling 0
-    # anchors further down (§2.3 边界校验即防呆).  ``sample_specs`` loads it.
+    # ── Plan (v5 cycle-shuffle rule) — built before any side effect ─────────
+    # The ontology parsing layer refuses a schema it cannot read, so a damaged
+    # file stops the run here instead of silently sampling 0 anchors further down
+    # (§2.3 边界校验即防呆).
     #
-    # The plan **is** the target: ``len(plan)`` is the rule-derived count, and
-    # the checkpoint/resume path asks for the plan entries whose stable id is not
-    # in the bank yet.  Resume is append-only by construction — the generator
-    # writes only ids absent from the bank — and it is *identity*-based so a
-    # middle coordinate abandoned by an earlier run is requested again instead of
-    # being shadowed by a later, already-written one (see the ``pending_specs``
-    # comment below).
+    # N comes from ``[generation] count`` and nowhere else; ``None`` means one
+    # full cycle.  There is no upper bound — a large N simply runs more cycles
+    # (:func:`~ard.core.sampling.plan_rounds` decomposes it for the INFO line
+    # below, it never refuses).  An anchor id is the plan *position*
+    # (``run_key + cycle + position``), independent of N, so the first N ids of
+    # a larger plan are exactly the smaller plan's — the property resume relies
+    # on.  It is **not** a content fingerprint, which is why the resume guard
+    # compares coordinates per id (see :func:`_refuse_foreign_records_on_resume`).
+    #
+    # The plan **is** the target: the checkpoint/resume path asks for the plan
+    # entries whose stable id is not in the bank yet, and a middle coordinate
+    # abandoned by an earlier run is requested again instead of being shadowed by
+    # a later, already-written one (see the ``pending_specs`` comment below).
     #
     # It is built *before* the output directory exists so the image-addressing
-    # check below runs on it and can still refuse before any side effect: a run
-    # that cannot put a matching image under an image-modality anchor must fail
-    # without leaving an empty output directory (or a config snapshot) behind.
-    # The consumers below (image allocation, the generator) read the same
-    # ``AnchorGenerationConfig`` the plan builder builds; this one is for the
-    # generator's concurrency and the image-allocation rng.
+    # check below runs on it and can still refuse before any side effect.
     gen_config = AnchorGenerationConfig(
         seed=config.generation.resolved_seed,
         concurrency=config.generation.concurrency,
     )
     rng = random.Random(gen_config.seed)
-    plan = spec_sampler(config)
+    if generate_specs is not None:
+        # The injected plan replaces the sampler, but the acceptance phase (when
+        # enabled) still needs the run's sampling space: load the ontology once
+        # here — not in ``_run_acceptance`` — so there is one ontology per run
+        # (§1.4).  With coverage disabled nothing needs it, so nothing is loaded.
+        injected_ontology = (
+            load_ontology_v4(config.ontology.path) if config.coverage.enabled else None
+        )
+        plan_context = _injected_plan_context(generate_specs(config), ontology=injected_ontology)
+    else:
+        # Smoke and full runs go through the very same construction rule; only
+        # the count / per_modality argument differs, never a second rule.
+        plan_context = _build_plan(config, smoke=smoke)
+    plan = plan_context.specs
     target_count = len(plan)
-    plan_id = PlanIdentity.of(plan)
+    plan_id = PlanIdentity.of(
+        plan,
+        ontology_sha256=plan_context.ontology_sha256,
+        seed=gen_config.seed,
+        count=plan_context.count,
+        unit_total=plan_context.unit_total,
+    )
+    full_cycles, last_cycle_size = plan_context.rounds
     logger.info(
-        "Plan identity: %s (algorithm=%s, version=%d, coordinates=%d)",
+        "Plan: %d coordinate(s) = %d full cycle(s) + %d coordinate(s) in the last "
+        "cycle; one full cycle is %d unit(s) (density %.4f). Plan identity: %s "
+        "(algorithm=%s, version=%d, sampling=%s).",
+        target_count,
+        full_cycles,
+        last_cycle_size,
+        plan_context.unit_total,
+        target_count / plan_context.unit_total,
         plan_id.digest,
         plan_id.algorithm,
         plan_id.version,
-        plan_id.plan_size,
+        plan_id.sampling,
     )
     if smoke:
         logger.warning(
-            "SMOKE RUN: plan reduced to %d of %d anchors (%d text blocks + %d "
-            "image blocks) by the standard construction rule at smoke scale. "
-            "results/coverage.json will report within_rule=false against the full "
-            "plan — expected for a smoke artifact. Do not deliver it; run without "
-            "--smoke for the full dataset.",
+            "SMOKE RUN: plan reduced to %d of %d anchors (%d text + %d image, the "
+            "first of each modality in cycle 0's shuffle order) by the standard "
+            "construction rule. results/coverage.json measures this artifact against "
+            "its own %d-anchor count — within_rule=true is the expected smoke "
+            "readout; the artifact is still deliberately incomplete. Do not deliver "
+            "it; run without --smoke for the full dataset.",
             target_count,
-            EXPECTED_TOTAL,
-            SMOKE_TEXT_BLOCKS,
-            SMOKE_IMAGE_BLOCKS,
+            plan_context.unit_total,
+            SMOKE_PER_MODALITY[0],
+            SMOKE_PER_MODALITY[1],
+            target_count,
         )
 
     # ── Output paths (still no side effect) + resume arithmetic ────────────
@@ -1221,20 +1654,19 @@ def run(
     existing_count = len(existing_ids)
     remaining = target_count - existing_count
 
-    # ── Resume identity check (§2.3, still before any side effect) ──────────
-    # The plan's identity — not ``[generation] seed``, which is a process-level
-    # config value that every invocation redraws and rewrites — is what decides
-    # whether appending to this bank stays within one plan.  The run directory
-    # records it in one of two places: the finished run's ``manifest.json``, or —
-    # when the previous run was interrupted before the manifest was written —
-    # the intermediate progress record.  Both are read here, and a mismatch is
-    # refused before the config snapshot is rewritten, so nothing on disk is
-    # touched.
+    # ── Resume guard (§2.3, still before any side effect) ───────────────────
+    # Appending is allowed exactly when every record already on disk sits at its
+    # own plan position in *this* plan: same id, same coordinate.  The recorded
+    # ``plan_identity`` (from the finished run's ``manifest.json`` or, when the
+    # previous run was interrupted, from the intermediate progress record) is
+    # read for the diagnostic and kept as an audit trail, but the decision is
+    # made by comparing ids *and* coordinates — see the guard's docstring for why
+    # an id-subset test would let a smoke plan into a full-plan directory.
     recorded_plan_identity = _recorded_plan_identity(output_dir / "manifest.json")
-    _refuse_plan_change_on_resume(
+    _refuse_foreign_records_on_resume(
         output_dir,
         plan_id,
-        {spec.id for spec in plan},
+        plan,
         existing_records,
         recorded_plan_identity or _recorded_progress_identity(output_dir),
     )
@@ -1262,7 +1694,16 @@ def run(
     # that land in <output_dir>/images, so it is read here from the config
     # rather than from a CLI flag (§10.1: one source of truth per parameter).
     image_extensions = CONVERTABLE_EXTENSIONS if config.images.convert else SUPPORTED_EXTENSIONS
-    image_resolution: DomainImageResolution | None = None
+    # The round every spec belongs to, taken from its **plan index** — the
+    # position the spec's id names — and not from the id string, which is opaque
+    # to this module.  ``U`` comes from the plan's own context (the ontology's
+    # real ``U``; the injected seam without an ontology falls back to the plan's
+    # length, i.e. one cycle).
+    cycle_of = {spec.id: index // plan_context.unit_total for index, spec in enumerate(plan)}
+    image_resolutions: dict[int, DomainImageResolution] = {}
+    # ``(cycle, visual_domain) -> source file``, the resolution readout the copy
+    # step and the manifest both consume.
+    selected_sources: dict[tuple[int, str], Path] = {}
     skipped_domains: dict[str, StringList] = {}
     if image_dir is not None and pending_specs:
         image_root = Path(image_dir)
@@ -1276,24 +1717,57 @@ def run(
                 f"Point --image-dir at an existing directory laid out as "
                 f"{VISUAL_DOMAIN_LAYOUT}."
             )
-        image_resolution = resolve_domain_images(
-            image_root,
-            pending_specs,
-            seed=gen_config.seed,
-            extensions=image_extensions,
-        )
-        if image_resolution.missing and not config.images.skip_missing_images:
-            raise ConfigError(
-                _missing_image_message(
-                    image_root,
-                    image_resolution,
-                    len(pending_specs),
-                    image_extensions,
-                )
+        # One call per round: a single call describes exactly one ``cycle``, so
+        # handing it specs from several cycles would pin every round to that
+        # round's file.  Group by ``cycle_of``, then resolve each group.
+        by_cycle: dict[int, list[AnchorSpec]] = {}
+        for spec in pending_specs:
+            if isinstance(spec.anchor_meta.get("visual_domain"), str):
+                by_cycle.setdefault(cycle_of[spec.id], []).append(spec)
+        image_resolutions = {
+            cycle: resolve_domain_images(
+                image_root,
+                cycle_specs,
+                seed=gen_config.seed,
+                cycle=cycle,
+                extensions=image_extensions,
             )
-        skipped_domains = image_resolution.missing
-        if skipped_domains:
-            available = set(image_resolution.selected)
+            for cycle, cycle_specs in sorted(by_cycle.items())
+        }
+        for cycle, resolution in image_resolutions.items():
+            for domain, source in resolution.selected.items():
+                selected_sources[(cycle, domain)] = source
+        # The boundary readout is over the whole run, not one round: a domain is
+        # missing for the plan when *any* round cannot supply it, and the merged
+        # view is what the refusal message and the skip filter reason about.
+        merged_missing: dict[str, StringList] = {}
+        for resolution in image_resolutions.values():
+            for domain, anchor_ids in resolution.missing.items():
+                merged_missing.setdefault(domain, []).extend(anchor_ids)
+        if merged_missing:
+            merged_selected = {
+                domain: source for (_, domain), source in sorted(selected_sources.items())
+            }
+            merged_counts: dict[str, int] = {}
+            for resolution in image_resolutions.values():
+                merged_counts.update(resolution.candidate_counts)
+            merged = DomainImageResolution(
+                selected=merged_selected,
+                missing=merged_missing,
+                cycle=min(image_resolutions),
+                candidate_counts=merged_counts,
+            )
+            if not config.images.skip_missing_images:
+                raise ConfigError(
+                    _missing_image_message(
+                        image_root,
+                        merged,
+                        len(pending_specs),
+                        image_extensions,
+                    )
+                )
+            skipped_domains = merged_missing
+            available = set(merged_selected)
             pending_specs = [
                 spec
                 for spec in pending_specs
@@ -1365,14 +1839,30 @@ def run(
         all_records = read_anchor_bank(output_path)
         manifest = build_manifest_from_records(all_records, output_dir, config_info)
         _declare_plan_identity(manifest, plan_id)
+        _declare_plan_readout(
+            manifest,
+            plan=plan,
+            count=plan_context.count,
+            unit_total=plan_context.unit_total,
+            rounds=plan_context.rounds,
+            written=len(all_records),
+            seed=gen_config.seed,
+            ontology_fingerprint=plan_context.ontology_sha256,
+            smoke=smoke,
+        )
         if smoke:
-            _declare_smoke(manifest, plan_size=target_count, output_dir=output_dir)
+            _declare_smoke(
+                manifest,
+                plan_size=target_count,
+                unit_total=plan_context.unit_total,
+                output_dir=output_dir,
+            )
         if image_dir is not None:
             _declare_images(
                 manifest,
                 image_dir=image_dir,
                 config=config,
-                resolution=image_resolution,
+                resolutions=image_resolutions,
                 skipped=skipped_domains,
             )
         # No generation happens on this path, so there are no run counters to
@@ -1382,7 +1872,7 @@ def run(
         # run must not be restated as unfinished).  The intermediate progress
         # record is dropped either way: the manifest is now the current word.
         acceptance_pointer = _run_acceptance(
-            config, coverage_inputs, effective_plan, all_records, output_path
+            config, coverage_inputs, effective_plan, all_records, output_path, plan_context
         )
         if acceptance_pointer is not None:
             manifest["acceptance"] = acceptance_pointer
@@ -1453,13 +1943,21 @@ def run(
     # ── Generate anchors (unified flow) ───────────────────────────────────
     # The plan was sampled and the images were resolved above.
     #
-    # Step 2: place the selected image of every required visual_domain into the
-    # output tree and assign it to the anchors that carry that coordinate.  The
-    # files were already validated (existence, missing-domain refusal) before
-    # the output directory existed; this step only copies bytes.
-    if image_dir is not None and image_resolution is not None and specs:
-        rel_by_domain: dict[str, str] = {}
-        for domain, source in image_resolution.selected.items():
+    # Step 2: place the selected image of every ``(round, visual_domain)`` into
+    # the output tree and assign it to the anchors of that round and domain.
+    # The files were already validated (existence, missing-domain refusal) before
+    # the output directory existed; this step only copies bytes.  v5 rotates a
+    # domain's picture by round, so several rounds may share one source file when
+    # the domain holds few images: the source is copied **once** and every
+    # ``(cycle, domain)`` that selected it reuses the placed path.
+    if selected_sources and specs:
+        rel_by_cycle_domain: dict[tuple[int, str], str] = {}
+        rel_by_source: dict[Path, str] = {}
+        for (cycle, domain), source in sorted(selected_sources.items()):
+            placed_rel = rel_by_source.get(source)
+            if placed_rel is not None:
+                rel_by_cycle_domain[(cycle, domain)] = placed_rel
+                continue
             if config.images.convert:
                 placed = convert_and_copy_images([source], output_dir, subdir=domain)
             else:
@@ -1471,8 +1969,9 @@ def run(
                     f"Replace it with a readable image, or remove the domain's "
                     f"directory to be told it is missing."
                 )
-            rel_by_domain[domain] = placed[0]
-        _assign_images_by_domain(specs, rel_by_domain, output_dir, rng)
+            rel_by_source[source] = placed[0]
+            rel_by_cycle_domain[(cycle, domain)] = placed[0]
+        _assign_images_by_domain(specs, rel_by_cycle_domain, cycle_of, output_dir, rng)
 
     # ── Early plan-identity record (§2.4, before the first endpoint call) ──
     # The plan is fixed and the config snapshot exists, but the authoritative
@@ -1529,6 +2028,17 @@ def run(
     _prune_abandoned_images(specs, output_dir, all_records)
     manifest = build_manifest_from_records(all_records, output_dir, config_info)
     _declare_plan_identity(manifest, plan_id)
+    _declare_plan_readout(
+        manifest,
+        plan=plan,
+        count=plan_context.count,
+        unit_total=plan_context.unit_total,
+        rounds=plan_context.rounds,
+        written=len(all_records),
+        seed=gen_config.seed,
+        ontology_fingerprint=plan_context.ontology_sha256,
+        smoke=smoke,
+    )
     # Publish the run's failures next to the anchors that survived, so a short
     # bank can never be mistaken for a healthy one (§3.2).
     with_generation_report(
@@ -1537,18 +2047,23 @@ def run(
         failures=reasoning_delta,
     )
     acceptance_pointer = _run_acceptance(
-        config, coverage_inputs, effective_plan, all_records, output_path
+        config, coverage_inputs, effective_plan, all_records, output_path, plan_context
     )
     if acceptance_pointer is not None:
         manifest["acceptance"] = acceptance_pointer
     if smoke:
-        _declare_smoke(manifest, plan_size=target_count, output_dir=output_dir)
+        _declare_smoke(
+            manifest,
+            plan_size=target_count,
+            unit_total=plan_context.unit_total,
+            output_dir=output_dir,
+        )
     if image_dir is not None:
         _declare_images(
             manifest,
             image_dir=image_dir,
             config=config,
-            resolution=image_resolution,
+            resolutions=image_resolutions,
             skipped=skipped_domains,
         )
     write_manifest(

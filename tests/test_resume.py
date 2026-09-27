@@ -60,18 +60,40 @@ from ard.domain.text_anchor import AnchorGenerationStats
 #: the bank.  The production plan is 1,826 entries (WP-S2a contract test), so a
 #: five-entry plan is also the guard that resume never assumes a hard-coded size.
 _PLAN_SIZE = 5
+
+#: The seed the configs pin; it enters the run key of a real plan's ids.
+_SEED = 7
+
+#: The production ontology.  The plan double replaces the *sampler*, but the
+#: acceptance phase is enabled in these configs and its structure readout is
+#: defined against the run's own sampling space, so the real ontology is needed.
+_ONTOLOGY = str(Path(__file__).resolve().parents[1] / "ontology" / "anchor_ontology.v4.json")
 _TARGET_COUNT = _PLAN_SIZE
 
 
-def _anchor(anchor_id: str, *, answer: str | None = None) -> GeneratedAnchor:
-    """A minimal anchor that satisfies the bank's exit gates (UAU shape)."""
+def _anchor(
+    anchor_id: str,
+    *,
+    answer: str | None = None,
+    anchor_meta: dict | None = None,
+) -> GeneratedAnchor:
+    """A minimal anchor that satisfies the bank's exit gates (UAU shape).
+
+    *anchor_meta* defaults to the plan double's own coordinate shape; a caller
+    that writes a record for a real (rule-conformant) plan passes the spec's
+    coordinate so the resume guard sees the same coordinate at that id.
+    """
     return GeneratedAnchor(
         id=anchor_id,
         messages=[{"role": "user", "content": f"question {anchor_id}"}],
         target_answer=answer or f"answer {anchor_id}",
         target_model="target-model",
         input_generator_model="input-model",
-        anchor_meta={"language": "English", "knowledge_domain": "math"},
+        anchor_meta=(
+            anchor_meta
+            if anchor_meta is not None
+            else {"language": "English", "knowledge_domain": "math"}
+        ),
         reasoning=None,
     )
 
@@ -94,7 +116,7 @@ def _plan() -> list[AnchorSpec]:
     ]
 
 
-def _write_config(path: Path, output_dir: Path, *, overwrite: bool, seed: int = 7) -> None:
+def _write_config(path: Path, output_dir: Path, *, overwrite: bool, seed: int = _SEED) -> None:
     """Minimal valid config; the API endpoints are dummies that are never called."""
     lines = [
         "[input_generator]",
@@ -115,7 +137,7 @@ def _write_config(path: Path, output_dir: Path, *, overwrite: bool, seed: int = 
         "concurrency = 1",
         "",
         "[ontology]",
-        'path = "unused.json"',
+        f'path = "{_ONTOLOGY}"',
         "",
         "[output]",
         f'directory = "{output_dir}"',
@@ -148,7 +170,9 @@ class _RunSpy:
             assert isinstance(spec, AnchorSpec)
             if spec.id in self.abandoned:
                 continue  # the generation failure this test needs to reproduce
-            anchor = _anchor(spec.id, answer=f"answer from {self.tag}")
+            anchor = _anchor(
+                spec.id, answer=f"answer from {self.tag}", anchor_meta=dict(spec.anchor_meta)
+            )
             outcome = append_anchor(anchor, output_path)
             assert outcome.value == "appended", (
                 f"a spec the pipeline asked for was refused by the bank: {outcome}"
@@ -518,21 +542,23 @@ def test_failed_resume_grows_the_bank_without_rewriting_it(
 # ── 6. resume is keyed by coordinate identity, not by record count (F1) ─────
 
 
-def _distinct_plan() -> list[AnchorSpec]:
-    """A small plan whose entries are pairwise distinct *coordinates*.
+def _rule_plan() -> list[AnchorSpec]:
+    """The construction rule's own first ``_PLAN_SIZE`` coordinates.
 
-    The readout test shrinks the construction rule's expected counts to this
-    plan's size (see :func:`test_readout_reconciles_with_the_bank`), so the
-    entries also have to be distinct for ``duplicate_coordinates`` to be 0.
+    The readout test needs a plan that *is* rule-conformant at its own count, so
+    that ``within_rule`` is decided by whether the bank is complete — not by a
+    plan the rule would reject anyway.  The pipeline's injected-plan seam treats
+    this list as one cycle of ``_PLAN_SIZE`` positions.
     """
-    return [
-        AnchorSpec(
-            id=f"resumed-{index}",
-            anchor_meta={"language": "English", "knowledge_domain": f"domain-{index}"},
-            turns=[TurnSpec(turn_index=0, role="user", is_final=True)],
-        )
-        for index in range(_PLAN_SIZE)
-    ]
+    from ard.backends.ontology_loader import load_ontology_v4
+    from ard.core.sampling import build_specs, sample_coordinates
+
+    ontology = load_ontology_v4(_ONTOLOGY)
+    return build_specs(
+        sample_coordinates(ontology, _SEED, count=_PLAN_SIZE),
+        ontology=ontology,
+        seed=_SEED,
+    )
 
 
 def test_resume_asks_for_a_middle_anchor_the_previous_run_abandoned(
@@ -584,43 +610,39 @@ def test_readout_reconciles_with_the_bank_and_names_the_missing_coordinate(
 ) -> None:
     """F1: ``coverage.json`` must never read green while the bank is short.
 
-    The construction rule's expected counts are shrunk to the plan double's size
-    so that ``within_rule`` would otherwise be *true* — the test then measures
-    the bank reconciliation, not "the double is deliberately small".  Run 1
-    abandons a middle entry; the readout has to report ``within_rule=false`` and
-    name ``resumed-2``.  Run 2 fills it and the readout turns truthful again.
+    The plan is the rule's own first ``_PLAN_SIZE`` coordinates, measured against
+    ``count = _PLAN_SIZE``, so the readout would read green if the bank were
+    complete.  Run 1 abandons a middle entry; the readout has to report
+    ``within_rule=false`` and name that entry.  Run 2 fills it and the readout
+    turns truthful again.
     """
     from ard.config import load_config
-    from ard.core import sampling as sampling_module
     from ard.pipeline import run
 
-    monkeypatch.setattr(sampling_module, "EXPECTED_TOTAL", _PLAN_SIZE)
-    monkeypatch.setattr(sampling_module, "EXPECTED_TEXT_BLOCKS", 0)
-    monkeypatch.setattr(sampling_module, "EXPECTED_IMAGE_BLOCKS", 0)
-    monkeypatch.setattr(sampling_module, "EXPECTED_KNOWLEDGE_DOMAINS", _PLAN_SIZE)
-    monkeypatch.setattr(sampling_module, "EXPECTED_VISUAL_DOMAINS", 0)
+    plan = _rule_plan()
+    abandoned_id = plan[2].id
 
-    def plan(_config: object) -> list[AnchorSpec]:
-        return _distinct_plan()
+    def sampler(_config: object) -> list[AnchorSpec]:
+        return plan
 
     output_dir, bank, _spy, _ = _resume_rig(
-        tmp_path, monkeypatch, existing=0, abandoned={"resumed-2"}
+        tmp_path, monkeypatch, existing=0, abandoned={abandoned_id}
     )
-    run(load_config(tmp_path / "config.toml"), generate_specs=plan)
+    run(load_config(tmp_path / "config.toml"), generate_specs=sampler)
 
     coverage = json.loads((output_dir / "results" / "coverage.json").read_text(encoding="utf-8"))
     assert coverage["structure"]["within_rule"] is False, (
         "a bank short a planned coordinate must not be reported as within the rule"
     )
     assert any(
-        "missing 1 planned coordinate" in warning and "resumed-2" in warning
+        "missing 1 planned coordinate" in warning and abandoned_id in warning
         for warning in coverage["warnings"]
     ), "the readout must name the missing coordinate, not only flip the flag"
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["total_anchors"] == _PLAN_SIZE - 1
 
     monkeypatch.setattr("ard.pipeline.generate_text_anchors", _RunSpy("resumed"))
-    run(load_config(tmp_path / "config.toml"), generate_specs=plan)
+    run(load_config(tmp_path / "config.toml"), generate_specs=sampler)
 
     coverage = json.loads((output_dir / "results" / "coverage.json").read_text(encoding="utf-8"))
     assert coverage["structure"]["within_rule"] is True
@@ -665,7 +687,22 @@ def test_a_run_records_its_plan_identity_in_the_manifest(
     run(load_config(tmp_path / "config.toml"), generate_specs=plan)
 
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["plan_identity"] == PlanIdentity.of(_plan()).as_dict()
+    # The injected plan replaces the sampler, so its fingerprint is the explicit
+    # "unknown" "" — but the coverage-enabled run still loaded the real ontology,
+    # so the plan is described as ``_PLAN_SIZE`` positions of the ontology's own U.
+    from ard.backends.ontology_loader import load_ontology_v4
+    from ard.core.sampling import unit_total
+
+    assert (
+        manifest["plan_identity"]
+        == PlanIdentity.of(
+            _plan(),
+            ontology_sha256="",
+            seed=_SEED,
+            count=_PLAN_SIZE,
+            unit_total=unit_total(load_ontology_v4(_ONTOLOGY)),
+        ).as_dict()
+    )
 
 
 def test_resume_with_a_different_seed_but_the_same_plan_is_allowed(
@@ -707,7 +744,7 @@ def test_resume_with_a_different_plan_is_refused(
     before = bank.read_text(encoding="utf-8")
     snapshot = (output_dir / "config.toml").read_text(encoding="utf-8")
 
-    with pytest.raises(ConfigError, match="holds a different plan"):
+    with pytest.raises(ConfigError, match="not part of this run's plan"):
         run(
             load_config(tmp_path / "config.toml"),
             generate_specs=lambda config: _plan_tagged("other"),

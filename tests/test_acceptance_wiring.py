@@ -4,7 +4,8 @@
 # path costs zero model calls and announces itself in a WARNING, that the mock-
 # embedded metric path reaches the artifacts with its space declared, that a bad
 # target set is refused *before* the output directory exists, and that both
-# shipped configs carry the same coverage fields (§7.1 mirror).
+# shipped configs mirror each other's coverage fields and full field set
+# (§7.1 mirror).
 #
 # No test dials a real endpoint: the metric-path test installs an in-process
 # ``httpx.MockTransport``, the structure-only test installs a client that fails
@@ -32,6 +33,10 @@ from ard.domain.bank import append_anchor
 
 _REAL_HTTPX_CLIENT = httpx.Client
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+#: The production ontology.  The injected-plan seam still passes this to the
+#: acceptance readout: the structure readout is defined against the run's own
+#: sampling space, so it needs the real ontology even when the plan is injected.
+_V4_ONTOLOGY = str(_REPO_ROOT / "ontology" / "anchor_ontology.v4.json")
 API_BASE = "https://mock.invalid/v1"
 API_KEY = "sk-test-PIPELINE-DEADBEEF"
 MODEL = "mock-embed"
@@ -65,7 +70,7 @@ def _write_config(
     coverage_block: str,
     *,
     overwrite: bool = False,
-    ontology_path: str = "unused.json",
+    ontology_path: str = _V4_ONTOLOGY,
 ) -> None:
     path.write_text(
         "\n".join(
@@ -218,7 +223,11 @@ def test_structure_only_run_writes_the_readout_without_any_model_call(
     assert report["metrics"] is None
     assert any("metric readout not measured" in warning for warning in report["warnings"])
     assert report["structure"]["plan_total"] == _PLAN_SIZE
-    assert report["structure"]["within_rule"] is False
+    # The readout's expectations now come from the plan's own ``count`` (= its
+    # length on the injected seam): three planned entries against a count of
+    # three is exactly the rule's shape, so it reads green.  The old fixed
+    # "= 1,826" expectation is what WP-5 removed.
+    assert report["structure"]["within_rule"] is True
     assert "not computed" in markdown
     assert manifest["acceptance"]["metric_readout"] is False
     assert manifest["acceptance"]["q95"] is None
@@ -241,8 +250,6 @@ def test_disabled_acceptance_phase_writes_nothing(
 
 
 # ── Smoke run (--smoke): same rule, reduced scale, self-proving artifact ────
-
-_V4_ONTOLOGY = str(_REPO_ROOT / "ontology" / "anchor_ontology.v4.json")
 
 
 def test_smoke_run_is_marked_in_all_three_places_and_costs_no_model_call(
@@ -282,8 +289,11 @@ def test_smoke_run_is_marked_in_all_three_places_and_costs_no_model_call(
     report = json.loads((result_dir / "results" / "coverage.json").read_text(encoding="utf-8"))
     assert report["metrics"] is None
     assert report["structure"]["plan_total"] == 8
-    assert report["structure"]["expected_total"] == 1826
-    assert report["structure"]["within_rule"] is False
+    # A smoke plan is measured against its OWN count (8), not against one full
+    # cycle: the old expectation of 1,826 turned a normal smoke artifact into a
+    # reported violation ("the fixed wrong", WP-5).
+    assert report["structure"]["expected_total"] == 8
+    assert report["structure"]["within_rule"] is True
     assert (result_dir / "results" / "coverage.md").is_file()
 
     # the non-smoke path is untouched: full plan, and no smoke config field
@@ -562,3 +572,46 @@ def test_both_configs_mirror_the_coverage_fields() -> None:
     assert sample_paths <= set(_leaf_paths(base)), (
         "the sample config must not introduce fields the base config lacks"
     )
+
+
+# The coverage-only check above missed `[generation] count` when v5 turned N
+# into a configuration field: the sample template still said N was not
+# configurable, so a user following the README's copy step never saw the field
+# and the "N is user-settable" path was broken end to end. Mirror *every*
+# section's field names — commented-out template lines included — so a field
+# cannot land in one config and be forgotten in the other.
+
+_BOOLEAN_LITERALS = frozenset({"true", "false"})
+
+
+def _declared_field_names(text: str) -> dict[str, set[str]]:
+    """Field names per ``[section]``, counting commented-out template lines."""
+    fields: dict[str, set[str]] = {}
+    section: str | None = None
+    for line in text.splitlines():
+        header = re.match(r"\s*\[([^\[\]]+)\]", line)
+        if header:
+            section = header.group(1)
+            fields.setdefault(section, set())
+            continue
+        field = re.match(r"\s*#?\s*([A-Za-z_][A-Za-z0-9_]*)\s*=", line)
+        if field and section is not None and field.group(1).lower() not in _BOOLEAN_LITERALS:
+            fields[section].add(field.group(1))
+    return fields
+
+
+def test_both_configs_mirror_every_field_name() -> None:
+    """config.toml and its override template declare the same field set (§1.4)."""
+    base = _declared_field_names(
+        (_REPO_ROOT / "configs" / "config.toml").read_text(encoding="utf-8")
+    )
+    sample = _declared_field_names(
+        (_REPO_ROOT / "configs" / "config.override.sample.toml").read_text(encoding="utf-8")
+    )
+
+    assert set(base) == set(sample)
+    for section in sorted(base):
+        missing = sorted(base[section] - sample[section])
+        assert not missing, f"[{section}] fields missing from the sample template: {missing}"
+        extra = sorted(sample[section] - base[section])
+        assert not extra, f"[{section}] fields the sample template adds: {extra}"
