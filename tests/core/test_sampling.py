@@ -1,47 +1,71 @@
-"""Contract tests for the v4 construction rule in :mod:`ard.core.sampling`.
+"""Invariant and negative-control tests for the v5 cycle-shuffle sampler.
 
-The rule is a *count contract*: one sample per legal restricted block, one per
-rotated ``knowledge_domain`` leaf, one per rotated ``visual_domain`` leaf in the
-image modality.  These tests pin the numbers the rule produces against the real
-shipped ontology (935 + 891 = 1,826) and pin the failure behaviour when an
-ontology drifts away from them — a silently shorter plan is the one outcome the
-rule must never allow (§2.3 边界校验即防呆).
+The v5 rule has no hard-coded counts: every number a test needs is derived from
+the ontology at runtime (``unit_total`` / ``knowledge_leaf_count`` /
+``visual_leaf_count`` / ``max_plan_size``), so adding an ontology leaf or block
+does not make a test fail.  What is pinned instead is the *behaviour*:
+
+* ``count=None`` is exactly one full cycle;
+* within a cycle every unit appears once, so units and coordinates are distinct
+  **within a cycle** — a test invariant, not a runtime gate;
+* one full cycle covers every knowledge and visual leaf;
+* coverage is monotone non-decreasing in N and ``plan(seed, N1)`` is a prefix of
+  ``plan(seed, N2)``;
+* a coordinate may recur and every occurrence is kept: the anchor id is a plan
+  position (``<run>-c<cycle>p<position>``), not a content fingerprint;
+* a plan's identity is reproducible across processes and distinguishes a
+  different ontology / seed / N / algorithm version;
+* anchor ids are pairwise distinct, byte-stable as N grows, and readable;
+* only ``count >= 1`` is refused — a large N is reported, never rejected.
+
+The negative control at the bottom is the evidence that the prefix check is not
+vacuous: it mutates the free-axis derivation to depend on N and asserts the
+suite's own assertion goes red.
 """
 
 from __future__ import annotations
 
-import json
-from dataclasses import replace
+import os
+import random
+import re
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
-from ard.backends.ontology_loader import load_ontology_v4
-from ard.config import load_config
-from ard.core.constraints import ConstraintEvaluator, LegalBlockCounts, RestrictedBlock
-from ard.core.ontology import OntologyV4
+from ard.core import sampling
 from ard.core.sampling import (
-    EXPECTED_IMAGE_BLOCKS,
-    EXPECTED_KNOWLEDGE_DOMAINS,
-    EXPECTED_TEXT_BLOCKS,
-    EXPECTED_TOTAL,
-    EXPECTED_VISUAL_DOMAINS,
-    MULTI_TURN_DEFAULT,
+    MODALITY_IMAGE,
+    MODALITY_TEXT,
     PLAN_IDENTITY_ALGORITHM,
     PLAN_IDENTITY_VERSION,
-    SMOKE_IMAGE_BLOCKS,
-    SMOKE_PLAN_SIZE,
-    SMOKE_SCALE,
-    SMOKE_TEXT_BLOCKS,
-    AnchorCoordinate,
+    SAMPLING_ALGORITHM,
+    Coordinate,
+    CoverageUnit,
     PlanIdentity,
     SamplingError,
+    _hash_seed,
+    _iter_plan,
+    build_specs,
+    coverage_units,
+    format_anchor_id,
+    knowledge_leaf_count,
+    max_plan_size,
+    ontology_sha256,
+    plan_rounds,
+    run_key,
     sample_anchors,
     sample_coordinates,
     turn_counts_by_conversation_type,
+    unit_total,
+    visual_leaf_count,
 )
-from ard.core.types import AnchorGenerationConfig, AnchorSpec
+from ard.core.types import AnchorGenerationConfig
 
-ONTOLOGY_PATH = "ontology/anchor_ontology.v4.json"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ONTOLOGY_PATH = REPO_ROOT / "ontology" / "anchor_ontology.v4.json"
+
 RESTRICTED_AXES = (
     "capability",
     "system_prompt_mode",
@@ -51,491 +75,602 @@ RESTRICTED_AXES = (
     "answer_mode",
 )
 
-
-# ── fixtures (the ontology is parsed once per session) ──────────────────────
-
-
-@pytest.fixture(scope="module")
-def ontology() -> OntologyV4:
-    return load_ontology_v4(ONTOLOGY_PATH)
+SEED = 20260925
 
 
-@pytest.fixture(scope="module")
-def plan(ontology: OntologyV4) -> tuple[AnchorCoordinate, ...]:
-    return sample_coordinates(ontology, seed=20260925)
+# ── derivation helpers (no expected count is ever written down) ─────────────
 
 
-def _block_key(coordinate: AnchorCoordinate) -> tuple[str, ...]:
-    values = coordinate.as_dict()
-    return tuple(values[axis] for axis in RESTRICTED_AXES)
+def _block_key(coordinate: Coordinate) -> tuple[str, ...]:
+    meta = coordinate.as_dict()
+    return tuple(meta[axis] for axis in RESTRICTED_AXES)
 
 
-def _text_plan(plan: tuple[AnchorCoordinate, ...]) -> list[AnchorCoordinate]:
-    return [c for c in plan if c.modality == "text_only"]
+def _unit_key(coordinate: Coordinate) -> tuple[str, tuple[str, ...]]:
+    return (coordinate.modality, _block_key(coordinate))
 
 
-def _image_plan(plan: tuple[AnchorCoordinate, ...]) -> list[AnchorCoordinate]:
-    return [c for c in plan if c.modality == "image"]
+def _coordinate_key(coordinate: Coordinate) -> tuple[tuple[str, str], ...]:
+    return tuple(coordinate.as_dict().items())
 
 
-# ── the four counts + the total ─────────────────────────────────────────────
+def _is_prefix(short: list[Coordinate], long: list[Coordinate]) -> bool:
+    return len(short) <= len(long) and short == long[: len(short)]
 
 
-def test_rule_total_is_1826(plan: tuple[AnchorCoordinate, ...]) -> None:
-    assert len(plan) == EXPECTED_TOTAL == 1826
+def _ids(ontology, seed: int, count: int) -> list[str]:
+    """Return the ids of the first ``count`` plan positions, from the formula."""
+    run = run_key(ontology, seed)
+    total = unit_total(ontology)
+    return [format_anchor_id(run, *divmod(index, total)) for index in range(count)]
 
 
-def test_text_blocks_cover_935_of_935(plan: tuple[AnchorCoordinate, ...]) -> None:
-    text = _text_plan(plan)
-    blocks = {_block_key(c) for c in text}
-    assert len(text) == EXPECTED_TEXT_BLOCKS == 935
-    assert len(blocks) == EXPECTED_TEXT_BLOCKS, "every text block exactly once"
-    assert all(c.visual_domain is None for c in text)
+def _identity(ontology, coordinates, *, seed: int, count: int | None) -> PlanIdentity:
+    return PlanIdentity.of(
+        build_specs(coordinates, ontology=ontology, seed=seed),
+        ontology_sha256=ontology_sha256(ontology),
+        seed=seed,
+        count=count,
+        unit_total=unit_total(ontology),
+    )
 
 
-def test_image_blocks_cover_891_of_891(plan: tuple[AnchorCoordinate, ...]) -> None:
-    image = _image_plan(plan)
-    blocks = {_block_key(c) for c in image}
-    assert len(image) == EXPECTED_IMAGE_BLOCKS == 891
-    assert len(blocks) == EXPECTED_IMAGE_BLOCKS, "every image block exactly once"
+# ── 1. count=None is exactly one full cycle ─────────────────────────────────
 
 
-def test_knowledge_domain_covers_209_of_209(
-    ontology: OntologyV4, plan: tuple[AnchorCoordinate, ...]
-) -> None:
-    covered = {c.knowledge_domain for c in plan}
-    declared = set(ontology.axis_values("knowledge_domain"))
-    assert len(covered) == EXPECTED_KNOWLEDGE_DOMAINS == 209
-    assert covered == declared, "the rotation must visit every declared leaf"
+def test_count_none_is_exactly_one_full_cycle(ontology) -> None:
+    total = unit_total(ontology)
+    plan = sample_coordinates(ontology, seed=SEED)
 
-
-def test_visual_domain_covers_21_of_21(
-    ontology: OntologyV4, plan: tuple[AnchorCoordinate, ...]
-) -> None:
-    covered = {c.visual_domain for c in _image_plan(plan)}
-    declared = set(ontology.axis_values("visual_domain"))
-    assert len(covered) == EXPECTED_VISUAL_DOMAINS == 21
-    assert covered == declared
-
-
-def test_no_duplicate_coordinates(plan: tuple[AnchorCoordinate, ...]) -> None:
-    identities = [tuple(c.as_dict().items()) for c in plan]
-    assert len(set(identities)) == len(identities) == EXPECTED_TOTAL
-
-
-def test_image_blocks_are_the_image_capable_subspace(
-    ontology: OntologyV4, plan: tuple[AnchorCoordinate, ...]
-) -> None:
-    """The 891 image blocks are exactly the evaluator's image-capable subset."""
-    evaluator = ConstraintEvaluator(ontology)
-    expected = {
-        _block_key(
-            AnchorCoordinate(
-                modality="image",
-                language="ignored",
-                knowledge_domain="ignored",
-                capability=block.capability,
-                system_prompt_mode=block.system_prompt_mode,
-                conversation_type=block.conversation_type,
-                response_style="ignored",
-                output_format=block.output_format,
-                difficulty="ignored",
-                context_length="ignored",
-                input_condition=block.input_condition,
-                answer_mode=block.answer_mode,
-                visual_domain="ignored",
-            )
-        )
-        for block in evaluator.enumerate_legal_blocks(image_capable_only=True)
+    assert len(plan) == total
+    assert len({_unit_key(coordinate) for coordinate in plan}) == total
+    declared = {
+        (unit.modality, tuple(unit.block.as_dict()[axis] for axis in RESTRICTED_AXES))
+        for unit in coverage_units(ontology)
     }
-    assert {_block_key(c) for c in _image_plan(plan)} == expected
+    assert {_unit_key(coordinate) for coordinate in plan} == declared
 
 
-# ── the smoke scale: the same rule, fewer blocks ────────────────────────────
+def test_coverage_units_are_text_then_image_in_enumeration_order(ontology) -> None:
+    units = coverage_units(ontology)
+    modalities = [unit.modality for unit in units]
+
+    assert all(isinstance(unit, CoverageUnit) for unit in units)
+    assert modalities == sorted(modalities, key=lambda m: 0 if m == MODALITY_TEXT else 1)
+    assert modalities.count(MODALITY_TEXT) >= 1
+    assert modalities.count(MODALITY_IMAGE) >= 1
+    assert len(units) == unit_total(ontology)
+    assert max_plan_size(ontology) == knowledge_leaf_count(ontology) * len(units)
 
 
-def test_smoke_scale_declares_four_text_and_four_image_blocks() -> None:
-    assert SMOKE_SCALE.text_blocks == SMOKE_TEXT_BLOCKS == 4
-    assert SMOKE_SCALE.image_blocks == SMOKE_IMAGE_BLOCKS == 4
-    assert SMOKE_PLAN_SIZE == 8
+# ── 2. in-cycle distinctness (a test invariant, no runtime gate) ────────────
 
 
-def test_evenly_spaced_indices_pin_the_selection_rule() -> None:
-    """The smoke selection is named arithmetic, not a slice — pinned by value.
+@pytest.mark.parametrize("count", [1, 137, 900])
+def test_within_a_cycle_units_and_coordinates_are_distinct(ontology, count: int) -> None:
+    plan = sample_coordinates(ontology, seed=SEED, count=count)
 
-    Indices span the whole enumeration with both endpoints included; the values
-    below are the shipped rule for 935 text / 891 image blocks.
-    """
-    from ard.core import sampling
-
-    assert sampling._evenly_spaced_indices(935, 4) == (0, 311, 622, 934)
-    assert sampling._evenly_spaced_indices(891, 4) == (0, 296, 593, 890)
-    assert sampling._evenly_spaced_indices(3, 1) == (0,)
-    assert sampling._evenly_spaced_indices(2, 5) == (0, 1)  # more than there are
-    with pytest.raises(SamplingError, match="not a plan"):
-        sampling._evenly_spaced_indices(935, 0)
+    assert len(plan) == count
+    assert len({_unit_key(coordinate) for coordinate in plan}) == count
+    assert len({_coordinate_key(coordinate) for coordinate in plan}) == count
 
 
-def test_smoke_plan_is_a_subset_of_the_full_plans_blocks(
-    ontology: OntologyV4,
-) -> None:
-    """The smoke plan enumerates the same rule's blocks — just 4 + 4 of them."""
-    smoke = sample_coordinates(ontology, seed=20260925, scale=SMOKE_SCALE)
-    full = sample_coordinates(ontology, seed=20260925)
+def test_a_full_cycle_repeats_no_unit(ontology) -> None:
+    total = unit_total(ontology)
+    plan = sample_coordinates(ontology, seed=SEED, count=total)
 
-    assert len(smoke) == SMOKE_PLAN_SIZE
-    assert [c.modality for c in smoke] == ["text_only"] * 4 + ["image"] * 4
-    assert len({c.identity() for c in smoke}) == SMOKE_PLAN_SIZE  # no repeats
-
-    evaluator = ConstraintEvaluator(ontology)
-    from ard.core import sampling
-
-    text_all = evaluator.enumerate_legal_blocks()
-    image_all = evaluator.enumerate_legal_blocks(image_capable_only=True)
-    text_taken = [_block_key(c) for c in smoke if c.modality == "text_only"]
-    image_taken = [_block_key(c) for c in smoke if c.modality == "image"]
-    assert text_taken == [
-        tuple(getattr(block, axis) for axis in RESTRICTED_AXES)
-        for block in (text_all[i] for i in sampling._evenly_spaced_indices(935, 4))
-    ]
-    assert image_taken == [
-        tuple(getattr(block, axis) for axis in RESTRICTED_AXES)
-        for block in (image_all[i] for i in sampling._evenly_spaced_indices(891, 4))
-    ]
-    # each modality's smoke blocks are a subset of the same modality's full set
-    assert set(text_taken) <= {_block_key(c) for c in full if c.modality == "text_only"}
-    assert set(image_taken) <= {_block_key(c) for c in full if c.modality == "image"}
+    assert len({_unit_key(coordinate) for coordinate in plan}) == total
 
 
-def test_smoke_spec_plan_is_byte_identical_for_the_same_seed(
-    ontology: OntologyV4,
-) -> None:
-    """Same seed, two smoke runs → the same bytes; a different seed → not."""
-    config = AnchorGenerationConfig(seed=99)
+# ── 3. one cycle covers every leaf ──────────────────────────────────────────
 
-    def fingerprint() -> str:
-        specs = sample_anchors(ontology, config, scale=SMOKE_SCALE)
-        return json.dumps(
-            [
-                {
-                    "id": spec.id,
-                    "meta": spec.anchor_meta,
-                    "turns": [(t.turn_index, t.role, t.is_final) for t in spec.turns],
-                }
-                for spec in specs
-            ],
-            sort_keys=True,
-            ensure_ascii=False,
+
+@pytest.mark.parametrize("extra", [0, 137])
+def test_a_full_cycle_covers_every_knowledge_and_visual_leaf(ontology, extra: int) -> None:
+    total = unit_total(ontology)
+    plan = sample_coordinates(ontology, seed=SEED, count=total + extra)
+
+    knowledge = {coordinate.knowledge_domain for coordinate in plan}
+    visual = {
+        coordinate.visual_domain for coordinate in plan if coordinate.visual_domain is not None
+    }
+    assert knowledge == set(ontology.axis_values("knowledge_domain"))
+    assert len(knowledge) == knowledge_leaf_count(ontology)
+    assert visual == set(ontology.axis_values("visual_domain"))
+    assert len(visual) == visual_leaf_count(ontology)
+
+    for coordinate in plan:
+        if coordinate.modality == MODALITY_TEXT:
+            assert coordinate.visual_domain is None
+        else:
+            assert coordinate.modality == MODALITY_IMAGE
+            assert coordinate.visual_domain is not None
+
+
+# ── 4 & 5. monotone coverage and the prefix property ────────────────────────
+
+
+def test_coverage_is_monotone_non_decreasing_in_n(ontology) -> None:
+    total = unit_total(ontology)
+    counts = [1, 17, 500, total, total + 1, 2 * total]
+
+    units_seen = 0
+    knowledge_seen: set[str] = set()
+    visual_seen: set[str] = set()
+    knowledge_count = 0
+    visual_count = 0
+    previous: list[Coordinate] = []
+
+    for count in counts:
+        plan = sample_coordinates(ontology, seed=SEED, count=count)
+        assert _is_prefix(previous, plan)
+        previous = plan
+
+        units = {_unit_key(coordinate) for coordinate in plan}
+        assert len(units) >= units_seen
+        units_seen = len(units)
+
+        knowledge_seen |= {coordinate.knowledge_domain for coordinate in plan}
+        visual_seen |= {
+            coordinate.visual_domain for coordinate in plan if coordinate.visual_domain is not None
+        }
+        assert len(knowledge_seen) >= knowledge_count
+        assert len(visual_seen) >= visual_count
+        knowledge_count = len(knowledge_seen)
+        visual_count = len(visual_seen)
+
+    assert units_seen == total
+    assert len(knowledge_seen) == knowledge_leaf_count(ontology)
+    assert len(visual_seen) == visual_leaf_count(ontology)
+
+
+def test_plan_is_a_prefix_of_every_longer_plan(ontology) -> None:
+    total = unit_total(ontology)
+    short = sample_coordinates(ontology, seed=SEED, count=max(1, total // 3))
+    long = sample_coordinates(ontology, seed=SEED, count=3 * total)
+
+    assert _is_prefix(short, long)
+    assert short == long[: len(short)]
+
+
+def test_a_different_seed_builds_a_different_plan(ontology) -> None:
+    a = sample_coordinates(ontology, seed=SEED, count=200)
+    b = sample_coordinates(ontology, seed=SEED + 1, count=200)
+
+    assert a != b
+
+
+# ── 6. cross-process determinism ────────────────────────────────────────────
+
+_SUBPROCESS_SCRIPT = """
+import sys, types
+
+# Import the package without running `ard/__init__.py`: this test only needs the
+# core sampling layer, and pre-registering the package keeps the fingerprint
+# check independent of unrelated modules' import side effects.
+package = types.ModuleType("ard")
+package.__path__ = [{ard_path!r}]
+sys.modules["ard"] = package
+
+from ard.backends.ontology_loader import load_ontology_v4
+from ard.core import sampling
+from ard.core.types import AnchorGenerationConfig
+
+ontology = load_ontology_v4({ontology_path!r})
+count = 25
+seed = {seed!r}
+specs = sampling.sample_anchors(ontology, AnchorGenerationConfig(seed=seed), count=count)
+print(sampling.run_key(ontology, seed))
+print(" ".join(spec.id for spec in specs[:3]))
+print(sampling.PlanIdentity.of(
+    specs,
+    ontology_sha256=sampling.ontology_sha256(ontology),
+    seed=seed,
+    count=count,
+    unit_total=sampling.unit_total(ontology),
+).digest)
+"""
+
+
+def test_run_key_ids_and_identity_are_identical_across_processes(ontology) -> None:
+    script = _SUBPROCESS_SCRIPT.format(
+        ard_path=str(REPO_ROOT / "src" / "ard"),
+        ontology_path=str(ONTOLOGY_PATH),
+        seed=SEED,
+    )
+    outputs = []
+    for hash_seed in ("0", "1", "31337"):
+        environment = dict(os.environ, PYTHONHASHSEED=hash_seed)
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=str(REPO_ROOT),
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=True,
         )
+        outputs.append(result.stdout.strip())
 
-    first = fingerprint()
-    assert len(json.loads(first)) == SMOKE_PLAN_SIZE
-    assert first == fingerprint()
-    assert first != json.dumps(
+    assert len(set(outputs)) == 1
+
+    specs = sample_anchors(ontology, AnchorGenerationConfig(seed=SEED), count=25)
+    in_process = "\n".join(
         [
-            {
-                "id": spec.id,
-                "meta": spec.anchor_meta,
-                "turns": [(t.turn_index, t.role, t.is_final) for t in spec.turns],
-            }
-            for spec in sample_anchors(
-                ontology, AnchorGenerationConfig(seed=100), scale=SMOKE_SCALE
-            )
-        ],
-        sort_keys=True,
-        ensure_ascii=False,
+            run_key(ontology, SEED),
+            " ".join(spec.id for spec in specs[:3]),
+            _identity(
+                ontology,
+                sample_coordinates(ontology, seed=SEED, count=25),
+                seed=SEED,
+                count=25,
+            ).digest,
+        ]
     )
+    assert outputs[0] == in_process
 
 
-def test_a_full_run_is_unchanged_by_the_scale_knob(ontology: OntologyV4) -> None:
-    """Explicit ``scale=None`` and the default are the same 1,826-entry plan."""
-    config = AnchorGenerationConfig(seed=5)
-    assert sample_anchors(ontology, config) == sample_anchors(ontology, config, scale=None)
+# ── 7. identity distinguishes ontology / seed / N / algorithm version ───────
 
 
-# ── determinism (same seed → identical plan; different seed → not) ───────────
+def test_identity_is_stable_for_the_same_inputs(ontology) -> None:
+    plan = sample_coordinates(ontology, seed=SEED, count=64)
+    first = _identity(ontology, plan, seed=SEED, count=64)
+    second = _identity(ontology, plan, seed=SEED, count=64)
 
-
-def test_same_seed_yields_an_identical_plan(ontology: OntologyV4) -> None:
-    first = sample_coordinates(ontology, seed=7)
-    second = sample_coordinates(ontology, seed=7)
-    assert json.dumps([c.as_dict() for c in first], sort_keys=True) == json.dumps(
-        [c.as_dict() for c in second], sort_keys=True
-    )
-
-
-def test_a_different_seed_changes_the_plan(ontology: OntologyV4) -> None:
-    assert sample_coordinates(ontology, seed=7) != sample_coordinates(ontology, seed=8)
-
-
-def test_spec_plan_is_identical_for_the_same_seed(ontology: OntologyV4) -> None:
-    config = AnchorGenerationConfig(seed=99)
-
-    def fingerprint() -> str:
-        specs = sample_anchors(ontology, config)
-        return json.dumps(
-            [
-                {
-                    "id": spec.id,
-                    "meta": spec.anchor_meta,
-                    "turns": [(t.turn_index, t.role, t.is_final) for t in spec.turns],
-                }
-                for spec in specs
-            ],
-            sort_keys=True,
-            ensure_ascii=False,
-        )
-
-    assert fingerprint() == fingerprint()
-
-
-def test_spec_plan_has_one_spec_per_coordinate_and_unique_ids(
-    ontology: OntologyV4, plan: tuple[AnchorCoordinate, ...]
-) -> None:
-    specs = sample_anchors(ontology, AnchorGenerationConfig(seed=3))
-    assert len(specs) == EXPECTED_TOTAL
-    assert len({spec.id for spec in specs}) == EXPECTED_TOTAL
-    assert [spec.anchor_meta["modality"] for spec in specs] == [c.modality for c in plan], (
-        "plan order must be preserved (the resume path slices this list)"
-    )
-
-
-# ── turn counts: derived from the ontology ──────────────────────────────────
-
-
-def test_turn_counts_come_from_the_conversation_type_attribute(
-    ontology: OntologyV4,
-) -> None:
-    """Every declared count becomes an odd spec turn count ending on ``user``.
-
-    The ontology counts *exchanges*; an AnchorSpec carries the conversation
-    prefix that ends on the final user question, i.e. ``2 * n - 1`` turns.
-    """
-    counts = turn_counts_by_conversation_type(ontology)
-    assert set(counts) == set(ontology.axis_values("conversation_type"))
-    assert counts == {
-        "single_turn": 1,
-        "clarification": 3,
-        "troubleshooting": 5,
-        "iterative_revision": 5,
-        "constraint_update": 7,
-        "tool_assisted": 2 * MULTI_TURN_DEFAULT - 1,
-        "source_review": 2 * MULTI_TURN_DEFAULT - 1,
-    }
-    assert all(count % 2 == 1 and count >= 1 for count in counts.values())
-
-
-def test_multi_turn_bound_is_the_ontologys_largest_declared_count(
-    ontology: OntologyV4,
-) -> None:
-    """``"multi"`` resolves to the largest explicit count the ontology declares.
-
-    That is the documented basis of :data:`MULTI_TURN_DEFAULT`; if the ontology
-    ever declares something larger, the constant is stale and the resolution must
-    refuse rather than silently plan a shorter conversation.
-    """
-    spec = ontology.axes.spec("conversation_type")
-    declared = [
-        attributes.root["turns"]
-        for attributes in getattr(spec, "value_attributes").values()
-        if isinstance(attributes.root["turns"], int)
-    ]
-    assert isinstance(declared, list) and declared
-    assert max(declared) == MULTI_TURN_DEFAULT
-
-
-def test_an_unusable_turn_attribute_is_refused() -> None:
-    """A count that is neither a positive int nor the marker is not guessed at."""
-    from ard.core import sampling
-
-    with pytest.raises(SamplingError, match="unusable turns attribute"):
-        sampling._spec_turns("many", "tool_assisted")
-    with pytest.raises(SamplingError, match="unusable turns attribute"):
-        sampling._spec_turns(None, "tool_assisted")
-    with pytest.raises(SamplingError, match="unusable turns attribute"):
-        sampling._spec_turns(0, "single_turn")
-
-
-def test_a_declared_count_above_the_multi_bound_is_refused() -> None:
-    """A count above the ``"multi"`` bound would invalidate its documented basis."""
-    from ard.core import sampling
-
-    with pytest.raises(SamplingError, match="no longer"):
-        sampling._spec_turns(MULTI_TURN_DEFAULT + 1, "constraint_update")
-
-
-# ── no silent failure: counts and duplicates ────────────────────────────────
-
-
-def test_a_leaf_removal_is_refused(ontology: OntologyV4, monkeypatch: pytest.MonkeyPatch) -> None:
-    """An ontology edited without its counts must fail loudly, not sample short."""
-    tree = ontology.knowledge_domain_tree.root
-    first_domain = next(iter(tree))
-    first_subdomain = next(iter(tree[first_domain].root))
-    removed = tree[first_domain].root[first_subdomain].pop()
-    assert removed, "the fixture must actually remove a leaf"
-    try:
-        with pytest.raises(SamplingError) as excinfo:
-            sample_coordinates(ontology, seed=1)
-    finally:
-        tree[first_domain].root[first_subdomain].append(removed)
-
-    message = str(excinfo.value)
-    assert "knowledge_domain leaves" in message
-    assert "expected 209 (received: 208)" in message
-
-
-def test_truncated_block_enumeration_is_refused(
-    ontology: OntologyV4, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A wrong *block* count (not just a wrong leaf count) is refused too."""
-    real_enumerate = ConstraintEvaluator.enumerate_legal_blocks
-
-    def truncating(
-        self: ConstraintEvaluator, *, image_capable_only: bool = False
-    ) -> tuple[RestrictedBlock, ...]:
-        return real_enumerate(self, image_capable_only=image_capable_only)[:100]
-
-    monkeypatch.setattr(ConstraintEvaluator, "enumerate_legal_blocks", truncating)
-
-    with pytest.raises(SamplingError) as excinfo:
-        sample_coordinates(ontology, seed=1)
-
-    message = str(excinfo.value)
-    assert "legal restricted blocks (text)" in message
-    assert "expected 935 (received: 100)" in message
-
-
-def test_duplicate_coordinates_are_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A collision must be reported, never sampled twice."""
-    block = RestrictedBlock(
-        capability="qa",
-        system_prompt_mode="none",
-        conversation_type="single_turn",
-        output_format="paragraph",
-        input_condition="clean",
-        answer_mode="direct_answer",
-    )
-    coordinates = [
-        AnchorCoordinate(
-            modality="text_only",
-            language="English",
-            knowledge_domain="x",
-            capability=block.capability,
-            system_prompt_mode=block.system_prompt_mode,
-            conversation_type=block.conversation_type,
-            response_style="concise",
-            output_format=block.output_format,
-            difficulty="intermediate",
-            context_length="medium",
-            input_condition=block.input_condition,
-            answer_mode=block.answer_mode,
-        ),
-        AnchorCoordinate(
-            modality="text_only",
-            language="English",
-            knowledge_domain="x",
-            capability=block.capability,
-            system_prompt_mode=block.system_prompt_mode,
-            conversation_type=block.conversation_type,
-            response_style="concise",
-            output_format=block.output_format,
-            difficulty="intermediate",
-            context_length="medium",
-            input_condition=block.input_condition,
-            answer_mode=block.answer_mode,
-        ),
-    ]
-    from ard.core import sampling
-
-    with pytest.raises(SamplingError, match="duplicate coordinate"):
-        sampling._reject_duplicates(coordinates)
-
-
-# ── end-to-end wiring: shipped config → v4 ontology → plan ──────────────────
-
-
-def test_shipped_config_points_at_the_v4_ontology() -> None:
-    config = load_config("configs/config.toml")
-    assert config.ontology.path == ONTOLOGY_PATH == "ontology/anchor_ontology.v4.json"
-
-
-def test_shipped_config_has_no_count_or_fps_fields() -> None:
-    generation = load_config("configs/config.toml").generation
-    for removed in (
-        "target_count",
-        "criterion",
-        "embeddings_path",
-        "task_types",
-        "languages",
-        "max_turns",
-        "max_turns_with_image",
-    ):
-        assert not hasattr(generation, removed), f"{removed} must not be a config field"
-
-
-def test_pipeline_plan_matches_the_rule_contract(ontology: OntologyV4) -> None:
-    from ard.pipeline import sample_specs
-
-    config = load_config("configs/config.toml")
-    specs = sample_specs(config)
-    assert len(specs) == EXPECTED_TOTAL
-    assert [spec.anchor_meta["modality"] for spec in specs].count("text_only") == (
-        EXPECTED_TEXT_BLOCKS
-    )
-    assert [spec.anchor_meta["modality"] for spec in specs].count("image") == (
-        EXPECTED_IMAGE_BLOCKS
-    )
-
-
-def test_free_axis_product_is_unchanged_by_the_rule(ontology: OntologyV4) -> None:
-    """The evaluator's five-free-axis product is untouched by this module."""
-    evaluator = ConstraintEvaluator(ontology)
-    assert evaluator.free_axis_product() == 52668
-    counts: LegalBlockCounts = evaluator.legal_block_counts()
-    assert counts.legal_restricted_block == EXPECTED_TEXT_BLOCKS
-    assert counts.legal_restricted_block_image_capable == EXPECTED_IMAGE_BLOCKS
-
-
-# ── plan identity: the digest names the plan, not the seed ──────────────────
-
-
-def _smoke_specs(ontology: OntologyV4, seed: int = 7) -> list[AnchorSpec]:
-    return sample_anchors(ontology, AnchorGenerationConfig(seed=seed), scale=SMOKE_SCALE)
-
-
-def test_plan_identity_is_stable_and_names_the_plan_size(ontology: OntologyV4) -> None:
-    """The identity is a pure function of the ordered plan (same plan, same digest)."""
-    plan = _smoke_specs(ontology)
-    first = PlanIdentity.of(plan)
-    assert first == PlanIdentity.of(plan)
+    assert first == second
+    assert first.version == PLAN_IDENTITY_VERSION == 2
     assert first.algorithm == PLAN_IDENTITY_ALGORITHM
-    assert first.version == PLAN_IDENTITY_VERSION
-    assert first.plan_size == SMOKE_PLAN_SIZE
-    assert len(first.digest) == 64
-    assert set(first.digest) <= set("0123456789abcdef")
-    assert first.as_dict() == {
-        "algorithm": PLAN_IDENTITY_ALGORITHM,
-        "version": PLAN_IDENTITY_VERSION,
-        "plan_size": SMOKE_PLAN_SIZE,
-        "digest": first.digest,
+    assert first.sampling == SAMPLING_ALGORITHM == "cycle-shuffle/v1"
+    assert first.unit_total == unit_total(ontology)
+    assert first.plan_size == 64
+    assert first.count == 64
+    assert set(first.as_dict()) == {
+        "algorithm",
+        "version",
+        "sampling",
+        "ontology_sha256",
+        "seed",
+        "count",
+        "unit_total",
+        "plan_size",
+        "digest",
     }
 
 
-def test_plan_identity_changes_with_the_plan_not_just_the_seed(ontology: OntologyV4) -> None:
-    """Same seed, different plan ⇒ different digest; different seed ⇒ different plan."""
-    plan = _smoke_specs(ontology, seed=7)
-    reordered = list(reversed(plan))
-    assert PlanIdentity.of(reordered).digest != PlanIdentity.of(plan).digest
-    renamed = [replace(spec, id=f"{spec.id}-x") for spec in plan]
-    assert PlanIdentity.of(renamed).digest != PlanIdentity.of(plan).digest
-    assert PlanIdentity.of(_smoke_specs(ontology, seed=8)).digest != PlanIdentity.of(plan).digest
+def test_identity_distinguishes_ontology_seed_n_and_algorithm(ontology, monkeypatch) -> None:
+    plan = sample_coordinates(ontology, seed=SEED, count=64)
+    base = _identity(ontology, plan, seed=SEED, count=64)
+
+    other_seed = sample_coordinates(ontology, seed=SEED + 1, count=64)
+    assert _identity(ontology, other_seed, seed=SEED + 1, count=64).digest != base.digest
+
+    longer = sample_coordinates(ontology, seed=SEED, count=65)
+    assert _identity(ontology, longer, seed=SEED, count=65).digest != base.digest
+
+    foreign_ontology = PlanIdentity.of(
+        build_specs(plan, ontology=ontology, seed=SEED),
+        ontology_sha256="0" * 64,
+        seed=SEED,
+        count=64,
+        unit_total=unit_total(ontology),
+    )
+    assert foreign_ontology.digest != base.digest
+
+    monkeypatch.setattr(sampling, "PLAN_IDENTITY_VERSION", PLAN_IDENTITY_VERSION + 1)
+    assert _identity(ontology, plan, seed=SEED, count=64).digest != base.digest
+    monkeypatch.undo()
+
+    monkeypatch.setattr(sampling, "SAMPLING_ALGORITHM", "cycle-shuffle/v2")
+    assert _identity(ontology, plan, seed=SEED, count=64).digest != base.digest
 
 
-def test_plan_identity_does_not_depend_on_metadata_key_order(ontology: OntologyV4) -> None:
-    """A coordinate is its values, not the insertion order of its mapping."""
-    plan = _smoke_specs(ontology)
-    shuffled = [
-        replace(spec, anchor_meta=dict(reversed(list(spec.anchor_meta.items())))) for spec in plan
-    ]
-    assert PlanIdentity.of(shuffled) == PlanIdentity.of(plan)
+# ── 8. anchor ids: serial numbers, not content fingerprints ─────────────────
+
+
+def test_run_key_is_content_derived_and_scoped_to_the_run(ontology, monkeypatch) -> None:
+    key = run_key(ontology, SEED)
+
+    assert re.fullmatch(r"[0-9a-f]{8}", key)
+    assert run_key(ontology, SEED) == key
+    assert run_key(ontology, SEED + 1) != key
+
+    mutated = ontology.model_copy(update={"version": "0.0.0-not-the-shipped-one"})
+    assert ontology_sha256(mutated) != ontology_sha256(ontology)
+    assert run_key(mutated, SEED) != key
+
+    monkeypatch.setattr(sampling, "SAMPLING_ALGORITHM", "cycle-shuffle/v2")
+    assert run_key(ontology, SEED) != key
+
+
+def test_anchor_id_is_readable_and_recovers_the_plan_position(ontology) -> None:
+    total = unit_total(ontology)
+    run = run_key(ontology, SEED)
+    plan = sample_coordinates(ontology, seed=SEED, count=total + 4)
+    specs = build_specs(plan, ontology=ontology, seed=SEED)
+
+    for index, spec in enumerate(specs):
+        cycle, position = divmod(index, total)
+        assert spec.id == f"{run}-c{cycle:05d}p{position:05d}"
+        match = re.fullmatch(r"(?P<run>[0-9a-f]{8})-c(?P<cycle>\d{5})p(?P<position>\d{5})", spec.id)
+        assert match is not None
+        assert int(match["cycle"]) == cycle
+        assert int(match["position"]) == position
+
+    assert specs[0].id.endswith("-c00000p00000")
+    assert re.fullmatch(r"[0-9a-f]{8}-c\d{5}p\d{5}", specs[-1].id)
+
+
+def test_anchor_ids_are_byte_stable_as_n_grows(ontology) -> None:
+    total = unit_total(ontology)
+    steps = [5, 5 + total, 2 * total + 7]
+
+    previous: list[str] = []
+    for count in steps:
+        specs = sample_anchors(ontology, AnchorGenerationConfig(seed=SEED), count=count)
+        ids = [spec.id for spec in specs]
+        assert len(ids) == count
+        assert ids[: len(previous)] == previous, f"growing N to {count} rewrote an existing id"
+        assert len(set(ids)) == count
+        previous = ids
+
+
+def test_anchor_ids_are_pairwise_distinct_with_no_dropped_entries(ontology) -> None:
+    total = unit_total(ontology)
+    for cycles in (2, 3):
+        plan = sample_coordinates(ontology, seed=SEED, count=cycles * total)
+        ids = [spec.id for spec in build_specs(plan, ontology=ontology, seed=SEED)]
+
+        assert len(plan) == cycles * total
+        assert len(ids) == cycles * total
+        assert len(set(ids)) == cycles * total
+
+
+def test_anchor_ids_stay_distinct_beyond_the_full_rotation(ontology) -> None:
+    total = unit_total(ontology)
+    count = max_plan_size(ontology) + 3 * total
+    ids = _ids(ontology, SEED, count)
+
+    assert len(ids) == count
+    assert len(set(ids)) == count
+
+
+def test_a_recurring_coordinate_is_kept_every_time(ontology) -> None:
+    """The same coordinate may be sampled twice; both samples must survive.
+
+    Coordinate content is not identity.  A stochastic generator asked twice with
+    the same labels returns a different question and a different answer, so the
+    second occurrence is a new sample and no gate may drop it.  The plan is
+    streamed only until the first recurrence, which keeps the check to one pass
+    over the prefix where content can wrap.
+    """
+    total = unit_total(ontology)
+    cap = max_plan_size(ontology) + 40 * total
+    run = run_key(ontology, SEED)
+
+    entries: list[tuple[Coordinate, int]] = []
+    first_seen: dict[tuple[tuple[str, str], ...], int] = {}
+    recurrence: tuple[int, int] | None = None
+
+    for index, (coordinate, cycle) in enumerate(
+        _iter_plan(ontology, SEED, count=cap, per_modality=None)
+    ):
+        entries.append((coordinate, cycle))
+        key = _coordinate_key(coordinate)
+        if key in first_seen:
+            recurrence = (first_seen[key], index)
+            break
+        first_seen[key] = index
+
+    assert recurrence is not None, f"no coordinate recurred within {cap} entries"
+    earlier, later = recurrence
+    assert earlier < later
+    assert _coordinate_key(entries[earlier][0]) == _coordinate_key(entries[later][0])
+
+    earlier_id = format_anchor_id(run, *divmod(earlier, total))
+    later_id = format_anchor_id(run, *divmod(later, total))
+    assert earlier_id != later_id
+    assert len(entries) == later + 1, "an entry was dropped from the plan"
+
+
+def test_growing_n_by_one_cycle_revisits_every_unit_and_keeps_both(ontology) -> None:
+    total = unit_total(ontology)
+    plan = sample_coordinates(ontology, seed=SEED, count=2 * total)
+
+    first, second = plan[:total], plan[total:]
+    assert len(plan) == 2 * total
+    assert {_unit_key(coordinate) for coordinate in first} == {
+        _unit_key(coordinate) for coordinate in second
+    }
+    assert len({_unit_key(coordinate) for coordinate in first}) == total
+    ids = [spec.id for spec in build_specs(plan, ontology=ontology, seed=SEED)]
+    assert len(set(ids)) == 2 * total
+
+
+def test_plan_rounds_decomposes_a_request(ontology) -> None:
+    total = unit_total(ontology)
+
+    assert plan_rounds(ontology, 1) == (0, 1)
+    assert plan_rounds(ontology, total - 1) == (0, total - 1)
+    assert plan_rounds(ontology, total) == (1, 0)
+    assert plan_rounds(ontology, total + 4) == (1, 4)
+    assert plan_rounds(ontology, 3 * total) == (3, 0)
+
+
+def test_count_above_the_full_rotation_is_accepted(ontology) -> None:
+    rotation = max_plan_size(ontology)
+    units_per_cycle = unit_total(ontology)
+
+    # N has no ceiling: the request is reported, not refused.
+    assert plan_rounds(ontology, rotation + 1) == (
+        knowledge_leaf_count(ontology),
+        1,
+    )
+
+    head = []
+    for coordinate, cycle in _iter_plan(ontology, SEED, count=rotation + 1, per_modality=None):
+        head.append((coordinate, cycle))
+        if len(head) == 3:
+            break
+    assert len(head) == 3
+    assert [cycle for _, cycle in head] == [0, 0, 0]
+    assert units_per_cycle >= 1
+
+
+@pytest.mark.parametrize("count", [0, -1])
+def test_counts_below_one_are_refused_with_the_plan_shape_in_the_message(
+    ontology, count: int
+) -> None:
+    with pytest.raises(SamplingError) as error:
+        sample_coordinates(ontology, seed=SEED, count=count)
+
+    message = str(error.value)
+    assert str(count) in message
+    assert str(max_plan_size(ontology)) in message
+    assert str(unit_total(ontology)) in message
+    assert "round" in message
+
+    with pytest.raises(SamplingError):
+        plan_rounds(ontology, count)
+
+
+def test_anchor_id_rejects_a_value_that_would_not_fit_the_field(ontology) -> None:
+    run = run_key(ontology, SEED)
+
+    with pytest.raises(ValueError, match="cycle"):
+        format_anchor_id(run, -1, 0)
+    with pytest.raises(ValueError, match="position"):
+        format_anchor_id(run, 0, 100000)
+
+
+# ── 9. per_modality: the smoke subset of cycle 0 ────────────────────────────
+
+
+def test_per_modality_takes_the_first_units_of_each_modality_from_cycle_zero(
+    ontology,
+) -> None:
+    plan = sample_coordinates(ontology, seed=SEED, per_modality=(4, 4))
+
+    assert len(plan) == 8
+    assert [coordinate.modality for coordinate in plan].count(MODALITY_TEXT) == 4
+    assert [coordinate.modality for coordinate in plan].count(MODALITY_IMAGE) == 4
+
+    units = coverage_units(ontology)
+    positions = list(range(len(units)))
+    random.Random(_hash_seed(SEED, ontology_sha256(ontology), "cycle", 0)).shuffle(positions)
+    expected_text = [index for index in positions if units[index].modality == MODALITY_TEXT][:4]
+    expected_image = [index for index in positions if units[index].modality == MODALITY_IMAGE][:4]
+    expected = expected_text + expected_image
+
+    leaves = ontology.axis_values("knowledge_domain")
+    for coordinate, unit_index in zip(plan, expected, strict=True):
+        assert coordinate.modality == units[unit_index].modality
+        assert coordinate.capability == units[unit_index].block.capability
+        assert coordinate.knowledge_domain == leaves[unit_index % len(leaves)]
+
+
+def test_per_modality_rejects_unusable_requests(ontology) -> None:
+    units = coverage_units(ontology)
+    text_units = sum(1 for unit in units if unit.modality == MODALITY_TEXT)
+    image_units = sum(1 for unit in units if unit.modality == MODALITY_IMAGE)
+
+    with pytest.raises(SamplingError, match="mutually exclusive"):
+        sample_coordinates(ontology, seed=SEED, count=8, per_modality=(4, 4))
+    with pytest.raises(SamplingError, match="text count"):
+        sample_coordinates(ontology, seed=SEED, per_modality=(text_units + 1, 0))
+    with pytest.raises(SamplingError, match="image count"):
+        sample_coordinates(ontology, seed=SEED, per_modality=(0, image_units + 1))
+    with pytest.raises(SamplingError, match=r"\(0, 0\)"):
+        sample_coordinates(ontology, seed=SEED, per_modality=(0, 0))
+    with pytest.raises(SamplingError, match="tuple"):
+        sample_coordinates(ontology, seed=SEED, per_modality=4)  # type: ignore[arg-type]
+
+
+# ── 10. specs and the v4 record shape ───────────────────────────────────────
+
+
+def test_build_specs_numbers_positions_and_keeps_the_v4_metadata(ontology) -> None:
+    total = unit_total(ontology)
+    coordinates = sample_coordinates(ontology, seed=SEED, count=total + 3)
+    specs = sample_anchors(ontology, AnchorGenerationConfig(seed=SEED), count=total + 3)
+    run = run_key(ontology, SEED)
+
+    assert len(coordinates) == total + 3
+    assert len(specs) == len(coordinates)
+    turn_counts = turn_counts_by_conversation_type(ontology)
+    for index, spec in enumerate(specs):
+        assert spec.id == format_anchor_id(run, *divmod(index, total))
+        assert "cycle" not in spec.anchor_meta
+        assert spec.anchor_meta == coordinates[index].as_dict()
+        assert len(spec.turns) == turn_counts[spec.anchor_meta["conversation_type"]]
+        assert len(spec.turns) % 2 == 1
+
+
+def test_declared_turn_counts_are_odd_and_ordered(ontology) -> None:
+    counts = turn_counts_by_conversation_type(ontology)
+
+    assert set(counts) == set(ontology.axis_values("conversation_type"))
+    assert all(value >= 1 and value % 2 == 1 for value in counts.values())
+
+
+# ── negative control: the evidence that the prefix check is not vacuous ─────
+
+
+def test_negative_control_prefix_check_catches_a_count_dependent_plan(
+    ontology, monkeypatch
+) -> None:
+    """A derivation that consults N breaks the prefix property; the check fires.
+
+    The real free-axis derivation depends on the plan index and on nothing else
+    (:func:`sampling._free_rng`), which is what makes every longer plan an
+    extension of every shorter one.  Here the derivation is mutated to also
+    depend on N: ``plan(10)`` is then no longer a prefix of ``plan(20)``, and
+    :func:`_is_prefix` — the same assertion
+    :func:`test_plan_is_a_prefix_of_every_longer_plan` uses — reports it.
+    """
+    holder = {"n": 0}
+
+    def count_dependent(seed: int, fingerprint: str, plan_index: int) -> random.Random:
+        return random.Random(_hash_seed(seed, fingerprint, "free", plan_index, holder["n"]))
+
+    monkeypatch.setattr(sampling, "_free_rng", count_dependent)
+
+    holder["n"] = 10
+    short = sample_coordinates(ontology, seed=SEED, count=10)
+    holder["n"] = 20
+    long = sample_coordinates(ontology, seed=SEED, count=20)
+
+    assert not _is_prefix(short, long)
+
+    monkeypatch.undo()
+    assert _is_prefix(
+        sample_coordinates(ontology, seed=SEED, count=10),
+        sample_coordinates(ontology, seed=SEED, count=20),
+    )
+
+
+def test_negative_control_free_axis_without_plan_index_is_not_caught_by_prefix(
+    ontology, monkeypatch
+) -> None:
+    """Dropping ``i`` from the free draw is invisible to the prefix check.
+
+    The mutation makes every plan position draw the same four axes, yet each
+    coordinate is still built without looking at N, so the prefix property
+    survives — which is why the prefix check alone is not a sufficient negative
+    control and the count-dependent mutation above is needed.  What the mutation
+    does destroy is index-addressability, asserted here directly.
+    """
+    total = unit_total(ontology)
+    monkeypatch.setattr(
+        sampling,
+        "_free_rng",
+        lambda seed, fingerprint, plan_index: random.Random(_hash_seed(seed, fingerprint, "free")),
+    )
+    plan = sample_coordinates(ontology, seed=SEED, count=2 * total)
+
+    first, second = plan[:total], plan[total : 2 * total]
+    assert _is_prefix(first, plan)
+    for left, right in zip(first, second, strict=True):
+        assert left.language == right.language
+        assert left.response_style == right.response_style
+        assert left.difficulty == right.difficulty
+        assert left.context_length == right.context_length
