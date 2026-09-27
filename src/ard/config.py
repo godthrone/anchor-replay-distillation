@@ -274,13 +274,21 @@ class OutputConfig(BaseModel):
 
 
 class ImageConfig(BaseModel):
-    """``[images]`` — how a run behaves when a visual domain has no image.
+    """``[images]`` — how a run behaves when there is no usable picture at all.
 
     Image-modality anchors resolve their picture under
-    ``<image_dir>/<visual_domain>/`` (see :mod:`ard.domain.image_store`).  A
-    required domain with no usable image is refused **by default**: silently
-    generating those anchors without an image would break the coordinate/content
-    match the addressing exists to guarantee.
+    ``<image_dir>/<visual_domain>/`` first (see :mod:`ard.domain.image_store`).
+    A visual domain whose own directory holds no usable image is **not** refused:
+    the pick falls back to a deterministic tree-wide pool — every usable image
+    under ``--image-dir``, reused by rotation — so a domain coordinate stays
+    answerable as long as the tree stocks *anything*.  The reuse is recorded
+    (:attr:`~ard.domain.image_store.DomainImageResolution.fallback`) and
+    declared in ``manifest.json``, never passed off as a domain-matched picture.
+
+    Only a tree with **no usable image at all** is genuinely out of pictures.
+    That state, and only that state, is what this section governs: it is refused
+    **by default**, because silently generating those anchors without an image
+    would break the coordinate/content match the addressing exists to guarantee.
 
     This switch is the §3.3 pre-authorised fallback for that refusal.  It is a config field
     (not a CLI flag) because turning it on changes the artifact: the skipped

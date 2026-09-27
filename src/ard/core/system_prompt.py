@@ -57,7 +57,7 @@ SYSTEM_PROMPT_NONE = "none"
 #: The wording directory, stated **once** in the runtime.  It is the location
 #: the v4 ontology declares in
 #: ``wording_policy.prompt_wording_location_recommendation.target``
-#: (``ontology/anchor_ontology.v4.json:1319-1323``), whose
+#: (in ``ontology/anchor_ontology.v4.json``), whose
 #: ``<system_prompt_mode>`` placeholder is this directory's per-mode file name.
 #: A contract test holds the two together, so an ontology change cannot silently
 #: point somewhere else (§1.4).

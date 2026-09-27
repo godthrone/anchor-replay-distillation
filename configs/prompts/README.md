@@ -18,7 +18,7 @@ Two families, one contract ("wording is data, coordinates are the ontology's"):
 - `system_prompt/<system_prompt_mode>.md` — one file per value of the ontology's
   `system_prompt_mode` axis, keyed by the axis value: the location the ontology
   declares in `wording_policy.prompt_wording_location_recommendation.target`
-  (`ontology/anchor_ontology.v4.json:1319-1323`, with the
+  (in `ontology/anchor_ontology.v4.json`, with the
   `<system_prompt_mode>` placeholder resolved to the axis value).
 - `axis_instruction/<axis>.json` — one file per instruction axis:
   `response_style.json`, `output_format.json`, `difficulty.json`,

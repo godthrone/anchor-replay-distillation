@@ -100,20 +100,21 @@ NOISE_UNAVAILABLE_REASON: Final[str] = (
 #: Evidence in the current tree — one entry per consumer, no inference:
 #:
 #: * ``language`` / ``knowledge_domain`` / ``capability`` / ``conversation_type``
-#:   — ``src/ard/domain/text_anchor.py:233-236`` reads exactly these four from
-#:   ``anchor_meta``; ``:266-284`` turns them into the instruction (the image
-#:   branch at ``:270-276`` drops ``knowledge_domain``, which is why the four are
-#:   one group) and ``:286-291`` assembles the system string.
+#:   — ``ard.domain.text_anchor._build_user_prompt`` reads exactly these four from
+#:   ``anchor_meta`` and turns them into the instruction (the image branch drops
+#:   ``knowledge_domain``, which is why the four are one group), then assembles
+#:   the system string in the same function.
 #: * ``system_prompt_mode`` — chooses the wording file
-#:   (``src/ard/backends/prompt_loader.py:99-100``), and the mode's template is
-#:   filled from ``language`` / ``capability`` / ``knowledge_domain``
-#:   (``src/ard/core/system_prompt.py:83-87``).
+#:   (``ard.backends.prompt_loader.build_system_prompt_prompt``), and the mode's
+#:   template is filled from ``language`` / ``capability`` /
+#:   ``knowledge_domain``
+#:   (``ard.core.system_prompt._FIELD_SOURCES``).
 #: * the six instruction axes (:data:`ard.core.axis_instruction.INSTRUCTION_AXES`,
-#:   imported below, not re-listed) — ``src/ard/domain/text_anchor.py:242-243``
+#:   imported below, not re-listed) — ``ard.domain.text_anchor._build_user_prompt``
 #:   turns every one of them into a requirement clause; the per-axis read is
-#:   ``src/ard/backends/axis_instruction_loader.py:96-97``.
+#:   ``ard.backends.axis_instruction_loader.build_axis_requirements``.
 #: * ``visual_domain`` — selects ``<image_dir>/<visual_domain>``
-#:   (``src/ard/domain/image_store.py:128-130``), i.e. *which* image the request
+#:   (``ard.domain.image_store.domain_directory``), i.e. *which* image the request
 #:   carries; for a text-only coordinate the axis is absent, which is itself the
 #:   distinction from an image coordinate.
 #:
