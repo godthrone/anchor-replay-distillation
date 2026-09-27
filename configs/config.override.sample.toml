@@ -89,9 +89,11 @@ overwrite = false
 
 [images]
 # Image addressing convention: <image_dir>/<visual_domain>/<image file>, where
-# <image_dir> comes from --image-dir. A missing/empty domain directory is
-# refused by default; set this to true to skip those anchors (logged as a
-# WARNING and declared in manifest.json), never silently.
+# <image_dir> comes from --image-dir. A domain with no picture of its own
+# reuses one from the whole image tree (visible in manifest.json as
+# fallback_visual_domains / fallback_anchor_count). Only a tree with no usable
+# image at all is refused by default; set this to true to skip those anchors
+# (logged as a WARNING and declared in manifest.json), never silently.
 # skip_missing_images = false
 # Transcode each selected image to JPEG while copying it into the output tree
 # (true, the default) instead of copying already-web formats verbatim (false).

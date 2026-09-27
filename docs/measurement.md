@@ -71,7 +71,8 @@
   （`ard.backends.prompt_loader.load_system_prompt_template` 选措辞文件，
   `ard.core.system_prompt.render_system_prompt_prompt` 填占位符）、六个 instruction 轴
   （`ard.domain.text_anchor._build_user_prompt` → `ard.backends.axis_instruction_loader.build_axis_requirements`）、
-  `visual_domain`（`ard.domain.image_store.domain_directory` 选图目录，即请求里带哪张图）。
+  `visual_domain`（`ard.domain.image_store.domain_directory` 决定选图时优先看哪个目录；该目录没有候选时
+  实际图来自全局复用池，域目录本身仍是坐标的寻址依据）。
 - **不在**签名里的是计划记账字段 `modality` / `has_image` / `image_count`：它们不改变发给生成器的请求文本。
   `image_count = min(用户轮数, IMAGES_PER_ANCHOR)` 且 `IMAGES_PER_ANCHOR = 1`
   （`ard.pipeline.IMAGES_PER_ANCHOR`），信息量为零；契约测试
@@ -222,8 +223,11 @@ flowchart TD
   `last_cycle_size` / `planned_anchors` / `written_anchors` / `distinct_coordinates` /
   `coverage_ratio` / `density` / `smoke`。
 - `manifest.json` → `images` 段（`ard.pipeline._declare_images`）：`image_dir`、`resolved_visual_domains`、
-  `resolved_images`（每个 `(cycle, visual_domain, image)` 一行）、`domain_candidate_counts`
-  （域名 → 可用文件数）、`skipped_*`。v5 起图片按**轮次**轮转，`cycle` 是这个段的关键字段。
+  `resolved_images`（每个 `(cycle, visual_domain, image, fallback)` 一行）、`domain_candidate_counts`
+  （域名 → 该域目录下的可用文件数）、`pool_candidate_count`（整棵树的退回复用池大小）、
+  `fallback_visual_domains` / `fallback_anchor_count`（复用的域与锚点数）、`skipped_*`。v5 起图片按
+  **轮次**轮转，`cycle` 是这个段的关键字段；`fallback` 标记使"这一轮这张图是该域自己的，还是从全局池
+  复用来的"可读——重复度因此可以归因，而不是只能看到多样性变低。
 
 **`ard-acceptance-1` → `ard-acceptance-2`**：`structure` 新增
 `prompt_signature_distinct` / `effective_projection_distinct` / `diversity`，且 `metrics.noise.n_repeat_groups`

@@ -32,6 +32,7 @@ from ard.domain.image_store import (
     copy_images_to_output,
     domain_directory,
     list_domain_images,
+    list_pool_images,
     resolve_domain_images,
     sample_images,
     scan_images,
@@ -480,16 +481,19 @@ def test_resolve_domain_images_rotates_by_cycle_and_reports_the_readout(
     )
 
 
-def test_resolve_domain_images_counts_candidates_for_a_missing_domain(tmp_path: Path) -> None:
-    """A missing domain still reports its (zero) candidate count, next to ``missing``."""
+def test_resolve_domain_images_counts_candidates_in_the_domain_directory(tmp_path: Path) -> None:
+    """A domain with no directory of its own reports 0 candidates and a fallback pick."""
     _five_image_domain(tmp_path)
     specs = [_image_spec("a1", "vehicles"), _image_spec("p1", "plants")]
 
     resolution = resolve_domain_images(tmp_path, specs, seed=0, cycle=2)
 
-    assert set(resolution.selected) == {"vehicles"}
-    assert resolution.missing == {"plants": ["p1"]}
+    assert set(resolution.selected) == {"vehicles", "plants"}
+    assert resolution.missing == {}
     assert resolution.candidate_counts == {"vehicles": 5, "plants": 0}
+    assert resolution.fallback == {"plants"}
+    assert resolution.fallback_anchor_count == 1
+    assert resolution.pool_candidate_count == 5
 
 
 def test_list_domain_images_orders_mixed_case_names_and_extensions(tmp_path: Path) -> None:
@@ -520,7 +524,10 @@ def test_resolve_domain_images_maps_each_leaf_to_its_own_directory(tmp_path: Pat
     assert resolution.selected["plants"] == tmp_path / "plants" / "only.png"
 
 
-def test_resolve_domain_images_reports_the_affected_anchor_ids(tmp_path: Path) -> None:
+def test_resolve_domain_images_falls_back_to_the_pool_and_names_its_anchors(
+    tmp_path: Path,
+) -> None:
+    """A domain without its own picture is served from the pool, not dropped."""
     (tmp_path / "animals").mkdir()
     _make_png(tmp_path / "animals" / "a.png")
     specs = [
@@ -531,8 +538,162 @@ def test_resolve_domain_images_reports_the_affected_anchor_ids(tmp_path: Path) -
 
     resolution = resolve_domain_images(tmp_path, specs, seed=7)
 
-    assert set(resolution.selected) == {"animals"}
-    assert resolution.missing == {"vehicles": ["v1", "v2"]}
+    assert set(resolution.selected) == {"animals", "vehicles"}
+    assert resolution.missing == {}
+    assert resolution.fallback == {"vehicles"}
+    assert resolution.fallback_anchor_count == 2, "both vehicles anchors are reuses"
+    assert resolution.selected["vehicles"] == (tmp_path / "animals" / "a.png")
+    assert resolution.selected["animals"] == (tmp_path / "animals" / "a.png")
+
+
+# ── pool fallback (v5 ruling: few pictures ⇒ reuse, never skip) ───────────────
+
+
+def test_list_pool_images_is_recursive_deterministic_and_ignores_non_images(
+    tmp_path: Path,
+) -> None:
+    """The pool is the whole tree, in a stable ``(parent, name)`` order."""
+    for domain in ("animals", "plants"):
+        (tmp_path / domain).mkdir()
+    _make_png(tmp_path / "animals" / "b.png")
+    _make_png(tmp_path / "animals" / "a.png")
+    _make_png(tmp_path / "plants" / "a.png")
+    (tmp_path / "notes.txt").write_text("not an image", encoding="utf-8")
+
+    pool = list_pool_images(tmp_path)
+
+    assert [p.relative_to(tmp_path).as_posix() for p in pool] == [
+        "animals/a.png",
+        "animals/b.png",
+        "plants/a.png",
+    ]
+    assert list_pool_images(tmp_path / "does_not_exist") == []
+    assert list_pool_images(tmp_path, extensions={".webp"}) == []
+
+
+def test_resolve_domain_images_prefers_a_domains_own_picture(tmp_path: Path) -> None:
+    """A stocked domain uses its own file, whatever else the tree holds."""
+    for domain in ("animals", "plants"):
+        (tmp_path / domain).mkdir()
+    own = _make_png(tmp_path / "animals" / "own.png", color=10)
+    _make_png(tmp_path / "plants" / "other.png", color=90)
+    specs = [_image_spec("a1", "animals")]
+
+    resolution = resolve_domain_images(tmp_path, specs, seed=3, cycle=4)
+
+    assert resolution.selected == {"animals": own}
+    assert resolution.fallback == set()
+    assert resolution.fallback_anchor_count == 0
+    assert resolution.candidate_counts == {"animals": 1}
+    assert resolution.pool_candidate_count == 2
+
+
+def test_resolve_domain_images_serves_every_domain_with_one_picture(tmp_path: Path) -> None:
+    """★ 主席点名的场景: a one-picture tree shows that picture everywhere.
+
+    The user supplied exactly one image.  Every domain of every round must
+    resolve to it — the run is complete, and the reuse is declared, so the user
+    can see why their dataset looks repetitive instead of being told the plan is
+    impossible.
+    """
+    (tmp_path / "animals").mkdir()
+    only = _make_png(tmp_path / "animals" / "only.png")
+    specs = [
+        _image_spec("a1", "animals"),
+        _image_spec("p1", "plants"),
+        _image_spec("v1", "vehicles"),
+    ]
+
+    picks: dict[tuple[int, str], Path] = {}
+    for cycle in range(3):
+        resolution = resolve_domain_images(tmp_path, specs, seed=11, cycle=cycle)
+        assert set(resolution.selected) == {"animals", "plants", "vehicles"}
+        assert resolution.missing == {}
+        assert resolution.pool_candidate_count == 1
+        for domain, chosen in resolution.selected.items():
+            assert chosen == only, "with one picture in the tree, that is the picture"
+            picks[(cycle, domain)] = chosen
+
+    assert set(picks.values()) == {only}, "all 9 (round, domain) picks are the one file"
+    assert len(picks) == 9
+
+
+def test_resolve_domain_images_rotates_the_pool_for_a_domain_with_none(
+    tmp_path: Path,
+) -> None:
+    """A domain without its own directory walks the pool one step per round."""
+    (tmp_path / "vehicles").mkdir()
+    pool = [
+        _make_png(tmp_path / "vehicles" / f"img_{index}.png", color=index * 40)
+        for index in range(3)
+    ]
+    specs = [_image_spec("p1", "plants")]
+
+    resolutions = [
+        resolve_domain_images(tmp_path, specs, seed=5, cycle=cycle) for cycle in range(3)
+    ]
+
+    picks = [resolution.selected["plants"] for resolution in resolutions]
+    assert set(picks) == set(pool), "the fallback must rotate through the whole pool"
+    assert len(set(picks)) == 3
+    for resolution in resolutions:
+        assert resolution.fallback == {"plants"}
+        assert resolution.fallback_anchor_count == 1
+        assert resolution.candidate_counts == {"plants": 0}
+        assert resolution.pool_candidate_count == 3
+
+
+def test_resolve_domain_images_with_an_empty_pool_keeps_the_missing_behaviour(
+    tmp_path: Path,
+) -> None:
+    """No image anywhere is the only real "missing" — refusal/skip stays intact."""
+    (tmp_path / "plants").mkdir()
+    (tmp_path / "plants" / "notes.md").write_text("not an image", encoding="utf-8")
+    specs = [_image_spec("p1", "plants"), _image_spec("x1", "animals")]
+
+    resolution = resolve_domain_images(tmp_path, specs, seed=1, cycle=0)
+
+    assert resolution.selected == {}
+    assert resolution.fallback == set()
+    assert resolution.pool_candidate_count == 0
+    assert resolution.missing == {"plants": ["p1"], "animals": ["x1"]}
+    assert resolution.candidate_counts == {"plants": 0, "animals": 0}
+
+
+def test_resolve_domain_images_fallback_is_deterministic_and_seed_sensitive(
+    tmp_path: Path,
+) -> None:
+    """Same ``(seed, cycle, domain)`` ⇒ same reuse; a different seed may differ."""
+    (tmp_path / "stock").mkdir()
+    pool = [
+        _make_png(tmp_path / "stock" / f"img_{index}.png", color=index * 30) for index in range(4)
+    ]
+    specs = [_image_spec("p1", "plants")]
+
+    for cycle in range(3):
+        first = resolve_domain_images(tmp_path, specs, seed=0, cycle=cycle)
+        again = resolve_domain_images(tmp_path, specs, seed=0, cycle=cycle)
+        assert first.selected == again.selected
+
+    picks = {
+        resolve_domain_images(tmp_path, specs, seed=seed, cycle=0).selected["plants"]
+        for seed in range(16)
+    }
+    assert len(picks) > 1, "the seed must steer the fallback pick"
+    assert picks <= set(pool)
+
+
+def test_resolve_domain_images_cycle_zero_keeps_the_pre_v5_pick(tmp_path: Path) -> None:
+    """A stocked domain in cycle 0 resolves exactly as it did before v5."""
+    candidates = _five_image_domain(tmp_path)
+    specs = [_image_spec("v1", "vehicles")]
+
+    resolution = resolve_domain_images(tmp_path, specs, seed=0, cycle=0)
+
+    assert resolution.selected["vehicles"] == candidates[2]
+    assert resolution.selected["vehicles"] == select_domain_image(
+        candidates, "vehicles", 0, cycle=0
+    )
 
 
 def test_convert_and_copy_images_places_files_under_the_subdir(tmp_path: Path) -> None:

@@ -139,14 +139,17 @@ set `[output] directory` in config to pin the name). After a few minutes you sho
 
 **Full run** — one full round is `U` anchors (the runtime-enumerated unit count; set
 `[generation] count` for any other `N`), one endpoint call per turn. Supply your own image
-directory laid out as `<image_dir>/<visual_domain>/<image file>` with every visual domain the
-ontology declares present:
+directory laid out as `<image_dir>/<visual_domain>/<image file>`:
 
 ```bash
 ./run.sh --config configs/config.toml --image-dir /path/to/images
 ```
 
-A full run costs hours of endpoint time; run the smoke test first to validate the setup.
+Pictures rotate, and few pictures are reused rather than skipped: a domain whose directory
+holds no image is served from the whole image tree instead, so a single picture covers every
+domain and every round (the reuse is counted and named in `manifest.json`). Only a tree with no
+usable image at all stops the run. A full run costs hours of endpoint time; run the smoke test
+first to validate the setup.
 
 ## Choosing how many anchors (N)
 
@@ -227,12 +230,19 @@ base64:
                { "type": "text",  "text": "…the generated user question…" } ] }
 ```
 
-The picture comes from `<image_dir>/<visual_domain>/<file>` — a picture belongs to the
-anchor's own `visual_domain` coordinate, never to a flat pool, because a flat pool cannot
-guarantee that the image matches the label it is attached to. Paths are relative to the run
-directory, so `outputs/<run_name>/images/<visual_domain>/…` resolves directly; the run copies
-and (unless `[images] convert = false`) converts the selected image there. A worked, small example of
-these records is checked in under `examples/` — see [examples/README.md](examples/README.md).
+The picture comes from `<image_dir>/<visual_domain>/<file>` — a picture filed under the anchor's
+own `visual_domain` coordinate is the one whose content the user vouched for, so it is always
+preferred. When that directory holds no image, the run does **not** drop the anchor: it reuses a
+picture from the whole image tree (every usable file under `--image-dir`, in a deterministic
+order) and rotates through it, so a user who supplied only one picture still gets a complete
+run. Every reuse is recorded — `fallback_visual_domains` / `fallback_anchor_count` in
+`manifest.json`, plus a `fallback` flag on each `resolved_images` row — because whether a reused
+picture is good enough for the dataset is the user's judgement, and it needs to be visible.
+Paths are
+relative to the run directory, so `outputs/<run_name>/images/<visual_domain>/…` resolves directly;
+the run copies and (unless `[images] convert = false`) converts the selected image there. A
+worked, small example of these records is checked in under `examples/` — see
+[examples/README.md](examples/README.md).
 
 ## Configuration reference
 
@@ -248,7 +258,7 @@ input locations and run boundaries only: `--config`, `--override`, `--image-dir`
 | `[generation]` | `count` (the anchor count `N`: omit = one full round = `U`; any integer `>= 1`, **no upper bound**), `concurrency`, the optional `seed` (omit it and every run draws a fresh seed; the seed actually used is recorded in the run's `config.toml`), backpressure thresholds. Turn counts are **not** configurable — they come from the ontology |
 | `[ontology]` | Path to the v4 ontology (`ontology/anchor_ontology.v4.json`) |
 | `[output]` | `directory` (empty = `outputs/ard_dataset_<timestamp>`), `overwrite` (default `false`: an existing bank is resumed, not replaced) |
-| `[images]` | `convert` (default **`true`**): accept RAW/BMP/TIFF/GIF/WebP and normalise every selected picture to JPEG (RAW additionally needs the optional `raw` extra); `false` accepts only the already-web formats and copies them verbatim. `skip_missing_images` (default **`false`**): a missing `visual_domain` directory is refused, not skipped |
+| `[images]` | `convert` (default **`true`**): accept RAW/BMP/TIFF/GIF/WebP and normalise every selected picture to JPEG (RAW additionally needs the optional `raw` extra); `false` accepts only the already-web formats and copies them verbatim. `skip_missing_images` (default **`false`**): only when `--image-dir` holds no usable image at all is a domain left without a picture — that is refused, not skipped |
 | `[coverage]` | `enabled` (default `true`) and `target_set_path` — the target set for the metric readout; empty means structure readout only |
 | `[coverage.embedding]` | The OpenAI-compatible `/embeddings` endpoint, model, expected `dimension`, batch size and timeouts used by the metric readout |
 
@@ -275,7 +285,7 @@ outputs/<run_name>/          # default ard_dataset_<YYYYmmdd_HHMMSS>; --smoke ap
 ├── anchor_bank.jsonl        # one record per line, schema_version 5.0.0
 ├── config.toml              # merged config snapshot, credentials redacted
 ├── plan_identity.in_progress.json  # only while a run is unfinished: its plan-identity record
-├── images/                  # where image-modality anchors' pictures land: images/<visual_domain>/<file> (transcoded or copied); created only when this run has image anchors
+├── images/                  # where image-modality anchors' pictures land: images/<visual_domain>/<file> (transcoded or copied, one placed copy per source file); created only when this run has image anchors
 ├── logs/                    # ard.log / ard_debug.log / ard_error.log
 ├── results/
 │   ├── coverage.json        # machine-readable acceptance readout (report_schema ard-acceptance-3)
@@ -291,8 +301,11 @@ run-health counters and the `acceptance` pointer. Three sections describe the pl
   `plan_size` and `digest` (sha256 over the ordered coordinate list and those inputs);
 - `plan` — shape and readouts: `unit_total`, `full_cycles`, `last_cycle_size`, `planned_anchors`,
   `written_anchors`, `distinct_coordinates`, `coverage_ratio`, `density`, `smoke`;
-- `images` — `resolved_images` (one `{cycle, visual_domain, image}` row per resolved picture) and
-  `domain_candidate_counts` (how many usable files each domain offered).
+- `images` — `resolved_images` (one `{cycle, visual_domain, image, fallback}` row per resolved
+  picture), `domain_candidate_counts` (how many usable files each domain offered itself),
+  `pool_candidate_count` (how many the tree-wide fallback pool held), and
+  `fallback_visual_domains` / `fallback_anchor_count` (which domains, and how many anchors, were
+  shown a reused picture).
 
 `plan_identity.in_progress.json` is an intermediate
 record, written once the plan exists and before the first endpoint call, and deleted when the run
@@ -387,14 +400,22 @@ Both paths call the configured endpoints; neither is an offline demo.
 ## FAQ
 
 **An image domain is missing — what happens?**
-By default the run is refused **before the output directory is created**, with an error that
-lists every missing visual domain, its expected path (`<image_dir>/<visual_domain>/`) and how
-many anchors it affects. Either supply the images, or set `[images] skip_missing_images =
-true`: those anchors are then dropped, each with its own WARNING, and the skipped count and
-domains are declared in `manifest.json` — a skip is never silent. A run that omits
-`--image-dir` altogether attaches no pictures at all: image-modality anchors are still
-generated, as text conversations, while keeping their `visual_domain` coordinate. Pass
-`--image-dir` when you want the images.
+Images are reused rather than skipped. A picture is always taken from
+`<image_dir>/<visual_domain>/` when that directory holds one; when it does not, the run falls
+back to the whole image tree and rotates through it, so **if you supplied one picture, every
+domain and every round uses that picture** — the run is complete, and whether the repetition
+hurts the dataset is your call. That call needs the facts, so each reuse is visible:
+`manifest.json.images` carries `fallback_visual_domains`, `fallback_anchor_count`,
+`pool_candidate_count` and a per-row `fallback` flag, and every reuse is logged.
+
+Only a tree with **no usable image at all** is refused, **before the output directory is
+created**, with an error that lists every domain left without a picture, the directory it would
+be read from (`<image_dir>/<visual_domain>/`) and how many anchors it affects. Either supply at
+least one image, or set `[images] skip_missing_images = true`: those anchors are then dropped,
+each with its own WARNING, and the skipped count and domains are declared in `manifest.json` — a
+skip is never silent. A run that omits `--image-dir` altogether attaches no pictures at all:
+image-modality anchors are still generated, as text conversations, while keeping their
+`visual_domain` coordinate. Pass `--image-dir` when you want the images.
 
 **Why do RAW camera files need `.[raw]`?**
 RAW decoding goes through `rawpy`, whose wheels bundle the LibRaw decoder (LGPL-2.1 /

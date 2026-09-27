@@ -115,14 +115,16 @@ uv run python -m ard --config configs/config.toml --smoke --image-dir examples/i
   把目录绑定到计划的中间记录；运行完成后只保留 `manifest.json` 作为申报。
 
 **完整运行**——一个完整轮是 `U` 条锚点（`U` 由运行时穷举；要别的 `N` 就设 `[generation] count`），
-每一轮一次端点调用。请自备图片目录，按 `<image_dir>/<visual_domain>/<图片文件>` 布局，
-且**本体声明的视觉域齐备**：
+每一轮一次端点调用。请自备图片目录，按 `<image_dir>/<visual_domain>/<图片文件>` 布局：
 
 ```bash
 ./run.sh --config configs/config.toml --image-dir /path/to/images
 ```
 
-完整运行要花掉数小时的端点时间；先用冒烟验证配置是否正确。
+图片按轮转使用，**图少就复用、不跳过**：某个域自己的目录里没有图时，运行会退回整棵图片树取
+一张，于是**只给一张图，也能覆盖所有域、所有轮次**（复用了多少在 `manifest.json` 里计数并点名）。
+只有整棵树一张可用图都没有才会中止运行。完整运行要花掉数小时的端点时间；先用冒烟验证配置是否
+正确。
 
 ## 如何选择锚点条数（N）
 
@@ -195,8 +197,12 @@ count = 5000
                { "type": "text",  "text": "…生成的用户问题…" } ] }
 ```
 
-图片取自 `<image_dir>/<visual_domain>/<图片文件>`——图属于锚点自己的 `visual_domain` 坐标，
-绝不从一个扁平图片池里抽：扁平池无法保证"图"与贴在它身上的标签一致。路径相对于运行目录，
+图片取自 `<image_dir>/<visual_domain>/<图片文件>`——归档在锚点自己 `visual_domain` 坐标下的图，
+才是用户为"内容与标签相符"背书的那张，所以永远优先用它。该目录里没有图时，运行**不会丢掉锚点**：
+它会退回整棵图片树（`--image-dir` 下所有可用文件，确定性排序）并逐轮轮转，所以**用户只给一张图，
+跑出来依然是一份完整的运行**。每一次复用都会留痕——`manifest.json` 里的 `fallback_visual_domains` /
+`fallback_anchor_count`，以及 `resolved_images` 每行的 `fallback` 标记——因为"复用的图够不够用"
+是用户自己的判断，前提是他看得见。路径相对于运行目录，
 所以 `outputs/<run_name>/images/<visual_domain>/…` 直接可解析；运行时会把选中的图复制到那里，
 并（除非设 `[images] convert = false`）转码。这些记录的一份小而实用的样例已入库在 `examples/` 下，见
 [examples/README.md](examples/README.md)。
@@ -214,7 +220,7 @@ count = 5000
 | `[generation]` | `count`（锚点条数 `N`：省略 = 一个完整轮 = `U`；任意 `>= 1` 的整数，**无上限**）、`concurrency`；可选 `seed`（省略则每次运行从系统随机源抽新种子，实际使用的种子记在本次运行的 `config.toml` 里）；背压阈值。对话轮数**不可配置**——它们由本体推导 |
 | `[ontology]` | v4 本体路径（`ontology/anchor_ontology.v4.json`） |
 | `[output]` | `directory`（留空 = `outputs/ard_dataset_<timestamp>`）、`overwrite`（默认 `false`：已有锚点库是续跑，不是替换） |
-| `[images]` | `convert`（默认 **`true`**）：接受 RAW/BMP/TIFF/GIF/WebP 并把选中的图统一转成 JPEG（RAW 另需可选 `raw` extra）；设 `false` 则只接受已适合网络的格式并原样复制。`skip_missing_images`（默认 **`false`**）：缺某个 `visual_domain` 图片目录时报错，而不是跳过 |
+| `[images]` | `convert`（默认 **`true`**）：接受 RAW/BMP/TIFF/GIF/WebP 并把选中的图统一转成 JPEG（RAW 另需可选 `raw` extra）；设 `false` 则只接受已适合网络的格式并原样复制。`skip_missing_images`（默认 **`false`**）：只有 `--image-dir` 下**一张可用图都没有**时，某个域才会真的没图——那才是报错而不跳过的情况 |
 | `[coverage]` | `enabled`（默认 `true`）与 `target_set_path`——指标读数用的目标集；留空即只出结构读数 |
 | `[coverage.embedding]` | 指标读数用的 OpenAI 兼容 `/embeddings` 端点、模型、期望 `dimension`、批大小与超时 |
 
@@ -238,7 +244,7 @@ outputs/<run_name>/          # 默认 ard_dataset_<YYYYmmdd_HHMMSS>；--smoke �
 ├── anchor_bank.jsonl        # 每行一条记录，schema_version 5.0.0
 ├── config.toml              # 合并后的配置快照，凭证已脱敏
 ├── plan_identity.in_progress.json  # 仅运行未结束时存在：中途的计划身份记录
-├── images/                  # 影像态锚点图片的落点：images/<visual_domain>/<图片文件>（转码或复制而来）；只有本次带影像态锚点时才创建
+├── images/                  # 影像态锚点图片的落点：images/<visual_domain>/<图片文件>（转码或复制而来，同一源文件只落一份）；只有本次带影像态锚点时才创建
 ├── logs/                    # ard.log / ard_debug.log / ard_error.log
 ├── results/
 │   ├── coverage.json        # 机器可读的验收读数（report_schema ard-acceptance-3）
@@ -254,8 +260,10 @@ outputs/<run_name>/          # 默认 ard_dataset_<YYYYmmdd_HHMMSS>；--smoke �
   以及 `digest`（对有序坐标列表与上述输入求 sha256）；
 - `plan`——计划的形状与读数：`unit_total`、`full_cycles`、`last_cycle_size`、`planned_anchors`、
   `written_anchors`、`distinct_coordinates`、`coverage_ratio`、`density`、`smoke`；
-- `images`——`resolved_images`（每张解析到的图一行 `{cycle, visual_domain, image}`）与
-  `domain_candidate_counts`（每个域提供了多少可用文件）。
+- `images`——`resolved_images`（每张解析到的图一行 `{cycle, visual_domain, image, fallback}`）、
+  `domain_candidate_counts`（每个域自己的目录提供了多少可用文件）、`pool_candidate_count`（整棵树的
+  退回复用池里有多少可用图），以及 `fallback_visual_domains` / `fallback_anchor_count`（哪些域、
+  多少条锚点用的是复用的图）。
 
 `plan_identity.in_progress.json` 是中间态记录：计划固定、第一次端点调用之前落盘，运行正常结束时删除。
 它带 `status: "in_progress"` 与本次的 `plan_identity`，**不含**运行健康（那时还不存在）。它让
@@ -336,11 +344,17 @@ uv run mypy src/ard/
 ## FAQ
 
 **缺图会怎样？**
-默认整个运行会被拒绝，且发生在**创建输出目录之前**：报错逐项列出缺失的视觉域、它的期望路径
-（`<image_dir>/<visual_domain>/`）以及受影响条数。可以补齐图片，也可以设
-`[images] skip_missing_images = true`：那些锚点会被丢掉、逐条打 WARNING，跳过条数与涉及的域在
-`manifest.json` 里申报——跳过永不静默。完全不传 `--image-dir` 时，运行根本不会附图：影像态锚点
-仍会被生成成纯文本对话，同时保留自己的 `visual_domain` 坐标。想要图片就传 `--image-dir`。
+图片是复用而非跳过。只要 `<image_dir>/<visual_domain>/` 里有图，就用这个域自己的；没有，就退回
+整棵图片树取一张并逐轮轮转——所以**你只给一张图，所有域、所有轮次都复用这一张**，运行照样完整，
+重复对数据集影响有多大由你判断。判断需要看得到事实，因此每次复用都留痕：`manifest.json.images`
+里有 `fallback_visual_domains`、`fallback_anchor_count`、`pool_candidate_count`，以及 `resolved_images`
+每行的 `fallback` 标记，日志里也逐条记录。
+
+只有整棵树**一张可用图都没有**时才会被拒绝，且发生在**创建输出目录之前**：报错逐项列出没有图的
+视觉域、它会被从哪个目录读取（`<image_dir>/<visual_domain>/`）以及受影响条数。可以至少补一张图，
+也可以设 `[images] skip_missing_images = true`：那些锚点会被丢掉、逐条打 WARNING，跳过条数与涉及
+的域在 `manifest.json` 里申报——跳过永不静默。完全不传 `--image-dir` 时，运行根本不会附图：影像态
+锚点仍会被生成成纯文本对话，同时保留自己的 `visual_domain` 坐标。想要图片就传 `--image-dir`。
 
 **RAW 相机文件为什么要装 `.[raw]`？**
 RAW 解码走 `rawpy`，而它的 wheel 捆绑了 LibRaw 解码器（LGPL-2.1 / CDDL-1.0）。一次普通

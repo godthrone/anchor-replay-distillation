@@ -944,33 +944,33 @@ def _missing_image_message(
     planned: int,
     extensions: set[str],
 ) -> str:
-    """The refusal message for a plan whose visual domains have no images.
+    """The refusal message for a plan whose image tree holds no usable image.
 
-    Names **every** missing domain, its expected directory and how many anchors
-    it affects (§2.3: a boundary rejection must be actionable, not a traceback
-    from somewhere inside the copy loop), plus the sample count the refusal
-    applies to — one call, one fix.
+    Reached only when the tree has **no usable image at all** — a domain whose
+    own directory is empty is served from the tree-wide pool instead.  Names
+    **every** domain left without a picture, the directory it would be filed
+    under and how many anchors it affects (§2.3: a boundary rejection must be
+    actionable, not a traceback from somewhere inside the copy loop), plus the
+    sample count the refusal applies to — one call, one fix.
     """
     missing = resolution.missing
     affected = sum(len(anchor_ids) for anchor_ids in missing.values())
-    required = len(resolution.selected) + len(missing)
     listed = "\n".join(
-        f"  - {domain}: expected {domain_directory(image_root, domain)} "
+        f"  - {domain}: would be read from {domain_directory(image_root, domain)} "
         f"(affects {len(missing[domain])} anchor(s))"
         for domain in sorted(missing)
     )
     allowed = ", ".join(sorted(extensions))
     return (
-        f"image directory {image_root} has no usable image for {len(missing)} of the "
-        f"{required} visual_domain(s) this plan requires.\n"
+        f"image directory {image_root} has no usable image for the "
+        f"{len(missing)} visual_domain(s) this plan requires — it holds no image at all.\n"
         f"Expected layout: {VISUAL_DOMAIN_LAYOUT} — one subdirectory per visual_domain "
-        f"holding at least one image ({allowed}); files directly in {image_root} "
-        f"are not used.\n"
+        f"holding at least one image ({allowed}).\n"
         f"{listed}\n"
         f"Total affected anchors: {affected} of {planned} planned sample(s) (each is "
-        f"labelled with the missing visual_domain and cannot be given an image from "
-        f"another domain).\n"
-        f"Provide the missing image(s), or set [images] skip_missing_images = true to "
+        f"labelled with a visual_domain and there is no picture anywhere under "
+        f"{image_root} to reuse for it).\n"
+        f"Provide at least one image, or set [images] skip_missing_images = true to "
         f"skip those {affected} anchor(s) — each is then logged as a WARNING and the "
         f"skipped count and domains are declared in manifest.json."
     )
@@ -994,26 +994,49 @@ def _declare_images(
     v5 rotates a domain's images by round, so the pick is declared per
     ``(cycle, visual_domain)`` as well as aggregated:
 
-    * ``resolved_images`` — one ``{cycle, visual_domain, image}`` row per round
-      and domain, sorted by ``(cycle, domain)``.  Two rounds with one image each
-      are visibly different rows, so "the rotation happened" is checkable.
-    * ``domain_candidate_counts`` — ``visual_domain -> usable file count``.  This
-      is the readout that separates **real** variety (a domain with more than
-      one candidate actually showed different files) from **fake** variety (a
-      domain with one candidate necessarily reused it, however many rounds ran).
+    * ``resolved_images`` — one ``{cycle, visual_domain, image, fallback}`` row
+      per round and domain, sorted by ``(cycle, domain)``.  Two rounds with one
+      image each are visibly different rows, so "the rotation happened" is
+      checkable; ``fallback`` on the row says whether that round's picture is
+      the domain's own or a reuse from the tree-wide pool.
+    * ``domain_candidate_counts`` — ``visual_domain -> usable files in its own
+      directory``.  This is the readout that separates **real** variety (a
+      domain with more than one candidate actually showed different files) from
+      **fake** variety (a domain with one candidate necessarily reused it,
+      however many rounds ran).
+    * ``pool_candidate_count`` — how many usable images the fallback pool holds
+      altogether.  ``1`` is the one-picture tree, where every domain and round
+      necessarily shows that single file; ``0`` is the only state in which
+      anchors are genuinely without a picture.
+    * ``fallback_visual_domains`` / ``fallback_anchor_count`` — which domains,
+      and how many anchors, are shown a **reused** picture because their own
+      directory holds none.  Reuse must be visible: the user judges whether the
+      substituted picture is good enough for their dataset, which they cannot
+      do if the run quietly passes it off as a domain-matched one.
     """
     selected_by_cycle = {
         cycle: {domain: source.name for domain, source in sorted(resolution.selected.items())}
         for cycle, resolution in sorted(resolutions.items())
     }
     resolved_images = [
-        {"cycle": cycle, "visual_domain": domain, "image": name}
+        {
+            "cycle": cycle,
+            "visual_domain": domain,
+            "image": name,
+            "fallback": domain in resolutions[cycle].fallback,
+        }
         for cycle, by_domain in selected_by_cycle.items()
         for domain, name in by_domain.items()
     ]
     candidate_counts: dict[str, int] = {}
+    fallback_domains: set[str] = set()
+    fallback_anchors = 0
+    pool_count = 0
     for resolution in resolutions.values():
         candidate_counts.update(resolution.candidate_counts)
+        fallback_domains |= resolution.fallback
+        fallback_anchors += resolution.fallback_anchor_count
+        pool_count = max(pool_count, resolution.pool_candidate_count)
     manifest["images"] = {
         "image_dir": str(Path(image_dir).resolve()),
         "addressing": VISUAL_DOMAIN_LAYOUT,
@@ -1021,6 +1044,9 @@ def _declare_images(
         "resolved_visual_domains": sorted({row["visual_domain"] for row in resolved_images}),
         "resolved_images": resolved_images,
         "domain_candidate_counts": {key: candidate_counts[key] for key in sorted(candidate_counts)},
+        "pool_candidate_count": pool_count,
+        "fallback_visual_domains": sorted(fallback_domains),
+        "fallback_anchor_count": fallback_anchors,
         "skipped_anchor_count": sum(len(anchor_ids) for anchor_ids in skipped.values()),
         "skipped_visual_domains": sorted(skipped),
     }
@@ -1483,9 +1509,12 @@ def run(
             anchors resolve their picture under ``<image_dir>/<visual_domain>/``
             (see :mod:`ard.domain.image_store`): the image is addressed by the
             anchor's own coordinate instead of being sampled from a flat pool.
-            A required ``visual_domain`` whose directory is missing or holds no
-            supported image is refused — naming the missing domains, their
-            expected paths and the affected anchor count — unless
+            A domain whose own directory holds no usable image **reuses** one
+            from the tree-wide pool instead of losing its anchors, so a tree
+            with few pictures (even a single one) still yields a complete run;
+            only a tree with no usable image at all is refused — naming the
+            domains left without a picture, the directories they would be read
+            from and the affected anchor count — unless
             ``[images] skip_missing_images`` is true (then those anchors are
             skipped, WARNING-logged and declared in ``manifest.json``).
             Whether the selected picture is transcoded to JPEG on the way into
@@ -1513,14 +1542,14 @@ def run(
     Raises:
         ConfigError: If a required LLM endpoint field (``api_base`` /
             ``model_name``) is unset, if the acceptance phase is configured
-            without a usable embedder, if an image-modality anchor's
-            ``visual_domain`` has no image under ``--image-dir`` while
-            ``[images] skip_missing_images`` is false, or if the bank already
-            holds a record that does not sit at its own position in this run's
-            plan — a foreign id or a coordinate that differs from the plan's
-            coordinate at that id (a different plan would mix two datasets in one
-            run directory).  All are checked before the output directory is
-            created, so a refused run leaves no side effect behind (§2.3).
+            without a usable embedder, if ``--image-dir`` holds no usable image
+            at all while ``[images] skip_missing_images`` is false, or if the
+            bank already holds a record that does not sit at its own position in
+            this run's plan — a foreign id or a coordinate that differs from the
+            plan's coordinate at that id (a different plan would mix two
+            datasets in one run directory).  All are checked before the output
+            directory is created, so a refused run leaves no side effect behind
+            (§2.3).
         CoverageWiringError: If ``coverage.target_set_path`` names a file that
             is missing, unreadable, unparsable, empty, or whose declared count
             / dimension contradicts the file or the config — also before any
@@ -1672,11 +1701,14 @@ def run(
     )
 
     # ── Image addressing boundary check (§2.3, before the output dir) ──────
-    # Every image-modality anchor resolves its picture under
-    # ``<image_dir>/<visual_domain>/``.  A required domain with no usable image
-    # is refused here — naming the missing domains, their expected paths and how
-    # many anchors they affect — unless the user explicitly opted into skipping
-    # those anchors ([images] skip_missing_images = true, §3.3 预授权退路).
+    # Every image-modality anchor prefers a picture under
+    # ``<image_dir>/<visual_domain>/`` and otherwise reuses one from the
+    # tree-wide pool, so a required domain is only *really* missing when the
+    # tree holds no usable image at all.  That state is refused here — naming
+    # the domains left without a picture, the directories they would be read
+    # from and how many anchors they affect — unless the user explicitly opted
+    # into skipping those anchors ([images] skip_missing_images = true, §3.3
+    # 预授权退路).
     # Only the anchors still to be generated are checked: a completed bank needs
     # no image lookup at all.
     #
@@ -1737,9 +1769,11 @@ def run(
         for cycle, resolution in image_resolutions.items():
             for domain, source in resolution.selected.items():
                 selected_sources[(cycle, domain)] = source
-        # The boundary readout is over the whole run, not one round: a domain is
-        # missing for the plan when *any* round cannot supply it, and the merged
-        # view is what the refusal message and the skip filter reason about.
+        # The boundary readout is over the whole run, not one round.  Since the
+        # fallback covers a domain whose own directory holds no image, a domain
+        # lands here only when the image tree holds **no usable image at all**;
+        # the merged view is what the refusal message and the skip filter
+        # reason about.
         merged_missing: dict[str, StringList] = {}
         for resolution in image_resolutions.values():
             for domain, anchor_ids in resolution.missing.items():
@@ -1749,13 +1783,22 @@ def run(
                 domain: source for (_, domain), source in sorted(selected_sources.items())
             }
             merged_counts: dict[str, int] = {}
+            merged_fallback: set[str] = set()
+            merged_fallback_anchors = 0
+            merged_pool = 0
             for resolution in image_resolutions.values():
                 merged_counts.update(resolution.candidate_counts)
+                merged_fallback |= resolution.fallback
+                merged_fallback_anchors += resolution.fallback_anchor_count
+                merged_pool = max(merged_pool, resolution.pool_candidate_count)
             merged = DomainImageResolution(
                 selected=merged_selected,
                 missing=merged_missing,
                 cycle=min(image_resolutions),
                 candidate_counts=merged_counts,
+                fallback=merged_fallback,
+                pool_candidate_count=merged_pool,
+                fallback_anchor_count=merged_fallback_anchors,
             )
             if not config.images.skip_missing_images:
                 raise ConfigError(
@@ -1966,8 +2009,7 @@ def run(
                 raise ConfigError(
                     f"image {source} for visual_domain {domain!r} could not be "
                     f"converted/copied into {output_dir / 'images' / domain}. "
-                    f"Replace it with a readable image, or remove the domain's "
-                    f"directory to be told it is missing."
+                    f"Replace it with a readable image that the run may reuse."
                 )
             rel_by_source[source] = placed[0]
             rel_by_cycle_domain[(cycle, domain)] = placed[0]

@@ -84,7 +84,7 @@ flowchart TD
     D --> E["sample_coordinates(seed, count)<br/>core/sampling.py: cycle-shuffle"]
     E --> F["AnchorSpec 计划<br/>N 条坐标（缺省一轮 = U）"]
     F --> G{"--image-dir ?"}
-    G -- 是 --> H["resolve_domain_images<br/>按 image_dir/visual_domain/ 解析<br/>并按轮次轮转选图<br/>domain/image_store.py"]
+    G -- 是 --> H["resolve_domain_images<br/>先按 image_dir/visual_domain/ 解析<br/>无候选则退回全局池<br/>并按轮次轮转选图<br/>domain/image_store.py"]
     G -- 否 --> I["纯文本锚点"]
     H --> J["generate_text_anchors<br/>domain/text_anchor.py"]
     I --> J
@@ -107,10 +107,12 @@ flowchart TD
   （`ard.domain.text_anchor._generate_one_anchor`）。
 - **入库是唯一持久化入口**：形状门、`data_source` 门、锚点 id 唯一性都在 `ard.domain.bank.append_anchor`
   内完成；manifest 与验收读数都从落盘的记录重建。
-- **影像按坐标寻址、按轮次轮转**：影像态锚点按自己的 `visual_domain` 到 `<image_dir>/<visual_domain>/` 取图，
-  同一域的多张图按**轮次**确定性轮转（`ard.domain.image_store.select_domain_image` 的 `cycle` 参数，
-  `cycle = 0` 与 v4 旧行为逐字节一致）；缺图的域在**创建输出目录之前**被拒绝，除非显式配置
-  `[images] skip_missing_images = true`。
+- **影像按坐标寻址、按轮次轮转、缺图则复用**：影像态锚点优先按自己的 `visual_domain` 到
+  `<image_dir>/<visual_domain>/` 取图，同一域的多张图按**轮次**确定性轮转
+  （`ard.domain.image_store.select_domain_image` 的 `cycle` 参数，`cycle = 0` 与 v4 旧行为逐字节一致）；
+  该目录没有可用图时退回整棵图片树的全局池（`list_pool_images`）并同样按轮次轮转，因此只给一张图也能
+  跑完整轮。只有整棵树都没有可用图时域才算真的缺图，在**创建输出目录之前**被拒绝，除非显式配置
+  `[images] skip_missing_images = true`。复用与否由 `DomainImageResolution.fallback` 记录并进入 manifest。
 - **验收读数不参与生成**：`q95` 等读数在生成完成后计算，读的是已落盘记录与用户提供的目标集，
   不影响采样与生成（`ard.pipeline._run_acceptance`）。
 
@@ -145,7 +147,7 @@ outputs/<run_name>/            # 默认 ard_dataset_<YYYYmmdd_HHMMSS>；--smoke 
 ├── anchor_bank.jsonl          # 锚点库，每行一条 record（schema_version 5.0.0）
 ├── config.toml                # 合并后的配置快照（密钥已脱敏，端点保留）
 ├── plan_identity.in_progress.json  # 只在运行结束前存在：中途可审计的计划身份
-├── images/                    # 影像态锚点图片的落点：images/<visual_domain>/<图片文件>（转码或复制而来）；只有本次带影像态锚点时才创建
+├── images/                    # 影像态锚点图片的落点：images/<visual_domain>/<图片文件>（转码或复制而来，同一源文件只落一份）；只有本次带影像态锚点时才创建
 ├── logs/                      # 文件日志（ard.log 等，见 logging.py）
 ├── results/
 │   ├── coverage.json          # 机器可读验收读数（report_schema = "ard-acceptance-3"）
@@ -232,10 +234,11 @@ flowchart TD
   **端点与模型名保留**（§7.1 把端点归为环境字段，不是机密）。它与 manifest 的 `config` 段共用同一份脱敏字典
   （单一真相源），并且本身是合法的 `--config`，配合 `--override` 提供凭证即可重跑（§8.5）。
 
-## 6. 图像按 `visual_domain` 寻址，并按轮次轮转
+## 6. 图像按 `visual_domain` 寻址，缺图则从全局池轮转复用
 
-影像态每条样本带且仅带一个 `visual_domain` 叶坐标，图片就按该坐标寻址——不从一个扁平图片池里抽：
-扁平池无法保证"图"与"标签"一致，错配会静默给锚点打上错误的视觉域。寻址约定由 `ard.domain.image_store`
+影像态每条样本带且仅带一个 `visual_domain` 叶坐标，图片优先按该坐标寻址：归档在域目录下的图，
+才是用户为"内容与标签相符"背书的那张。但寻址失败不再等于丢锚点——域的目录里没有图时，退回整棵
+图片树的全局池继续轮转，**只给一张图也能跑完整轮**。寻址与选图约定由 `ard.domain.image_store`
 独占，`ard.pipeline.run` 只做编排与边界校验。
 
 ```mermaid
@@ -245,13 +248,17 @@ flowchart TD
     Q -- "是（影像态）" --> D["列 &lt;image_dir&gt;/visual_domain/ 的直接子文件<br/>（白名单扩展名）"]
     D --> R["按文件名排序得到 ordered<br/>offset = H(seed:visual_domain)<br/>选 ordered[(offset + c) % len]"]
     R --> C["复制到 output/images/visual_domain/"]
-    D --> M{"该域有合法图片 ?"}
-    M -- "否，且 skip_missing_images=false" --> X["ConfigError：列出缺失域/期望路径/受影响条数<br/>发生在创建输出目录之前"]
-    M -- "否，且 =true" --> W["逐条 WARNING + manifest 声明<br/>该样本不生成"]
+    D --> M{"该域自己有候选 ?"}
+    M -- "是" --> R
+    M -- "否" --> Z["扫整棵 image_dir 得全局池<br/>list_pool_images（确定性排序）"]
+    Z --> ZP{"全局池为空 ?"}
+    ZP -- "否" --> ZR["同一公式在池上轮转<br/>并标记 fallback"] --> C
+    ZP -- "是，且 skip_missing_images=false" --> X["ConfigError：列出无图域/期望路径/受影响条数<br/>发生在创建输出目录之前"]
+    ZP -- "是，且 =true" --> W["逐条 WARNING + manifest 声明<br/>该样本不生成"]
 ```
 
 - **唯一约定**：`<image_dir>/<visual_domain>/<图片文件>`，`<image_dir>` 来自 `--image-dir`；
-  只取该子目录的**直接子文件**，扩展名白名单见 `ard.domain.image_store.SUPPORTED_EXTENSIONS` 与
+  域内选择只取该子目录的**直接子文件**，扩展名白名单见 `ard.domain.image_store.SUPPORTED_EXTENSIONS` 与
   `CONVERTABLE_EXTENSIONS`；约定常量 `VISUAL_DOMAIN_LAYOUT`，目录解析 `domain_directory`，
   域解析 `resolve_domain_images`；`configs/config.toml` 面向用户说明同一约定。
 - **选择确定可复现，并按轮次轮转（v5）**：候选先按文件名排序，再以 `H(seed:visual_domain)` 摘要作偏移，
@@ -259,7 +266,12 @@ flowchart TD
   `cycle` 参数）——同一 `(候选集, 域, seed, cycle)` 在任何平台得到同一张图；`cycle = 0` 与 v4 旧行为
   逐字节一致。因此一个域有多张图时，不同轮次会用不同的图，而不是把整个数据集钉在 21 张图上。
   选中的图由 `ard.pipeline._assign_images_by_domain` 分配到锚点。
-- **缺图默认报错**：所需域缺目录或缺合法图片时，`ard.pipeline.run` 在**创建输出目录之前**拒绝整个运行
+- **域内没图则退回全局池复用（v5 主席裁定）**：`list_pool_images` 递归枚举整棵 `--image-dir`，按
+  相对路径的 `(父目录, 文件名)` 排序成确定性全局池；域内无候选时在同一公式下对池轮转，并把该域记入
+  `DomainImageResolution.fallback`。**只有全局池也为空**时域才算真的缺图。池只有 1 张时所有域、所有
+  轮次都取到那一张——这正是"只给一张图也行"的语义。选中的源文件在
+  `ard.pipeline.run` 的放置步骤里**同一源只落一份拷贝**，被多个 `(cycle, 域)` 共享。
+- **缺图默认报错**：全局池为空时，`ard.pipeline.run` 在**创建输出目录之前**拒绝整个运行
   （`raise ConfigError`，报文由 `ard.pipeline._missing_image_message` 生成），而第一个副作用
   `output_dir.mkdir` 在其后；只有显式开启 `[images] skip_missing_images = true` 才跳过，
   且逐条 WARNING 并在 `manifest.json` 里申报跳过数与域（`ard.pipeline._declare_images`）——绝不静默。
@@ -270,8 +282,11 @@ flowchart TD
   且只考察**本轮放置/复用**的文件；记录集是**既有记录 ∪ 本轮写出记录**，所以同一张图被同域其它
   **已写出**锚点共享时**不删**（按记录引用判定，而非按锚点数），**断点续跑**时既有记录引用的图同样不删。
   删除失败只记 WARNING、不影响本轮运行。
-- **manifest 的 `images` 段**记录 `resolved_images`（每个 `(cycle, visual_domain, image)` 一行）与
-  `domain_candidate_counts`（域名 → 可用文件数），使"这一轮用哪张图、每个域有多少备选"可审计。
+- **manifest 的 `images` 段**记录 `resolved_images`（每个 `(cycle, visual_domain, image, fallback)`
+  一行）、`domain_candidate_counts`（域名 → 该域目录下的可用文件数）、`pool_candidate_count`
+  （全局池大小）与 `fallback_visual_domains` / `fallback_anchor_count`（哪些域、多少条锚点用的是复用的
+  图），使"这一轮用哪张图、是自己的还是复用来的、每个域有多少备选"可审计——复用必须可见，
+  否则"复用的图够不够用"这个判断就无从谈起。
 
 ## 7. 引用约定
 

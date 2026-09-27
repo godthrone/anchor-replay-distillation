@@ -9,9 +9,16 @@ format-conversion of the selected files into ``<output_dir>/images/``.
 
 The addressing convention is the only layout the pipeline uses.  The flat
 helpers :func:`scan_images` / :func:`sample_images` remain as generic utilities
-(and are exercised directly by the unit tests); a run never picks an image from
-a cross-domain pool, because a pool cannot tell whether the picture matches the
-label it is attached to.
+(and are exercised directly by the unit tests).
+
+**Reuse rather than skip (v5 ruling).**  A domain's own directory is always
+preferred, but a domain whose directory holds no image is *not* left without a
+picture while the tree holds one elsewhere: the pick falls back to a
+deterministic list of **every** usable image under the image root and rotates
+through it.  A user who supplied one picture therefore still gets a complete
+run — every domain, every round, that one picture — and the resolution records
+which domains were served that way so the reuse stays visible instead of
+silently passing as a domain-matched picture.
 """
 
 from __future__ import annotations
@@ -112,10 +119,10 @@ def sample_images(
 # ── Per-visual_domain addressing (the run convention) ──────────────────────
 #
 # Every image-modality anchor carries exactly one ``visual_domain`` coordinate
-# (see :mod:`ard.core.sampling`).  The image that anchor is shown must therefore
-# be addressed *by that coordinate*, not drawn from a flat pool: a flat pool
-# cannot guarantee that the picture matches the label it is attached to, and a
-# mismatch silently mislabels the anchor.  One subdirectory per leaf:
+# (see :mod:`ard.core.sampling`).  The image that anchor is shown is addressed
+# *by that coordinate* first — an image filed under the domain is the one whose
+# content the user vouched for, and a mismatch silently mislabels the anchor.
+# One subdirectory per leaf:
 #
 #     <image_dir>/<visual_domain>/<image file>
 #
@@ -123,6 +130,18 @@ def sample_images(
 # offers, which file a round (``cycle``) picks, and which required domains are
 # missing.  v5 rotates the pick by round, so a domain with K images shows all K
 # of them over K rounds instead of pinning the whole run to one file.
+#
+# **Fallback when a domain has no picture of its own.**  Refusing (or skipping)
+# every anchor of an unstocked domain made the addressing rule destroy runs the
+# user could have had: a tree that stocks one visual domain still answers every
+# other coordinate, just with a reused picture.  So the pick order is
+# per-domain directory first, then a tree-wide pool of every usable image under
+# the root.  Only a tree with **no usable image at all** is "really missing" —
+# that is the one case the caller's refusal / ``skip_missing_images`` still
+# governs.  A reused pick is always recorded (see
+# :attr:`DomainImageResolution.fallback`), so the substitution is visible and
+# never passes for a domain-matched picture (主席: the effect is the user's to
+# judge — which requires them to see it).
 
 #: The addressing convention, spelled out for error messages and docs.
 VISUAL_DOMAIN_LAYOUT = "<image_dir>/<visual_domain>/<image file>"
@@ -167,6 +186,42 @@ def list_domain_images(
     )
 
 
+def list_pool_images(
+    image_dir: str | Path,
+    *,
+    extensions: set[str] | None = None,
+) -> list[Path]:
+    """List **every** usable image under *image_dir*, deterministically.
+
+    This is the pool the fallback pick draws from: the whole tree, so a domain
+    with no directory of its own can still be served with a picture the user
+    did supply.  Unlike :func:`list_domain_images` the scan is recursive — the
+    leaf directories are where the files live — and the canonical order is the
+    ``(parent, name)`` pair rather than the bare file name, because two leaves
+    may hold same-named files.  Sorting by the parts (not by the joined string)
+    keeps the order stable on any platform and independent of enumeration
+    order.
+
+    Args:
+        image_dir: Root of the image tree the user passed via ``--image-dir``.
+        extensions: Allowed extensions; defaults to ``SUPPORTED_EXTENSIONS``.
+
+    Returns:
+        Sorted paths; empty when the directory is missing or holds no image —
+        the only state in which a required domain is genuinely without a
+        picture.
+    """
+    if extensions is None:
+        extensions = SUPPORTED_EXTENSIONS
+    root = Path(image_dir)
+    if not root.is_dir():
+        return []
+    return sorted(
+        (p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in extensions),
+        key=lambda p: p.relative_to(root).parts,
+    )
+
+
 def select_domain_image(
     candidates: list[Path],
     visual_domain: str,
@@ -183,6 +238,13 @@ def select_domain_image(
     domain in means two domains that happen to hold the same file names do not
     simply pick the same index.
 
+    *candidates* may be either the domain's own directory listing or the
+    tree-wide fallback pool; the indexing rule is identical, so a fallback
+    domain rotates through what the user actually supplied.  The domain name
+    stays the mixing key in both cases, so two fallback domains share the pool
+    without resolving to the same picture by construction — each draws its own
+    offset into it.
+
     **Rotation (v5).**  ``cycle`` advances the index by one per round:
     ``ordered[(offset + cycle) % len(ordered)]``.  Since the index wraps, a
     domain whose directory holds ``K`` usable images shows **all K of them over
@@ -198,15 +260,17 @@ def select_domain_image(
     and "this domain has one image, necessarily reused" stay distinguishable.
 
     Args:
-        candidates: Non-empty list from :func:`list_domain_images`.
+        candidates: Non-empty list — the domain's own files
+            (:func:`list_domain_images`) or the fallback pool
+            (:func:`list_pool_images`).
         visual_domain: The leaf, mixed into the seed.
         seed: The run's generation seed (recorded in ``<output_dir>/config.toml``).
         cycle: The 0-based round index, with the same meaning as the sampling
             layer's "第 c 轮" (``c, _ = divmod(plan_index, U)``).  Default 0.
 
     Raises:
-        ValueError: If *candidates* is empty — a caller must have refused the
-            missing domain at the boundary instead of asking to select from it —
+        ValueError: If *candidates* is empty — a caller must have confirmed that
+            the tree holds no image at all before asking to select from it —
             or if *cycle* is negative (the round index is 0-based).
     """
     if not candidates:
@@ -226,22 +290,45 @@ class DomainImageResolution:
 
     Attributes:
         selected: ``visual_domain -> source image`` for every required domain
-            that has at least one usable file, in first-required order.
+            that could be served — from its own directory, or from the
+            fallback pool when that directory holds nothing — in first-required
+            order.
         missing: ``visual_domain -> anchor ids`` for every required domain that
-            has none.  The ids are exactly the samples a skipping run drops, so
-            the caller can count them and name them one by one.
+            could **not** be served.  Since the fallback covers a domain with no
+            directory of its own, this is non-empty only when the whole image
+            tree holds no usable image.  The ids are exactly the samples a
+            skipping run drops, so the caller can count them and name them one
+            by one.
         cycle: The 0-based round this resolution describes — the ``cycle`` it
             was asked for.
-        candidate_counts: ``visual_domain -> number of usable files`` for every
-            required domain (0 for a missing one).  This is the readout that
-            separates a domain which can rotate (more than one candidate) from
-            one that necessarily reuses its single image.
+        candidate_counts: ``visual_domain -> number of usable files`` **in that
+            domain's own directory** (0 for a domain served by the fallback).
+            This is the readout that separates a domain which can rotate (more
+            than one candidate) from one that necessarily reuses its single
+            image.
+        fallback: The required domains that were served from the tree-wide pool
+            because their own directory holds no usable image.  The readout the
+            honesty requirement needs: a reused picture must be visible as
+            reused, so the user can judge the effect on their dataset (主席:
+            "那样效果不好是用户的问题" — which presupposes they can see that
+            they are relying on reuse).
+        fallback_anchor_count: How many anchors this round shows a **reused**
+            picture — the summed anchor ids of the domains in :attr:`fallback`.
+            Per round because "which domains fall back" is a per-round fact, so
+            the caller sums it over rounds to get the run-level count.
+        pool_candidate_count: Size of the tree-wide fallback pool for this
+            round.  ``0`` together with a non-empty ``missing`` is the "no image
+            anywhere" state; ``1`` is the one-picture tree, where every domain
+            and round necessarily shows that single file.
     """
 
     selected: dict[str, Path]
     missing: dict[str, StringList]
     cycle: int = 0
     candidate_counts: dict[str, int] = field(default_factory=dict)
+    fallback: set[str] = field(default_factory=set)
+    pool_candidate_count: int = 0
+    fallback_anchor_count: int = 0
 
 
 def resolve_domain_images(
@@ -266,12 +353,18 @@ def resolve_domain_images(
     would be the same coordinate/content mismatch this addressing exists to
     prevent.
 
-    A domain directory that is **missing, empty, or holds no usable image**
-    keeps its pre-v5 behaviour: it is *not* an error here — the domain is
-    reported through ``missing`` (with the anchor ids it affects) and the run
-    decides at its boundary, either refusing the plan up front or, with
-    ``[images] skip_missing_images = true``, dropping those anchors with one
-    WARNING each and declaring them in ``manifest.json``.
+    **Pick order.**  The domain's own directory wins when it holds a usable
+    image.  When it does not, the pick falls back to the tree-wide pool
+    (:func:`list_pool_images`) — every usable image under *image_dir* — and
+    rotates through it by round, so a user who supplied few pictures (even one)
+    still gets a complete run.  A fallback pick is recorded in
+    :attr:`DomainImageResolution.fallback` and logged at INFO.
+
+    Only a tree that holds **no usable image at all** makes a domain missing:
+    every required domain is then reported through ``missing`` (with the anchor
+    ids it affects), and the run decides at its boundary, either refusing the
+    plan up front or, with ``[images] skip_missing_images = true``, dropping
+    those anchors with one WARNING each and declaring them in ``manifest.json``.
 
     Args:
         image_dir: Root of the image tree (``--image-dir``).
@@ -282,8 +375,9 @@ def resolve_domain_images(
         extensions: Allowed extensions; defaults to ``SUPPORTED_EXTENSIONS``.
 
     Returns:
-        A :class:`DomainImageResolution`; never raises for a missing domain —
-        refusing (or skipping) is the caller's decision at the boundary.
+        A :class:`DomainImageResolution`; never raises for a domain without its
+        own image — refusing (or skipping) is the caller's decision at the
+        boundary, and it only ever applies to a tree with no image at all.
     """
     required: dict[str, StringList] = {}
     for spec in specs:
@@ -292,8 +386,14 @@ def resolve_domain_images(
             continue
         required.setdefault(domain, []).append(spec.id)
 
+    # Scanned once, not per domain: every fallback pick draws from the same
+    # list, so the pool's contents and order cannot differ between domains.
+    pool = list_pool_images(image_dir, extensions=extensions)
+
     selected: dict[str, Path] = {}
     missing: dict[str, StringList] = {}
+    fallback: set[str] = set()
+    fallback_anchors = 0
     candidate_counts: dict[str, int] = {}
     for domain, anchor_ids in required.items():
         candidates = list_domain_images(image_dir, domain, extensions=extensions)
@@ -309,6 +409,23 @@ def resolve_domain_images(
                 len(candidates),
                 domain_directory(image_dir, domain),
             )
+        elif pool:
+            # No picture of its own, but the user supplied one somewhere: reuse
+            # it rather than dropping the anchor.  The domain name is still the
+            # mixing key, so different fallback domains spread over the pool.
+            chosen = select_domain_image(pool, domain, seed, cycle=cycle)
+            selected[domain] = chosen
+            fallback.add(domain)
+            fallback_anchors += len(anchor_ids)
+            logger.info(
+                "visual_domain %r: no usable image under %s — round %d reuses %s "
+                "from the image tree's pool of %d usable image(s)",
+                domain,
+                domain_directory(image_dir, domain),
+                cycle,
+                chosen.name,
+                len(pool),
+            )
         else:
             missing[domain] = anchor_ids
     return DomainImageResolution(
@@ -316,6 +433,9 @@ def resolve_domain_images(
         missing=missing,
         cycle=cycle,
         candidate_counts=candidate_counts,
+        fallback=fallback,
+        pool_candidate_count=len(pool),
+        fallback_anchor_count=fallback_anchors,
     )
 
 

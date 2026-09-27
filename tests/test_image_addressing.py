@@ -1,16 +1,21 @@
-"""Per-``visual_domain`` image addressing in ``pipeline.run`` (WP-S6d).
+"""Per-``visual_domain`` image addressing in ``pipeline.run`` (WP-S6d, WP-13).
 
-The behaviour frozen here is the user's ruling, translated into three contracts:
+The behaviour frozen here is the user's ruling, translated into four contracts:
 
 1. an image-modality anchor's picture is read from
-   ``<image_dir>/<visual_domain>/`` — never from a cross-domain pool, so the
-   image always matches the coordinate it is attached to;
-2. a required visual domain with no usable image is **refused by default**,
-   before the output directory exists, with the missing domains, their expected
-   paths and the affected anchor count in the message;
-3. setting ``[images] skip_missing_images = true`` (the §3.3 预授权退路) skips
-   those anchors instead — one WARNING per dropped anchor and a machine-readable
-   declaration in ``manifest.json``, never a silent shortfall.
+   ``<image_dir>/<visual_domain>/`` **when that directory holds one** — the
+   domain-matched picture is always preferred;
+2. a domain whose own directory holds no usable image **reuses** one from the
+   tree-wide pool instead of losing its anchors: a user who supplied few
+   pictures (even a single one) still gets a complete run, and the reuse is
+   declared per ``(round, domain)`` and in aggregate in ``manifest.json``;
+3. only a tree with **no usable image at all** is refused by default, before
+   the output directory exists, naming the domains left without a picture and
+   the directories they would be read from;
+4. setting ``[images] skip_missing_images = true`` (the §3.3 预授权退路)
+   applies to that same no-image-anywhere state only: those anchors are skipped
+   instead — one WARNING per dropped anchor and a machine-readable declaration
+   in ``manifest.json``, never a silent shortfall.
 
 No network is reachable: the generator is replaced by a spy that appends a
 minimal valid record per spec, and the API clients the pipeline builds point at
@@ -240,9 +245,13 @@ def test_images_rotate_by_round_through_the_pipeline(
     )
     manifest = _manifest(output_dir)
     assert manifest["images"]["domain_candidate_counts"] == {"animals": 2}
+    assert manifest["images"]["pool_candidate_count"] == 2
+    assert manifest["images"]["fallback_visual_domains"] == []
+    assert manifest["images"]["fallback_anchor_count"] == 0
     assert [
         (row["cycle"], row["visual_domain"]) for row in manifest["images"]["resolved_images"]
     ] == [(0, "animals"), (1, "animals")]
+    assert all(row["fallback"] is False for row in manifest["images"]["resolved_images"])
     files = {Path(first).name, Path(second).name}
     assert len(files) == 2
     assert (output_dir / "images" / "animals").is_dir()
@@ -296,23 +305,67 @@ def test_same_seed_is_byte_identical(tmp_path: Path, monkeypatch: pytest.MonkeyP
 # ── 2. missing images: refuse by default, before any side effect ──────────────
 
 
-def test_a_missing_domain_is_refused_with_domains_paths_and_counts(
+def test_an_unstocked_domain_reuses_the_pool_and_declares_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A domain with no directory of its own is served from the pool, not dropped.
+
+    The old rule made this plan impossible (``vehicles`` had no directory, so its
+    two anchors were refused or skipped).  The ruling replaces it with reuse: the
+    anchors are generated, shown a picture the user did supply, and the
+    substitution is named both per ``(round, domain)`` and in aggregate.
+    """
     from ard.pipeline import run
 
     images = _image_dir(tmp_path, {"animals": 1})
     specs = [_spec("a1", "animals"), _spec("v1", "vehicles"), _spec("v2", "vehicles")]
     output_dir, spy, plan = _rig(tmp_path, monkeypatch, specs)
 
+    run(load_config(tmp_path / "config.toml"), image_dir=str(images), generate_specs=plan)
+
+    assert spy.requested == [["a1", "v1", "v2"]], "no anchor is dropped for want of a picture"
+    animal_path, vehicle_one, vehicle_two = spy.image_paths
+    assert animal_path is not None and "/images/animals/" in animal_path
+    # One source file is placed once and shared by every (round, domain) that
+    # selected it, so the reused picks reference the placed copy rather than a
+    # second `images/vehicles/` duplicate — the manifest, not the path, is what
+    # declares which anchors are served by reuse.
+    assert Path(vehicle_one).name == "img_0.png"
+    assert Path(vehicle_one).is_file() and Path(vehicle_two).is_file()
+
+    manifest = _manifest(output_dir)
+    images_section = manifest["images"]
+    assert images_section["skipped_anchor_count"] == 0
+    assert images_section["fallback_visual_domains"] == ["vehicles"]
+    assert images_section["fallback_anchor_count"] == 2
+    assert images_section["pool_candidate_count"] == 1
+    assert images_section["domain_candidate_counts"] == {"animals": 1, "vehicles": 0}
+    rows = {(row["cycle"], row["visual_domain"]): row for row in images_section["resolved_images"]}
+    assert rows[(0, "animals")]["fallback"] is False
+    assert rows[(0, "vehicles")]["fallback"] is True
+
+
+def test_a_missing_image_tree_is_refused_with_domains_paths_and_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No usable image anywhere: the refusal names the domains and the count."""
+    from ard.pipeline import run
+
+    root = tmp_path / "images"
+    (root / "animals").mkdir(parents=True)
+    (root / "animals" / "notes.md").write_text("not an image", encoding="utf-8")
+    specs = [_spec("a1", "animals"), _spec("v1", "vehicles"), _spec("v2", "vehicles")]
+    output_dir, spy, plan = _rig(tmp_path, monkeypatch, specs)
+
     with pytest.raises(ConfigError) as excinfo:
-        run(load_config(tmp_path / "config.toml"), image_dir=str(images), generate_specs=plan)
+        run(load_config(tmp_path / "config.toml"), image_dir=str(root), generate_specs=plan)
 
     message = str(excinfo.value)
-    assert "vehicles" in message, "the missing visual_domain must be named"
-    assert str(images / "vehicles") in message, "its expected path must be named"
+    assert "vehicles" in message, "the domain left without a picture must be named"
+    assert str(root / "vehicles") in message, "the directory it would be read from must be named"
     assert "2 anchor(s)" in message, "the affected anchor count must be named"
-    assert "Total affected anchors: 2 of 3 planned sample(s)" in message
+    assert "Total affected anchors: 3 of 3 planned sample(s)" in message
+    assert "no image at all" in message, "the refusal must say why reuse cannot help"
     assert "skip_missing_images" in message, "the way out must be pointed at"
     assert spy.requested == [], "nothing may be generated after a refusal"
     assert not output_dir.exists(), "the refusal must precede the output directory (§2.3)"
@@ -335,20 +388,38 @@ def test_a_missing_image_directory_is_refused_before_the_output_dir(
     assert not output_dir.exists()
 
 
-def test_an_empty_or_unrelated_domain_directory_counts_as_missing(
+def test_a_three_domain_plan_runs_on_a_one_picture_tree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """★ 主席点名的场景, end to end: one picture, three domains, no anchor lost.
+
+    Two of the three domains have no directory at all, so the old rule would
+    have refused the plan (or dropped most of it).  The run must complete, every
+    anchor must end up referencing a file, and the manifest must say that two
+    domains were served by reuse.
+    """
     from ard.pipeline import run
 
-    root = tmp_path / "images"
-    (root / "animals").mkdir(parents=True)
-    (root / "animals" / "notes.md").write_text("not an image", encoding="utf-8")
-    output_dir, _spy, plan = _rig(tmp_path, monkeypatch, [_spec("a1", "animals")])
+    images = _image_dir(tmp_path, {"animals": 1})
+    specs = [_spec("a1", "animals"), _spec("p1", "plants"), _spec("v1", "vehicles")]
+    output_dir, spy, plan = _rig(tmp_path, monkeypatch, specs)
 
-    with pytest.raises(ConfigError, match="no usable image"):
-        run(load_config(tmp_path / "config.toml"), image_dir=str(root), generate_specs=plan)
+    run(load_config(tmp_path / "config.toml"), image_dir=str(images), generate_specs=plan)
 
-    assert not output_dir.exists()
+    assert spy.requested == [["a1", "p1", "v1"]], "no anchor may be lost on a one-picture tree"
+    assert all(path is not None for path in spy.image_paths)
+    # The single source file is placed once and shared by all three domains; the
+    # manifest (not a per-domain duplicate) carries the reuse declaration.
+    placed = sorted(p.relative_to(output_dir).as_posix() for p in output_dir.rglob("*.png"))
+    assert placed == ["images/animals/img_0.png"], "one source, one placed copy"
+    for path in spy.image_paths:
+        assert path is not None and Path(path).is_file(), "no reference may dangle"
+
+    images_section = _manifest(output_dir)["images"]
+    assert images_section["pool_candidate_count"] == 1
+    assert images_section["fallback_visual_domains"] == ["plants", "vehicles"]
+    assert images_section["fallback_anchor_count"] == 2
+    assert images_section["skipped_anchor_count"] == 0
 
 
 # ── 3. the opt-in skip switch ─────────────────────────────────────────────────
@@ -368,28 +439,32 @@ def test_skip_switch_is_declared_in_both_configs() -> None:
 def test_skip_missing_images_warns_and_declares_each_dropped_anchor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """The skip switch governs the one state where reuse cannot help: no image anywhere."""
     from ard.pipeline import run
 
-    images = _image_dir(tmp_path, {"animals": 1})
+    root = tmp_path / "images"
+    (root / "animals").mkdir(parents=True)
+    (root / "animals" / "notes.md").write_text("not an image", encoding="utf-8")
     specs = [_spec("t1", None), _spec("a1", "animals"), _spec("v1", "vehicles")]
     output_dir, spy, plan = _rig(tmp_path, monkeypatch, specs, skip_missing_images=True)
 
     with caplog.at_level("WARNING"):
-        run(load_config(tmp_path / "config.toml"), image_dir=str(images), generate_specs=plan)
+        run(load_config(tmp_path / "config.toml"), image_dir=str(root), generate_specs=plan)
 
-    assert spy.requested == [["t1", "a1"]], "the unsupported anchor is not generated"
+    assert spy.requested == [["t1"]], "every unsupported anchor is not generated"
     skipped = [
         record.getMessage() for record in caplog.records if "Skipping anchor" in record.getMessage()
     ]
-    assert len(skipped) == 1, "one WARNING per dropped anchor"
-    assert "v1" in skipped[0] and "vehicles" in skipped[0]
+    assert len(skipped) == 2, "one WARNING per dropped anchor"
+    assert any("a1" in message and "animals" in message for message in skipped)
+    assert any("v1" in message and "vehicles" in message for message in skipped)
 
     manifest = _manifest(output_dir)
     assert manifest["images"]["skip_missing_images"] is True
-    assert manifest["images"]["skipped_anchor_count"] == 1
-    assert manifest["images"]["skipped_visual_domains"] == ["vehicles"]
+    assert manifest["images"]["skipped_anchor_count"] == 2
+    assert manifest["images"]["skipped_visual_domains"] == ["animals", "vehicles"]
     records = (output_dir / "anchor_bank.jsonl").read_text(encoding="utf-8").splitlines()
-    assert len(records) == 2, "the artifact is short and the manifest says why"
+    assert len(records) == 1, "the artifact is short and the manifest says why"
 
 
 def test_resuming_a_skip_run_stays_declared_and_writes_no_new_record(
@@ -398,22 +473,25 @@ def test_resuming_a_skip_run_stays_declared_and_writes_no_new_record(
     """The second run has one anchor left — the skipped one — and must not loop."""
     from ard.pipeline import run
 
-    images = _image_dir(tmp_path, {"animals": 1})
+    root = tmp_path / "images"
+    root.mkdir()
     specs = [_spec("a1", "animals"), _spec("v1", "vehicles")]
     output_dir, spy, plan = _rig(tmp_path, monkeypatch, specs, skip_missing_images=True)
     config = load_config(tmp_path / "config.toml")
 
     with caplog.at_level("WARNING"):
-        run(config, image_dir=str(images), generate_specs=plan)
-        before = (output_dir / "anchor_bank.jsonl").read_text(encoding="utf-8")
-        run(config, image_dir=str(images), generate_specs=plan)
+        run(config, image_dir=str(root), generate_specs=plan)
+        bank = output_dir / "anchor_bank.jsonl"
+        before = bank.read_text(encoding="utf-8") if bank.exists() else None
+        run(config, image_dir=str(root), generate_specs=plan)
 
-    assert spy.requested == [["a1"]], "the second run generates nothing new"
-    assert (output_dir / "anchor_bank.jsonl").read_text(encoding="utf-8") == before
+    assert spy.requested == [], "there is no image anywhere, so nothing is generated"
+    bank = output_dir / "anchor_bank.jsonl"
+    assert (bank.read_text(encoding="utf-8") if bank.exists() else None) == before
     assert any(
-        "Every remaining anchor (1) was skipped" in record.getMessage() for record in caplog.records
+        "Every remaining anchor (2) was skipped" in record.getMessage() for record in caplog.records
     )
-    assert _manifest(output_dir)["images"]["skipped_visual_domains"] == ["vehicles"]
+    assert _manifest(output_dir)["images"]["skipped_visual_domains"] == ["animals", "vehicles"]
 
 
 # ── 4. an abandoned anchor leaves no picture behind ─────────────────────────
