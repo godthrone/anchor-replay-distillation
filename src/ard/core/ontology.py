@@ -130,7 +130,6 @@ class HierarchicalAxis(BaseModel):
     levels: list[str]
     leaf_is_value: bool
     tree_ref: str
-    counts: dict[str, int]
 
 
 class GroupedAxis(BaseModel):
@@ -142,7 +141,6 @@ class GroupedAxis(BaseModel):
     applies_to: str | dict[str, str]
     value_model: Literal["grouped"]
     groups: dict[str, AxisGroup]
-    counts: dict[str, int]
 
 
 class ConditionalGroupedAxis(GroupedAxis):
@@ -348,50 +346,6 @@ class WordingPolicy(BaseModel):
     rationale: str
 
 
-class DerivedCounts(BaseModel):
-    """Counts the ontology file reports about its own coordinate space."""
-
-    model_config = _STRICT
-    definitions: dict[str, str]
-    free_axis_product: int
-    raw_restricted_block: int
-    legal_restricted_block: int
-    legal_restricted_block_image_capable: int
-    legal_samples_text: int
-    legal_samples_image: int
-    legal_samples_total: int
-    raw_combination_space_11_axes: int
-    raw_combination_space_with_visual: int
-    universal_axis_leaf_total: int
-    total_with_visual_axis: int
-
-
-class ValuePair(RootModel[tuple[str, str]]):
-    """A two-value pair of coordinate values."""
-
-
-class ZeroSolutionPairs(BaseModel):
-    """The (capability, input_condition) pairs that admit no legal combination."""
-
-    model_config = _STRICT
-    count: int
-    pairs: list[ValuePair]
-    note: str
-
-
-class Reachability(BaseModel):
-    """Exhaustive-enumeration facts the ontology file reports about itself."""
-
-    model_config = _STRICT
-    note: str
-    raw_restricted_block: int
-    legal_restricted_block: int
-    zero_solution_pairs: ZeroSolutionPairs
-    per_capability_legal_counts: dict[str, int]
-    per_input_condition_legal_counts: dict[str, int]
-    per_answer_mode_legal_counts: dict[str, int]
-
-
 class OntologyV4(BaseModel):
     """A fully validated ``anchor_ontology.v4.json`` coordinate ontology."""
 
@@ -408,8 +362,6 @@ class OntologyV4(BaseModel):
     constraints: list[OntologyConstraint]
     sample_fields: dict[str, SampleField]
     wording_policy: WordingPolicy
-    derived_counts: DerivedCounts
-    reachability: Reachability
 
     def axis_names(self) -> tuple[str, ...]:
         """Return the declared axis order."""

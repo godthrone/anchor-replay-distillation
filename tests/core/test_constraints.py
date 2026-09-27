@@ -1,10 +1,12 @@
 # tests/core/test_constraints.py — constraint evaluation contract tests.
 # Responsibility: lock the v4 restricted-block counts (100800 / 935 / 891 /
-# 52668), cross-check them against the ontology's self-reported numbers, and
-# cover constraint-evaluation boundaries including unsolvable pairs.
+# 52668), derive every axis / block distribution from the coordinate lists the
+# ontology declares (it carries no handwritten count block — §1.4), and cover
+# constraint-evaluation boundaries including unsolvable pairs.
 
 import json
 from collections import Counter
+from math import prod
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +20,7 @@ from ard.core.constraints import (
     ConstraintEvaluator,
     RestrictedBlock,
 )
-from ard.core.ontology import OntologyV4
+from ard.core.ontology import GroupedAxis, OntologyV4
 
 ONTOLOGY_V4_PATH = Path("ontology/anchor_ontology.v4.json")
 
@@ -42,20 +44,40 @@ def legal_blocks(evaluator: ConstraintEvaluator) -> tuple[RestrictedBlock, ...]:
 
 
 # ── The four contract counts ────────────────────────────────────────────────
+#
+# Every number pinned in this section is a **shipped-ontology contract**: it
+# holds for the ontology published with this revision of the repository, and a
+# changed ontology is expected to move it.  The runtime never depends on these
+# numbers — every runtime count is enumerated from the ontology's leaf / value
+# lists (``ConstraintEvaluator.enumerate_legal_blocks`` and friends) — so
+# editing the ontology means updating the numbers here, never the production
+# code (§1.4 single source of truth).
 
 
 def test_restricted_axis_cardinalities(evaluator: ConstraintEvaluator) -> None:
-    """The six restricted axes have 20/5/7/6/6/4 values."""
+    """The six restricted axes have 20/5/7/6/6/4 values.
+
+    **shipped-ontology contract**：只对当前随仓库发布的这份本体成立；运行时
+    不依赖它 —— 运行时计数一律从叶子清单穷举。
+    """
     assert [len(evaluator.axis_values[axis]) for axis in RESTRICTED_AXES] == [20, 5, 7, 6, 6, 4]
 
 
 def test_raw_restricted_block_is_100800(evaluator: ConstraintEvaluator) -> None:
-    """Unconstrained product of the six restricted axes."""
+    """Unconstrained product of the six restricted axes.
+
+    **shipped-ontology contract**：100800 只对当前随仓库发布的这份本体成立；
+    运行时不依赖它 —— 运行时计数一律从叶子清单穷举。
+    """
     assert evaluator.raw_restricted_block_count() == 100800
 
 
 def test_free_axis_product_is_52668(evaluator: ConstraintEvaluator) -> None:
-    """Product of the five free (R7 orthogonal) axes."""
+    """Product of the five free (R7 orthogonal) axes.
+
+    **shipped-ontology contract**：52668 只对当前随仓库发布的这份本体成立；
+    运行时不依赖它 —— 运行时计数一律从叶子清单穷举。
+    """
     assert evaluator.free_axis_product() == 52668
 
 
@@ -70,19 +92,31 @@ def test_axis_roles_match_declared_orthogonality(
 
 
 def test_legal_restricted_block_is_935(evaluator: ConstraintEvaluator) -> None:
-    """Text-modality legal restricted blocks (visual_domain gated off by R5)."""
+    """Text-modality legal restricted blocks (visual_domain gated off by R5).
+
+    **shipped-ontology contract**：935 只对当前随仓库发布的这份本体成立；
+    运行时不依赖它 —— 运行时计数一律从叶子清单穷举。
+    """
     assert len(evaluator.enumerate_legal_blocks()) == 935
 
 
 def test_legal_restricted_block_image_capable_is_891(
     evaluator: ConstraintEvaluator,
 ) -> None:
-    """Image-modality legal restricted blocks (18 image-capable capabilities)."""
+    """Image-modality legal restricted blocks (18 image-capable capabilities).
+
+    **shipped-ontology contract**：891 只对当前随仓库发布的这份本体成立；
+    运行时不依赖它 —— 运行时计数一律从叶子清单穷举。
+    """
     assert len(evaluator.enumerate_legal_blocks(image_capable_only=True)) == 891
 
 
 def test_counts_model_matches_enumeration(evaluator: ConstraintEvaluator) -> None:
-    """The aggregate counts model reports the four contract numbers."""
+    """The aggregate counts model reports the four contract numbers.
+
+    **shipped-ontology contract**：100800 / 935 / 891 / 52668 只对当前随仓库
+    发布的这份本体成立；运行时不依赖它们 —— 运行时计数一律从叶子清单穷举。
+    """
     counts = evaluator.legal_block_counts()
     assert counts.raw_restricted_block == 100800
     assert counts.legal_restricted_block == 935
@@ -90,53 +124,60 @@ def test_counts_model_matches_enumeration(evaluator: ConstraintEvaluator) -> Non
     assert counts.free_axis_product == 52668
 
 
-# ── Cross-check against the ontology's self-reported numbers ────────────────
+# ── Counts derived from the declared coordinate lists ───────────────────────
+#
+# The ontology file carries no handwritten count block (§1.4): the leaf / value
+# lists are the single authority. The tests below derive every number from those
+# declarations and cross-check it against exhaustive enumeration, so adding a
+# leaf needs no other field to be touched.
 
 
-@pytest.mark.parametrize(
-    ("field", "computed"),
-    [
-        ("raw_restricted_block", 100800),
-        ("legal_restricted_block", 935),
-        ("legal_restricted_block_image_capable", 891),
-        ("free_axis_product", 52668),
-    ],
-)
-def test_declared_derived_counts_match(ontology: OntologyV4, field: str, computed: int) -> None:
-    """The file's own derived_counts agree with exhaustive enumeration."""
-    assert getattr(ontology.derived_counts, field) == computed
+@pytest.mark.parametrize("axis", RESTRICTED_AXES)
+def test_restricted_axis_values_come_from_the_declaration(
+    ontology: OntologyV4, evaluator: ConstraintEvaluator, axis: str
+) -> None:
+    """Enumeration reads exactly the values the ontology declares for the axis."""
+    assert evaluator.axis_values[axis] == ontology.axis_values(axis)
 
 
-def test_declared_reachability_matches(
+def test_knowledge_domain_values_are_the_flattened_leaf_list(ontology: OntologyV4) -> None:
+    """The hierarchical axis value set is exactly the tree's deepest leaves."""
+    leaves = [
+        leaf
+        for subdomains in ontology.knowledge_domain_tree.root.values()
+        for group in subdomains.root.values()
+        for leaf in group
+    ]
+    assert ontology.axis_values("knowledge_domain") == tuple(leaves)
+    assert len(leaves) == len(set(leaves))
+
+
+@pytest.mark.parametrize("axis", ["capability", "visual_domain"])
+def test_grouped_axis_values_are_the_concatenated_groups(ontology: OntologyV4, axis: str) -> None:
+    """A grouped axis value set is derived from its own group value lists."""
+    spec = ontology.axes.spec(axis)
+    assert isinstance(spec, GroupedAxis)
+    declared = tuple(value for group in spec.groups.values() for value in group.values)
+    assert ontology.axis_values(axis) == declared
+
+
+def test_raw_restricted_block_is_the_product_of_declared_cardinalities(
     ontology: OntologyV4, evaluator: ConstraintEvaluator
 ) -> None:
-    """The file's own reachability block agrees with exhaustive enumeration."""
-    assert ontology.reachability.raw_restricted_block == evaluator.raw_restricted_block_count()
-    assert ontology.reachability.legal_restricted_block == 935
+    """The unconstrained product comes from the declared value counts alone."""
+    declared = [len(ontology.axis_values(axis)) for axis in RESTRICTED_AXES]
+    assert prod(declared) == evaluator.raw_restricted_block_count()
 
 
-def test_per_capability_counts_match_declared(
-    ontology: OntologyV4, legal_blocks: tuple[RestrictedBlock, ...]
+def test_legal_block_distributions_sum_to_the_enumerated_total(
+    evaluator: ConstraintEvaluator, legal_blocks: tuple[RestrictedBlock, ...]
 ) -> None:
-    """Per-capability legal counts match the declared distribution."""
-    counter = Counter(block.capability for block in legal_blocks)
-    assert dict(counter) == ontology.reachability.per_capability_legal_counts
-
-
-def test_per_input_condition_counts_match_declared(
-    ontology: OntologyV4, legal_blocks: tuple[RestrictedBlock, ...]
-) -> None:
-    """Per-input-condition legal counts match the declared distribution."""
-    counter = Counter(block.input_condition for block in legal_blocks)
-    assert dict(counter) == ontology.reachability.per_input_condition_legal_counts
-
-
-def test_per_answer_mode_counts_match_declared(
-    ontology: OntologyV4, legal_blocks: tuple[RestrictedBlock, ...]
-) -> None:
-    """Per-answer-mode legal counts match the declared distribution."""
-    counter = Counter(block.answer_mode for block in legal_blocks)
-    assert dict(counter) == ontology.reachability.per_answer_mode_legal_counts
+    """Per-axis distributions are derived from enumeration, not from the file."""
+    total = len(evaluator.enumerate_legal_blocks())
+    for axis in ("capability", "input_condition", "answer_mode"):
+        counter = Counter(getattr(block, axis) for block in legal_blocks)
+        assert sum(counter.values()) == total
+        assert set(counter) <= set(evaluator.axis_values[axis])
 
 
 # ── Enumeration properties ──────────────────────────────────────────────────
@@ -150,7 +191,11 @@ def test_every_enumerated_block_is_legal(
 
 
 def test_enumerated_blocks_are_unique(legal_blocks: tuple[RestrictedBlock, ...]) -> None:
-    """No restricted coordinate appears twice."""
+    """No restricted coordinate appears twice.
+
+    **shipped-ontology contract**：尾部的 935 只对当前随仓库发布的这份本体成立；
+    运行时不依赖它 —— 运行时计数一律从叶子清单穷举。
+    """
     coordinates = [tuple(block.as_dict().values()) for block in legal_blocks]
     assert len(set(coordinates)) == len(coordinates) == 935
 
@@ -172,7 +217,11 @@ def test_block_axis_names_are_the_six_restricted_axes() -> None:
 def test_image_capable_excludes_text_only_capabilities(
     evaluator: ConstraintEvaluator,
 ) -> None:
-    """R5 text_only capabilities are absent from image enumeration."""
+    """R5 text_only capabilities are absent from image enumeration.
+
+    **shipped-ontology contract**：18 / 935 / 891 / 44 只对当前随仓库发布的
+    这份本体成立；运行时不依赖它们 —— 运行时计数一律从叶子清单穷举。
+    """
     assert evaluator.text_only == {"tool_use", "ask_clarification"}
     image_capabilities = {
         block.capability for block in evaluator.enumerate_legal_blocks(image_capable_only=True)
@@ -259,14 +308,18 @@ def test_unsolvable_pairs_have_no_legal_block(
     assert (capability, input_condition) in evaluator.unsolvable_capability_input_pairs()
 
 
-def test_unsolvable_pairs_match_declared(
-    ontology: OntologyV4, evaluator: ConstraintEvaluator
+def test_unsolvable_pairs_are_the_complement_of_enumeration(
+    evaluator: ConstraintEvaluator, legal_blocks: tuple[RestrictedBlock, ...]
 ) -> None:
-    """The 55 unsolvable (capability, input_condition) pairs match the file."""
-    computed = evaluator.unsolvable_capability_input_pairs()
-    declared = tuple(tuple(pair.root) for pair in ontology.reachability.zero_solution_pairs.pairs)
-    assert len(computed) == ontology.reachability.zero_solution_pairs.count == 55
-    assert set(computed) == set(declared)
+    """An unsolvable pair is exactly a (capability, input_condition) with no block."""
+    realised = {(block.capability, block.input_condition) for block in legal_blocks}
+    all_pairs = {
+        (capability, input_condition)
+        for capability in evaluator.axis_values["capability"]
+        for input_condition in evaluator.axis_values["input_condition"]
+    }
+    assert set(evaluator.unsolvable_capability_input_pairs()) == all_pairs - realised
+    assert realised | (all_pairs - realised) == all_pairs
 
 
 def test_r4b_relaxations_are_effective(evaluator: ConstraintEvaluator) -> None:
@@ -305,6 +358,10 @@ def test_incomplete_from_axis_coverage_fails_loudly(tmp_path: Path) -> None:
 
 
 def test_loader_builds_evaluator() -> None:
-    """The facility loader plus the pure evaluator reproduce the block count."""
+    """The facility loader plus the pure evaluator reproduce the block count.
+
+    **shipped-ontology contract**：935 只对当前随仓库发布的这份本体成立；
+    运行时不依赖它 —— 运行时计数一律从叶子清单穷举。
+    """
     evaluator = ConstraintEvaluator(load_ontology_v4(ONTOLOGY_V4_PATH))
     assert len(evaluator.enumerate_legal_blocks()) == 935

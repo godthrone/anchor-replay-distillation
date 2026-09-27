@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from ard.backends.ontology_loader import load_ontology_v4
+from ard.core.constraints import ConstraintEvaluator
 from ard.core.ontology import (
     OntologySchemaError,
     OntologyV4,
@@ -46,7 +47,12 @@ def _raw_v4() -> dict[str, Any]:
 
 
 def test_load_v4_parses_real_ontology() -> None:
-    """The shipped v4 file parses into the typed model."""
+    """The shipped v4 file parses into the typed model.
+
+    **shipped-ontology contract**：下面的 12 / 11 / 1 / 8 只对当前随仓库发布的
+    这份本体成立；运行时不依赖它 —— 运行时计数一律从叶子清单穷举。改本体时更新
+    这个数字即可，不需要改任何生产代码。
+    """
     ontology = load_ontology_v4(ONTOLOGY_V4_PATH)
     assert ontology.ontology_id == "ard-anchor-ontology"
     assert ontology.version == "4.0.0"
@@ -75,13 +81,23 @@ def test_load_v4_parses_real_ontology() -> None:
     ],
 )
 def test_axis_value_cardinalities(axis: str, expected: int) -> None:
-    """Every axis resolves to its declared number of coordinate values."""
+    """Every axis resolves to its declared number of coordinate values.
+
+    **shipped-ontology contract**：这些基数（4 / 209 / 20 / 5 / 7 / 7 / 6 / 3 /
+    3 / 6 / 4 / 21）只对当前随仓库发布的这份本体成立；运行时不依赖它 —— 运行时
+    计数一律从叶子清单穷举。改本体时更新这些数字即可，不需要改任何生产代码。
+    """
     ontology = load_ontology_v4(ONTOLOGY_V4_PATH)
     assert len(ontology.axis_values(axis)) == expected
 
 
 def test_knowledge_domain_tree_shape() -> None:
-    """The knowledge-domain tree is 18 domains / 36 subdomains / 209 unique leaves."""
+    """The knowledge-domain tree is 18 domains / 36 subdomains / 209 unique leaves.
+
+    **shipped-ontology contract**：18 / 36 / 209 只对当前随仓库发布的这份本体
+    成立；运行时不依赖它 —— 运行时计数一律从叶子清单穷举。改本体时更新这些数字
+    即可，不需要改任何生产代码。
+    """
     ontology = load_ontology_v4(ONTOLOGY_V4_PATH)
     tree = ontology.knowledge_domain_tree.root
     assert len(tree) == 18
@@ -90,6 +106,46 @@ def test_knowledge_domain_tree_shape() -> None:
     assert len(subdomains) == 36
     assert len(leaves) == 209
     assert len(set(leaves)) == 209
+
+
+def test_ontology_carries_no_handwritten_count_block() -> None:
+    """Leaves are the single source: no self-reported counts exist any more.
+
+    Both the raw payload and the typed model are checked, so a count block
+    cannot come back through either door (§1.4 single source of truth, §18.1
+    no leftover debt).
+    """
+    payload = _raw_v4()
+    assert "derived_counts" not in payload
+    assert "reachability" not in payload
+    assert all("counts" not in spec for spec in payload["axes"].values())
+    assert "derived_counts" not in OntologyV4.model_fields
+    assert "reachability" not in OntologyV4.model_fields
+
+
+def test_added_knowledge_domain_leaf_needs_no_other_field_touched(tmp_path: Path) -> None:
+    """Adding a leaf edits the leaf list only; load + enumeration still work.
+
+    There is no count block to keep in sync, so the new leaf flows straight
+    into the axis value set and the restricted-block enumeration is unchanged
+    (``knowledge_domain`` is a free axis).
+    """
+    payload = _raw_v4()
+    payload["knowledge_domain_tree"]["science_exploration"]["frontier_questions"].append(
+        "gravitational wave background"
+    )
+    path = tmp_path / "added_leaf.v4.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    ontology = load_ontology_v4(path)
+    baseline = load_ontology_v4(ONTOLOGY_V4_PATH)
+    assert "gravitational wave background" in ontology.axis_values("knowledge_domain")
+    assert len(ontology.axis_values("knowledge_domain")) == (
+        len(baseline.axis_values("knowledge_domain")) + 1
+    )
+    assert len(ConstraintEvaluator(ontology).enumerate_legal_blocks()) == len(
+        ConstraintEvaluator(baseline).enumerate_legal_blocks()
+    )
 
 
 def test_constraint_ids_and_types() -> None:
@@ -164,14 +220,14 @@ def test_missing_top_level_field_is_rejected(tmp_path: Path) -> None:
 def test_missing_nested_field_is_rejected(tmp_path: Path) -> None:
     """A missing nested field is reported with its dotted path."""
     payload = _raw_v4()
-    del payload["axes"]["capability"]["counts"]
+    del payload["axes"]["capability"]["groups"]
     path = tmp_path / "missing_nested.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(OntologySchemaError) as excinfo:
         load_ontology_v4(path)
 
-    assert "axes.capability.counts" in str(excinfo.value)
+    assert "axes.capability.groups" in str(excinfo.value)
 
 
 def test_extra_field_is_rejected(tmp_path: Path) -> None:

@@ -138,7 +138,7 @@ def main() -> None:
         action="store_true",
         default=False,
         help="Smoke run: materialise the same construction rule at a reduced "
-        "scale (8 of 1826 anchors) so a fresh checkout can see an artifact "
+        "scale (a small subset of this run's units) so a fresh checkout can see an artifact "
         "quickly. The artifact is deliberately incomplete — its run directory "
         "is suffixed _smoke, the log carries a WARNING, and manifest.json "
         "declares smoke: true. It is not a configuration field and does not "
