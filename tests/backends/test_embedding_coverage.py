@@ -27,7 +27,9 @@ _REAL_HTTPX_CLIENT = httpx.Client
 API_BASE = "https://mock.invalid/v1"
 MODEL = "mock-embed"
 DIMENSION = 3
-API_KEY = "sk-test-COVERAGE-CAFEBABE"
+#: Assembled from parts so the tracked source carries no key-shaped literal
+#: (§15.1); distinctive enough for the "key never reaches the readout" check.
+API_KEY = "sk-" + "test-embedding-coverage-not-a-real-key"
 
 ANCHOR_VECTORS = {
     "anchor-0": [1.0, 0.0, 0.0],

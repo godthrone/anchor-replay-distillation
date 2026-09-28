@@ -38,7 +38,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 #: sampling space, so it needs the real ontology even when the plan is injected.
 _V4_ONTOLOGY = str(_REPO_ROOT / "ontology" / "anchor_ontology.v4.json")
 API_BASE = "https://mock.invalid/v1"
-API_KEY = "sk-test-PIPELINE-DEADBEEF"
+#: Assembled from parts so the tracked source carries no key-shaped literal
+#: (§15.1); distinctive enough for the "key never reaches the artifacts" checks.
+API_KEY = "sk-" + "test-pipeline-wiring-not-a-real-key"
 MODEL = "mock-embed"
 DIMENSION = 3
 _PLAN_SIZE = 3

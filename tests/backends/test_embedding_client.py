@@ -27,7 +27,10 @@ _REAL_HTTPX_CLIENT = httpx.Client
 API_BASE = "https://mock.invalid/v1"
 MODEL = "mock-embed"
 DIMENSION = 3
-API_KEY = "sk-secret-test-key-0123456789"
+#: Assembled from parts so the tracked source carries no key-shaped literal
+#: (§15.1).  It must stay a distinctive string: the "key never leaks" assertions
+#: below are only meaningful while *this* exact value could not occur by accident.
+API_KEY = "sk-" + "test-embedding-client-not-a-real-key"
 
 
 # ── Mock endpoint ───────────────────────────────────────────────────────────
