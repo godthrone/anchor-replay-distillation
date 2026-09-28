@@ -13,7 +13,8 @@ their own obligations.
   does its bundled LibRaw decoder (**LGPL-2.1 / CDDL-1.0**) enter with it.
 - **The default closure is not uniformly MIT/Apache.** Most of it is permissive
   (MIT, BSD-3-Clause, MIT-CMU, PSF-2.0). The entries that are *not* MIT/Apache are:
-  - `certifi` — **MPL-2.0**, pulled in **transitively** (`httpx` → `httpcore` → `certifi`);
+  - `certifi` — **MPL-2.0**, pulled in transitively by `httpx` (which depends on it directly, as
+    does `httpcore`);
   - `tqdm` — **`MPL-2.0 AND MIT`** (a dual licence: the MIT option is available);
   - `typing-extensions` — **PSF-2.0**, pulled in transitively through the pydantic stack;
   - `numpy` — `BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0`.
@@ -69,12 +70,13 @@ over the snapshot below.
 
 ## 4. Snapshot (goes stale — regenerate with §2)
 
-Generated 2026-09-27 from commit `12690b3`, environment: **default** (`uv sync`, no extra),
-Python 3.11.15 on Linux x86-64. Versions are that commit's `uv.lock` resolution.
+Generated from the tracked `uv.lock` at tag `v5.0.0`, environment: **default** (`uv sync`, no
+extra), Python 3.11.15 on Linux x86-64. Versions are that `uv.lock` resolution; the root package's
+version is derived from git tags by `setuptools_scm`.
 
 | Package | Version | Licence (as read) | Read from |
 |---|---|---|---|
-| `anchor-replay-distillation` | 1.0.0 | MIT | `License` |
+| `anchor-replay-distillation` | 5.0.0 | MIT | `License` |
 | `annotated-types` | 0.8.0 | MIT | `License-Expression` |
 | `anyio` | 4.13.0 | MIT | `License-Expression` |
 | `certifi` | 2026.5.20 | **MPL-2.0** | `License` |

@@ -5,8 +5,7 @@
 > （宪法 §17.2 / §12.4）。
 >
 > 引用约定：本页一律使用**符号引用**（如 `ard.pipeline.run`、`ard.domain.bank.append_anchor`），
-> **不写 `文件:行`**。行号会随任何代码改动漂移，而且"漂移到另一条非空行"是任何行范围守卫都抓不到的
-> 错误形态；v5 起本仓库不再维护行号引用，也不再维护盯行号的守卫测试。
+> **不写 `文件:行`**——行号会随任何代码改动漂移，符号名不会。
 
 ARD（Anchor Replay Distillation）从本体 v4 的坐标空间中构造锚点计划，调用输入生成模型产出用户轮、
 调用目标（teacher）模型产出回答，落成 JSONL 锚点库与 manifest，并在同一轮内给出验收读数
@@ -21,7 +20,7 @@ ARD（Anchor Replay Distillation）从本体 v4 的坐标空间中构造锚点�
 
 | 层 | 目录 | 职责 | 成员 |
 |---|---|---|---|
-| 核心层 | `src/ard/core/` | **纯计算**，零文件/网络/子进程访问（§1.3；由 `tests/core/test_core_is_pure.py` 的 AST 守卫强制） | `ontology.py`（v4 本体 schema 门：校验**已解码**的 payload）、`constraints.py`（约束求值 + 合法受限块穷举）、`sampling.py`（构造规则 → 坐标、`AnchorSpec`、锚点 id、`PlanIdentity`）、`coverage.py`（验收尺子，纯数值）、`acceptance.py`（读数与空间声明的组装）、`quota.py`（图片配额）、`system_prompt.py`（system prompt 措辞契约与渲染）、`axis_instruction.py`（6 条 instruction 轴的措辞契约）、`types.py`（核心 dataclass） |
+| 核心层 | `src/ard/core/` | **纯计算**，零文件/网络/子进程访问（§1.3；由 `tests/core/test_core_is_pure.py` 的 AST 守卫强制） | `ontology.py`（v4 本体 schema 门：校验**已解码**的 payload）、`constraints.py`（约束求值 + 合法受限块穷举）、`sampling.py`（构造规则 → 坐标、`AnchorSpec`、锚点 id、`PlanIdentity`）、`coverage.py`（验收尺子，纯数值）、`acceptance.py`（读数与空间声明的组装）、`quota.py`（图片配额）、`system_prompt.py`（system prompt 措辞契约与渲染）、`axis_instruction.py`（6 条 instruction 轴的措辞契约）、`system_prompt_template_error.py` / `axis_instruction_error.py`（两个措辞契约各自的**唯一异常类**，落镜像文件、由契约模块 re-export）、`types.py`（核心 dataclass） |
 | 设施层 | `src/ard/backends/` | **设施**：文件读取、网络 I/O 与端点协议 | `api_client.py`（OpenAI 兼容 chat + SSE 流式）、`embedding_client.py`（OpenAI 兼容 `/embeddings`）、`coverage_wiring.py`（把库记录/目标集接到 `core/` 尺子上）、`ontology_loader.py`（读本体文件 → `core/` 的 schema 门）、`prompt_loader.py`（读 system-prompt 措辞文件 → `core/` 的渲染）、`axis_instruction_loader.py`（读 instruction 轴措辞文件） |
 | 领域层 | `src/ard/domain/` | **领域编排**：把坐标变成对外产物 | `text_anchor.py`（生成主循环：逐轮生成、形状门、最终回答）、`bank.py`（JSONL 库、锚点 id 唯一性、manifest）、`image_store.py`（图片扫描/转换/按域与**轮次**分配）、`anchor_shape.py`（消息形状契约）、`append_outcome.py`（入库结果枚举） |
 | 入口层 | `src/ard/` | 参数、配置、日志、编排 | `cli.py`（argparse + 覆写解析）、`config.py`（pydantic 模型 + 合并/校验，含 `[generation] count`）、`pipeline.py`（主编排 `run`、续跑守卫、manifest 组装）、`logging.py`（控制台 + 文件日志）、`__main__.py`（`python -m ard`） |
@@ -56,7 +55,11 @@ graph TD
         "quota.py"
         "system_prompt.py"
         "axis_instruction.py"
+        "system_prompt_template_error.py"
+        "axis_instruction_error.py"
         "types.py"
+        "system_prompt.py" --> "system_prompt_template_error.py"
+        "axis_instruction.py" --> "axis_instruction_error.py"
     end
     Entry --> Domain
     Entry --> Backends
@@ -64,6 +67,12 @@ graph TD
     Domain --> Core
     Backends --> Core
 ```
+
+**异常类落镜像文件（§12.2）**：两个措辞契约各自的唯一失败类型 `SystemPromptTemplateError` /
+`AxisInstructionError` 放在与类名同名的镜像文件里（`ard/core/system_prompt_template_error.py`、
+`ard/core/axis_instruction_error.py`），由各自的契约模块 `import` 后 **re-export**。公开导入路径
+（`ard.core.system_prompt.SystemPromptTemplateError`、`ard.core.axis_instruction.AxisInstructionError`）
+因此保持不变——调用方与设施层无需知道这层拆分；拆分的收益是每个文件只有一个概念（§8.2）。
 
 **层次边界（§1.3 计算与设施分离）**：`core/` 内**零**文件读取、网络与子进程调用——schema 校验
 （`ard.core.ontology.parse_ontology_v4`，接受**已解码**的 payload）、措辞渲染
@@ -109,7 +118,7 @@ flowchart TD
   内完成；manifest 与验收读数都从落盘的记录重建。
 - **影像按坐标寻址、按轮次轮转、缺图则复用**：影像态锚点优先按自己的 `visual_domain` 到
   `<image_dir>/<visual_domain>/` 取图，同一域的多张图按**轮次**确定性轮转
-  （`ard.domain.image_store.select_domain_image` 的 `cycle` 参数，`cycle = 0` 与 v4 旧行为逐字节一致）；
+  （`ard.domain.image_store.select_domain_image` 的 `cycle` 参数，`cycle = 0` 取第 0 轮）；
   该目录没有可用图时退回整棵图片树的全局池（`list_pool_images`）并同样按轮次轮转，因此只给一张图也能
   跑完整轮。只有整棵树都没有可用图时域才算真的缺图，在**创建输出目录之前**被拒绝，除非显式配置
   `[images] skip_missing_images = true`。复用与否由 `DomainImageResolution.fallback` 记录并进入 manifest。
@@ -190,7 +199,7 @@ outputs/<run_name>/            # 默认 ard_dataset_<YYYYmmdd_HHMMSS>；--smoke 
   `seed`，**不是计划身份**）。计划身份是 manifest 里的 `plan_identity`；续跑时先比这个摘要，
   不同即在写任何东西之前报错，不静默混合两个计划。
 - **续跑守卫**（`ard.pipeline._refuse_foreign_records_on_resume`）：判据不是"已有 id 集合 ⊆ 新计划 id 集合"
-  ——v5 的 id 是**计划位置序号**（与坐标脱钩），smoke 计划与全量计划的 id 形状相同却指向不同坐标。
+  ——id 是**计划位置序号**（与坐标脱钩），smoke 计划与全量计划的 id 形状相同却指向不同坐标。
   正确判据是**逐条比对已有记录在其 id 所指位置上的坐标是否与新计划一致**（`ard.pipeline._coordinate_matches`）：
   一致 ⇒ 追加（把 `[generation] count` 调大后重跑同一目录即走这条路）；不一致 ⇒ `ConfigError` 拒绝，
   并提示换目录或显式 `output.overwrite = true`。**守卫的读数来源有两个**：已有 manifest 的 `plan_identity`，
@@ -264,12 +273,12 @@ flowchart TD
   域内选择只取该子目录的**直接子文件**，扩展名白名单见 `ard.domain.image_store.SUPPORTED_EXTENSIONS` 与
   `CONVERTABLE_EXTENSIONS`；约定常量 `VISUAL_DOMAIN_LAYOUT`，目录解析 `domain_directory`，
   域解析 `resolve_domain_images`；`configs/config.toml` 面向用户说明同一约定。
-- **选择确定可复现，并按轮次轮转（v5）**：候选先按文件名排序，再以 `H(seed:visual_domain)` 摘要作偏移，
+- **选择确定可复现，并按轮次轮转**：候选先按文件名排序，再以 `H(seed:visual_domain)` 摘要作偏移，
   第 `c` 轮取 `ordered[(offset + c) % len(ordered)]`（`ard.domain.image_store.select_domain_image` 的
-  `cycle` 参数）——同一 `(候选集, 域, seed, cycle)` 在任何平台得到同一张图；`cycle = 0` 与 v4 旧行为
-  逐字节一致。因此一个域有多张图时，不同轮次会用不同的图，而不是把整个数据集钉在 21 张图上。
+  `cycle` 参数）——同一 `(候选集, 域, seed, cycle)` 在任何平台得到同一张图。因此一个域有多张图时，
+  不同轮次会用不同的图，而不是把整个数据集钉在 21 张图上。
   选中的图由 `ard.pipeline._assign_images_by_domain` 分配到锚点。
-- **域内没图则退回全局池复用（v5 主席裁定）**：`list_pool_images` 递归枚举整棵 `--image-dir`，按
+- **域内没图则退回全局池复用**：`list_pool_images` 递归枚举整棵 `--image-dir`，按
   相对路径的 `(父目录, 文件名)` 排序成确定性全局池；域内无候选时在同一公式下对池轮转，并把该域记入
   `DomainImageResolution.fallback`。**只有全局池也为空**时域才算真的缺图。池只有 1 张时所有域、所有
   轮次都取到那一张——这正是"只给一张图也行"的语义。选中的源文件在

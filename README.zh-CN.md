@@ -1,5 +1,9 @@
 # anchor-replay-distillation
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
+## 简介
+
 **Anchor Replay Distillation（ARD，锚点回放蒸馏）把一套由本体定义的坐标空间变成可复现的
 监督微调语料。** 对每一个锚点坐标，它先让问题生成模型产出用户轮，再让目标（教师）模型作答，
 然后把教师的回答——以及（开启时的）推理过程——与产生它的那个问题一起保存下来。ARD 是蒸馏流水线
@@ -16,11 +20,25 @@
 每一条锚点的 `id` 是**计划位置序号**（`run_key` + 轮次 + 轮内序号），所以把 `N` 调大不会改动任何
 已生成的 id，续跑可以干净地追加。详见 [如何选择锚点条数（N）](#如何选择锚点条数n)。
 
+本文反复用到的几个词：
+
+| 术语 | 含义 |
+|---|---|
+| 锚点（anchor） | 一份生成样本——一个坐标对应的问题与教师给出的回答；`anchor_bank.jsonl` 的一行 |
+| 本体（ontology） | `ontology/anchor_ontology.v4.json`：各条轴、它们的取值，以及哪些组合合法 |
+| 坐标（coordinate） | 标注一条锚点的取值元组：每条轴一个值，外加采样字段 `modality` |
+| 单元（unit） | 一个 `(模态, 合法受限块)` 对；一轮把每个单元恰好走一遍 |
+| 轮（round） | 把每个单元走一遍；一轮多大（`U`）由运行时从本体穷举 |
+| 计划（plan） | 一次运行要生成的 `N` 条有序坐标，在第一次端点调用之前就已固定 |
+| N | 一次运行产出多少条锚点：`[generation] count` 字段；不设 = 一个完整轮 = `U` |
+| 目标集（target set） | `q95` 指标读数用来度量锚点距离的那组固定目标点 |
+| manifest | `manifest.json`：一次运行的权威申报 |
+
+想先看一遍平实的全貌？读 [docs/walkthrough.md](docs/walkthrough.md)——按下回车之后，机器每一步做什么。
+
 ## 快速开始
 
 三步，最后拿到一份真实产物。这三步会调用真实端点——`--smoke` 只是让第一份产物变小。
-
-想先看一遍平实的全貌？读 [docs/walkthrough.md](docs/walkthrough.md)——你要做什么，机器在后台每一步做什么。
 
 ### 1. 安装依赖
 
@@ -229,12 +247,12 @@ count = 5000
 `configs/config.override.sample.toml` 就是第 2 步复制的那个注释模板；部署值（端点、模型名、凭证）
 放这里，绝不写进 `configs/config.toml` 本身。
 
-### 接口变更：图片转码开关移入 config
+### 图片转码是配置字段
 
-新增 `[images] convert`，并删除 `--no-convert` CLI 参数。该参数决定 `outputs/<run>/images`
-里落盘的内容，按项目"一份 config 描述一份产物"的工程规则，这个决定必须放进 config：留档的
-`config.toml` 必须能同时复现图片字节与锚点。旧参数**不保留**为兼容别名——同一决策同时存在 CLI
-参数与 config 字段就是双真相源。旧参数想要的行为今天写作 `convert = false`。
+`[images] convert` 决定 `outputs/<run>/images` 里落盘的内容：`true` 把选中的图统一转成 JPEG，
+`false` 则把已适合网络的格式原样复制。这个决定**没有对应的 CLI 参数**——项目的工程规则是
+**一份 config 描述一份产物**，留档的 `config.toml` 必须能同时复现图片字节与锚点；同一决策同时存在
+CLI 参数与 config 字段就是双真相源。
 
 留档文件本身就是合法的 `--config`：`python -m ard --config outputs/<run>/config.toml
 --override config.override.toml` 即可用同一份配置重跑，凭证由覆写文件提供。
@@ -345,7 +363,7 @@ uv run mypy src/ard/
 （8 条 vs 一个完整轮）。冒烟产物刻意不完整、不得当作数据集交付——`_smoke` 后缀、日志 WARNING 与
 `manifest.json: smoke` 三处申报就是为此。两条路径都会调用已配置的端点；它们都不是离线演示。
 
-## FAQ
+## 常见问题（FAQ）
 
 **缺图会怎样？**
 图片是复用而非跳过。只要 `<image_dir>/<visual_domain>/` 里有图，就用这个域自己的；没有，就退回

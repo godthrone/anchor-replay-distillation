@@ -20,9 +20,11 @@ handful of environment-specific fields normalised (listed below).
 ./run.sh --config configs/config.toml --smoke --image-dir examples/images
 ```
 
-The run pinned `[generation] seed = 7360` in the gitignored local override so the *plan* is
-reproducible; the seed is kept verbatim in the sample because it names the plan, not the
-deployment. `[generation] count` was left unset, as a smoke run always does.
+The run pinned `[generation] seed = 7360` in the gitignored local override of the checkout it ran
+in so the *plan* is reproducible. The repository's own `.local/config.override.toml` leaves `seed`
+unset, so to reproduce this exact plan add `seed = 7360` under `[generation]` there (or point
+`--override` at a file that sets it). The seed is kept verbatim in the sample because it names the
+plan, not the deployment. `[generation] count` was left unset, as a smoke run always does.
 
 **Why eight anchors.** `--smoke` is the standard cycle-shuffle rule at reduced scale: it takes the
 **first four units of each modality from round 0's shuffle order** — **4 text-only + 4

@@ -1,9 +1,15 @@
-# ARD walkthrough: what you do, and what the machine does
+# ARD walkthrough: the plain-language picture
 
-This page is the plain-language layer between the two READMEs and the technical docs. It answers
-two questions: **what do I have to do**, and **what does the program do after I press Enter**.
-For the exact construction rule see [docs/algorithm.md](algorithm.md); for the metric definitions
-see [docs/measurement.md](measurement.md).
+This page is the plain-language layer between the two READMEs and the technical docs. Its job is
+the half the READMEs keep short: **what the program does after you press Enter**, where the
+results land, and the questions that come next. For the exact construction rule see
+[docs/algorithm.md](algorithm.md) §2; for the metric definitions see
+[docs/measurement.md](measurement.md); for the module boundaries behind these steps see
+[docs/architecture.md](architecture.md) §2.
+
+**What you have to do is three steps, and they live in exactly one place** — the
+[Quick Start](../README.md#quick-start) section of `README.md` (install, fill in credentials, run
+one command). This page never repeats them.
 
 A few words used below:
 
@@ -12,59 +18,11 @@ A few words used below:
 - **ontology** — `ontology/anchor_ontology.v4.json`, the file that lists every axis and the values
   it may take. It says *what may be combined*, not how to word it.
 - **round** — one pass over every legal combination. How many anchors a round holds is counted
-  from the ontology at run time (it is **1826** under the current ontology).
+  from the ontology at run time, never written down in the code; `docs/algorithm.md` §1 carries
+  the recompute command and the current count.
 - **manifest** — `manifest.json`, the run's own record of what it built and how it went.
 
-## A. What you do — three steps
-
-### 1. Get the code and install the dependencies
-
-```bash
-uv sync
-```
-
-Needs [uv](https://docs.astral.sh/uv/) and Python 3.11; `uv.lock` pins every version. RAW camera
-files are an opt-in extra (`uv sync --extra raw`) — a default install carries no RAW decoder.
-
-### 2. Fill in a local config file, and decide how many anchors you want
-
-```bash
-mkdir -p .local && cp configs/config.override.sample.toml .local/config.override.toml
-```
-
-Then edit `.local/config.override.toml`: set `api_base`, `model_name` and `api_key` for
-`[input_generator]` (the model that writes the questions) and for `[target_model]` (the model that
-answers — its answer is the training target you keep). If that file already exists, **edit it
-instead of copying over it**: the copy would silently overwrite credentials that are already
-there.
-
-The override is where deployment values (endpoints, model names, keys) go. **How many anchors a
-run produces — call it N — is set in `configs/config.toml`, in `[generation] count`.** Leave the
-line out and the run does one full round. There is no command-line option for it: one value, one
-place.
-
-### 3. Run one command
-
-Start small:
-
-```bash
-./run.sh --config configs/config.toml --smoke --image-dir examples/images
-```
-
-`--smoke` is the same rule at a small scale: 8 anchors, 4 without an image and 4 with one. It
-still calls your endpoints — it is a real run, just a short one — so use it to validate your setup
-before paying for a full run. `run.sh` runs the program in Docker; without Docker, `uv run python
--m ard` is the same entry point with the same arguments. When the smoke run looks right, run the
-real thing:
-
-```bash
-./run.sh --config configs/config.toml --image-dir /path/to/images
-```
-
-`--image-dir` is optional. Without it no pictures are attached: anchors that would carry an image
-are still generated, as text.
-
-## B. What the machine does, step by step
+## What the machine does, step by step
 
 1. **Reads the config and checks it before doing anything.** A misspelled field, an unknown field,
    a count that is not an integer `>= 1` — all of it is refused at load, with a message naming the
@@ -73,8 +31,8 @@ are still generated, as text.
    and which combinations are legal. **Every count is enumerated at run time** — no total is
    hard-coded in the code, so editing the ontology changes the plan automatically.
 3. **Builds the list of legal combinations — that is one round.** One unit is a legal combination
-   plus whether it carries an image. Under the current ontology that is 935 text units plus 891
-   image units = **1826** units in one round.
+   plus whether it carries an image; the number of units is the round size `U`
+   (`docs/algorithm.md` §1 recomputes it from your ontology).
 4. **Draws the anchors you asked for.** A run of N anchors is a sequence over rounds: each round the
    whole unit list is shuffled and walked without replacement, then reshuffled for the next round.
    So within one round each unit appears exactly once, and across rounds a unit can return. Asking
@@ -82,11 +40,12 @@ are still generated, as text.
 5. **Fills in the remaining values for every combination** — knowledge domain, language, response
    style, difficulty, context length, and a visual domain for image units. The knowledge and visual
    domains rotate round by round; the other values are drawn from the run's random source. Turn
-   counts are not a setting: each conversation type declares its own in the ontology.
+   counts are not a setting: each conversation type declares its own in the ontology
+   (`docs/algorithm.md` §4).
 6. **Gives every anchor an id.** An id is the plan *position*,
    `<run key>-c<round>p<position in round>` (for example `1a2b3c4d-c00000p00137`). It labels *where
    in the plan* the anchor sits, not what its content is, and it does not contain N — that is what
-   lets a later run append without rewriting earlier records.
+   lets a later run append without rewriting earlier records (`docs/algorithm.md` §3).
 7. **Finds the picture each image anchor needs.** The preferred source is
    `<image_dir>/<visual_domain>/<file>`. When that domain has no picture of its own, the run does
    not drop the anchor: it takes one from all images under `--image-dir` and rotates through them by
@@ -100,13 +59,15 @@ are still generated, as text.
 9. **Writes as it goes.** Each finished anchor is appended immediately as one line of
    `anchor_bank.jsonl`, so an interrupted run keeps what it already produced. At the end the run
    writes `manifest.json`: the plan it used, what it covered, how the pictures were used, and the
-   failure counters.
+   failure counters. The plan it used is named by a digest, not by the seed
+   (`docs/algorithm.md` §6).
 10. **Computes the readout.** *Coverage* asks how much of one round's grid the run touched (a ratio
     that saturates at 1.0). *Density* asks how many anchors there are per grid cell (`N / U`) and
     keeps growing with N. *`q95`* is a distance readout — the 95th percentile of each target point's
     distance to its nearest anchor — and smaller means the anchors land closer to the target set.
     The structure readout needs no model call; `q95` needs an embeddings endpoint and a target set,
-    and without them the run announces the gap in a WARNING instead of pretending.
+    and without them the run announces the gap in a WARNING instead of pretending
+    (`docs/measurement.md` §6 and §7).
 11. **When something fails.** A network error, or a model that spends its whole budget on hidden
     thinking and returns no answer, drops **that anchor**: it is not written, and it is counted in
     the manifest's failure report. Nothing is faked. Re-running the same output directory resumes —
@@ -115,10 +76,12 @@ are still generated, as text.
     is refused before anything is written (so a smoke run and a full run are never mixed into one
     directory).
 
-## C. Where the results land
+## Where the results land
 
 Everything goes to `outputs/<run name>/` — default `ard_dataset_<timestamp>`, with the `_smoke`
-suffix for a smoke run; set `[output] directory` to pin the name.
+suffix for a smoke run; set `[output] directory` to pin the name. The full layout, and which file
+is the authoritative declaration, are in [docs/architecture.md](architecture.md) §4 and in the
+README's Output section.
 
 | File | What it is | Look here when you want to know |
 |---|---|---|
@@ -136,7 +99,9 @@ resolved: `fallback_visual_domains` and `fallback_anchor_count` say which domain
 reused picture and how many anchors that affected, and each row of `resolved_images` carries a
 `fallback` flag.
 
-## D. Common questions
+## Common questions
+
+The README's FAQ answers these at more length; these are the short versions.
 
 **What happens if I have very few pictures?** They are reused, not skipped. A domain without a
 picture of its own takes one from the whole image tree and rotates through it, so a single picture

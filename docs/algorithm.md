@@ -6,8 +6,6 @@
 >
 > 引用约定：本页一律使用**符号引用**（如 `ard.core.sampling.sample_coordinates`），
 > **不写 `文件:行`**——行号会随任何代码改动漂移，符号名不会。
-> 早期版本曾逐条核对行号并由一个"行引用守卫"测试看守，该守卫抓不到"错位到另一条非空行"的漂移，
-> 已于 v5 删除（§18.1 不留负债）。
 
 ## 1. 目标集口径
 
@@ -23,8 +21,7 @@ schema 门 `ard.core.ontology.parse_ontology_v4`），它声明 **12 轴** = 11 
 
 ### 计数一律运行时穷举，不手抄
 
-本体里**没有任何手写计数块**（各轴 `counts`、顶层 `derived_counts`、顶层 `reachability` 已删除）：
-**叶子清单是唯一权威**，所有计数由运行时穷举给出。要复算，跑这一条：
+本体里**没有任何手写计数块**：**叶子清单是唯一权威**，所有计数由运行时穷举给出。要复算，跑这一条：
 
 ```bash
 PYTHONPATH=src .venv/bin/python -c "
@@ -133,15 +130,17 @@ plan(seed, N) = [coordinate(i) for i in range(N)]
 不是身份，温度 0.8 下同一坐标能问出不同的题，丢掉它就是丢掉一条合法样本。运行时**不做**坐标查重、
 **不丢**记录；`plan` 的长度恒等于请求的 N（`ard.core.sampling.sample_coordinates` 的返回值）。
 
-### 已不再使用的算法
+**不变量**（构造规则的直接推论；一次计划复算即可验证，不需要端点调用）：
 
-本口径**不使用**：FPS / 最远点采样 / 贪心选点 / 覆盖选点 / 叶子权重 / 候选池 / 最大接近采样 /
-三维空间 / 组合云。对应旧模块（`core/_fps.py`、`core/cloud.py`、`core/embeddings.py`、`core/sampler.py`）
-与旧配置字段（`criterion` / `embeddings_path` / `target_count` / `task_types`）已从 `src/` 与 `configs/` 删除。
-也不再使用 v4 的等价模式与 id 构造：`PlanScale`、`FULL_SCALE` / `SMOKE_SCALE`、
-`_evenly_spaced_indices`、`_select_blocks`、`EXPECTED_*`、`_verify_rule_counts`、`_rotating`、
-`generate_anchor_id`、`ANCHOR_ID_DIMENSIONS`、`_reject_duplicates`、`Coordinate.identity()`
-均已删除，仓内零残留（`git grep` 可复核）。
+| 标记 | 内容 | 依据 |
+|---|---|---|
+| I1 | 一轮内每个覆盖单元恰好出现一次 | `order(c)` 是单元集合的排列 |
+| I2 | `N >= U` 时 K 个知识叶、V 个视觉叶全部被覆盖 | 一轮内 `b(u)` 取遍 U 个连续下标，且文本单元数 `>= K`、影像单元数 `>= V` |
+| I3 | 同一 run 内锚点 id 两两不同 | id 是 `(轮次, 轮内序号)` 的位置序号，构造即单射 |
+| I4 | 同一坐标可以在不同轮再次出现，且两条都留存 | 坐标是内容不是身份；id 与坐标脱钩（§3） |
+
+由此，**N 没有上限**：越过 U 后照常进入下一轮，覆盖率在 `N >= U` 后饱和于 `1.0`，密度继续线性增长
+（两个口径的读数定义见 `docs/measurement.md` §6）。
 
 ## 3. 锚点 id：计划位置，不是坐标指纹
 
@@ -272,25 +271,20 @@ id      = f"{run_key}-c{轮次:05d}p{轮内序号:05d}"
 |---|---|---|
 | `visual_domain` | **决定影像态图片目录** `<image_dir>/<visual_domain>/`；进 manifest 分组标签 | `ard.domain.image_store.domain_directory` / `resolve_domain_images`；调用点 `ard.pipeline._assign_images_by_domain`；分组标签 `ard.domain.bank.append_anchor` |
 
-> 上表在早期审计时还有 6 行（`response_style` / `difficulty` / `context_length` / `output_format` /
-> `input_condition` / `answer_mode`）：当时它们的取值只进采样坐标与约束求解，**一个字符都没进 prompt**。
-> 后续为这 6 条 `layer = "instruction"` 的轴补齐措辞，故它们上移到"有措辞的轴"表。它们原先的非措辞用途不变：
-> 采样坐标（`ard.core.sampling.Coordinate`）与受限块合法性判定（`ard.core.constraints`）。
+> 上表中的 6 条 `layer = "instruction"` 轴（`response_style` / `difficulty` / `context_length` /
+> `output_format` / `input_condition` / `answer_mode`）同时仍是非措辞用途的输入：采样坐标
+> （`ard.core.sampling.Coordinate`）与受限块合法性判定（`ard.core.constraints`）。
 
 **边界声明**：12 轴中 **11 轴的取值改变发给模型的 prompt 文本**（4 条 base 轴 + `system_prompt_mode` + 6 条
 instruction 轴）；唯一例外是 `visual_domain`——它不进文本，而是经图片目录影响**输入图像的内容**，属内容而非措辞。
 **不允许"吉祥物轴"**：守卫测试 `tests/domain/test_axis_influence_guard.py` 对 12 轴逐轴取两个
 只差该轴的坐标，断言生成侧请求四元组 `(I, S, T, V)` 不同；负向对照在临时去掉 6 条 instruction 轴的措辞时**恰好点名这 6 条**。
 
-**待决清单沿革**：曾单列"需上级决策"的**措辞数据位置**项——**已决**：按本体推荐落地为数据文件。
-其后单列的 `output_format` / `input_condition` / `answer_mode` 语义缺口（以及同类的 3 条自由轴）——**已决**：
-用户裁定原话："这就是 bug……确保所有的轴都有提示词应用，能切实的影响生成"。
-
 ### 5.1 `layer` 词表（本体无定义，本工程定义）
 
 本体（`ontology/anchor_ontology.v4.json`）给每条轴一个 `layer` 字段，取值 `content` / `form` /
 `instruction` / `modality`，但**全文无 legend、0 代码消费者**（`git grep -n "\.layer" -- src` 0 命中），
-即该词表此前**只有名字没有定义**。此处按四值对 12 轴的实际划分**给出定义**——**这是我方拟定的定义，
+即该词表本身**只有名字没有定义**。此处按四值对 12 轴的实际划分**给出定义**——**这是我方拟定的定义，
 不是本体的声明**（本体与本体指纹均未改动）：
 
 | `layer` | 定义（我方拟定） | 该层的轴 |
@@ -316,9 +310,8 @@ instruction 轴）；唯一例外是 `visual_domain`——它不进文本，而�
 - 同一 `(本体, seed, N)` 必然得到同一计划；构造规则本身无随机性，自由轴之外的取值完全确定。
 
 **但 `seed` 不是计划的名字。** `config.toml` / `manifest.json` 的 `config` 段**每次运行都被覆盖**
-（含什么都没生成的空转续跑），因此它记录的 seed 描述的是**最后一次调用**，不一定是产出该库的那次计划。
-历史上曾有一个冒烟产物目录被调用 3 次、后两次空转，用记录 seed 复算该库自由轴仅 11/32 相同
-（同 seed 重算在本仓库是确定的，所以差异只可能来自"记录的不是采样那次"）。
+（含什么都没生成的空转续跑），因此它记录的 seed 描述的是**最后一次调用**，不一定是产出该库的那次计划
+——用记录里的 seed 复算一个被空转调用覆盖过的库，自由轴分配对不上。计划的名字是 `plan_identity` 的摘要。
 
 **`plan_identity`（v2）是计划的一等公民**：`ard.core.sampling.PlanIdentity.of`
 （`PLAN_IDENTITY_VERSION = 2`）对**有序坐标列表**做 sha256，连同本体哈希、seed、请求的 count、
@@ -345,6 +338,6 @@ instruction 轴）；唯一例外是 `visual_domain`——它不进文本，而�
    若产物没有记录 `plan_identity`（旧库），守卫退化为结构校验：库里出现不属于本次计划的 id
    或其坐标不符即拒绝，全部一致则允许并记 WARNING。
 
-**本体指纹沿革表已删除。** 早期文档维护过一张 md5 变化登记表；v5 起身份自动派生：
-本体内容的 sha256（`ard.core.sampling.ontology_sha256`）由运行时算出并写进 `plan_identity` /
-`manifest.json`（`ard.pipeline._declare_plan_readout`），**用户零登记、文档零手抄**。
+**本体身份自动派生，文档零手抄。** 本体内容的 sha256（`ard.core.sampling.ontology_sha256`）由运行时
+算出并写进 `plan_identity` / `manifest.json`（`ard.pipeline._declare_plan_readout`）——用户无需登记任何
+指纹，文档也不维护任何指纹表。

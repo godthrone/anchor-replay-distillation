@@ -6,8 +6,7 @@
 > 产物见 `results/coverage.json` / `coverage.md` / `manifest.json`。
 >
 > 引用约定：本页一律使用**符号引用**（如 `ard.core.coverage.nearest_anchor_distances`），**不写 `文件:行`**。
-> 行号会随任何代码改动漂移；早期版本曾有逐条核对的行号与一个盯行号的守卫测试，v5 起全部取消
-> ——该守卫自述抓不到"漂移到另一条非空行"的错位，绿了也不证明引用正确。
+> 行号会随任何代码改动漂移，符号名不会。
 
 ## 1. 距离与分位
 
@@ -80,7 +79,7 @@
   来守住这个集合，轴一旦变成"吉祥物"即失败。
 - **判据没有放宽**：仍然只在"同一签名出现 **≥2** 条"时才标定噪声带。一轮之内每条签名只出现一次，
   所以正常运行的读数**就是** `unavailable`；重复组是因为"同一格被生成多次"才出现，不是为了"能出数"而放宽。
-  v5 下**跨轮**可能再次抽到同一签名（坐标允许重复），那时重复组会出现——这是真实噪声，不是放宽。
+  **跨轮**可能再次抽到同一签名（坐标允许重复），那时重复组会出现——这是真实噪声，不是放宽。
 
 **为什么旧口径会低估噪声**：按整份 `anchor_meta` 分组时，两条**只差不进 prompt 的字段**的记录会被分到两格，
 于是"同一请求的两次生成"被算成"两个格子"，重复对消失、噪声带被报成 `unavailable` 或偏窄，
@@ -115,11 +114,7 @@
 **不含密钥**：空间声明只写 model 与 dimension，不写 `api_base`、不写任何 key；输出目录里的配置快照另有脱敏
 （`ard.pipeline._redact_secrets`）。
 
-## 6. 覆盖率 / 密度 / 轮分解（v5 新口径）
-
-**这是 `ard-acceptance-3` 相对 `ard-acceptance-2` 的主要变化。** v5 的 N 由用户设置、无上限，
-计划按轮滚动，所以"计划计数必须等于一个写死的全量常量"这条 v4 判据被整体替换为
-"按本 run 自己的 N 与轮分解判定"。
+## 6. 覆盖率 / 密度 / 轮分解
 
 **两个口径必须分开读，不得混用**（`ard.core.acceptance.PlanCoverage`）：
 
@@ -143,8 +138,7 @@
 3. 受限块数、知识叶数、视觉叶数**只在 `N >= U` 时**才检查等于 `U_text` / `U_image` / `K` / `V`；
    `N < U` 时这些期望值为 `None`、检查项**整体略过**——洗牌序决定能覆盖到哪些块与叶，
    规则在这个规模上不保证任何块/叶计数，不猜一个可能不成立的界；
-4. **没有"坐标重复"检查项。** `ard-acceptance-2` 的 `structure.duplicate_coordinates` 字段已**整体删除**：
-   v5 允许同一坐标跨轮再次出现，把它读成错误会误杀合法样本。
+4. **没有"坐标重复"检查项。** 同一坐标跨轮再次出现是允许的（见上表），把它读成错误会误杀合法样本。
 
 任一检查不成立 ⇒ `within_rule: false`，`coverage.md` 对应行标 `MISMATCH`，`structure_mismatch`
 的 warning 逐行点名。**冒烟不再误报**：`--smoke` 的调用方传 `count = len(plan) = 8`
@@ -192,11 +186,9 @@ flowchart TD
 
 - 噪声带的语义是"**同格重复生成**这条管道自身产生的距离散布"。当两臂的 `q95` 差值**小于**该噪声时，
   指标层**无法区分**这两臂——差异可能来自生成随机性，而非被测的设计因素。
-- **实验结论（设计阶段的可分辨性实验）**：在"多臂（六臂）× 多尺子层（四层）"的格子中，
-  **24/24 的 `q95` 都落在同格重复生成噪声带 `[q50, max]` 内**；配对 bootstrap 的臂间差 CI 大多含 0。
-  ⇒ 尾部读数（`q95`、`r_max`）已被噪声主导，**指标层已到顶**。
-  （出处：v4 设计阶段的本地实验记录，**未纳入版本控制**，此处只作方法论沿革；不引用任何部署/运行编号，
-  也不构成对某个具体运行的断言。）
+- **尾部读数已被噪声主导。** 报告里的噪声带就是这个上界的实测值：同格重复生成之间的距离分布
+  `[q50, max]` 决定了 `q95`（以及 `r_max`）能分辨的最小差异。当噪声带量级与臂间 `q95` 差相当时，
+  **指标层已到顶**——再多臂、再多尺子层都不会让排名变得可分。
 - **由此得出的口径**：在该分辨力上限内，**结构保证才是硬约束**——即
   "每个模态组内每个合法受限块恰好 1 条、`prompt_signature_distinct` 等于块数、
   `effective_projection_distinct` 等于块数、知识叶 / 视觉叶在全轮上轮转、`coverage` 在 `N >= U` 时饱和于 1.0"
@@ -229,35 +221,23 @@ flowchart TD
 - `manifest.json` → `images` 段（`ard.pipeline._declare_images`）：`image_dir`、`resolved_visual_domains`、
   `resolved_images`（每个 `(cycle, visual_domain, image, fallback)` 一行）、`domain_candidate_counts`
   （域名 → 该域目录下的可用文件数）、`pool_candidate_count`（整棵树的退回复用池大小）、
-  `fallback_visual_domains` / `fallback_anchor_count`（复用的域与锚点数）、`skipped_*`。v5 起图片按
+  `fallback_visual_domains` / `fallback_anchor_count`（复用的域与锚点数）、`skipped_*`。图片按
   **轮次**轮转，`cycle` 是这个段的关键字段；`fallback` 标记使"这一轮这张图是该域自己的，还是从全局池
   复用来的"可读——重复度因此可以归因，而不是只能看到多样性变低。
 
-**`ard-acceptance-1` → `ard-acceptance-2`**：`structure` 新增
-`prompt_signature_distinct` / `effective_projection_distinct` / `diversity`，且 `metrics.noise.n_repeat_groups`
-的含义从"整份 `anchor_meta` 相同的格子数"改为"prompt 签名相同的格子数"（§4.1）。同名不同义，
-老报告必须按 `report_schema` 区分后再读。
-
-**`ard-acceptance-2` → `ard-acceptance-3`（字段语义变更 ⇒ 版本号递增）**：三处变化：
-
-1. **换判定**：从"计划计数必须等于写死的全量常量（1826）"改为"按本 run 的 N 与轮分解判定"（§6）。
-   冒烟运行不再误报 MISMATCH。
-2. **加读数**：`structure.coverage`（`unit_total` / `text_unit_total` / `image_unit_total` /
-   `knowledge_leaf_total` / `visual_leaf_total` / `plan_count` / `distinct_coordinates` / `coverage` /
-   `density` / `full_rounds` / `last_round_size` / `rounds`），以及 `expected_total` /
-   `expected_distinct_coordinates` / `expected_*`（低于一轮时为 `None`）。
-3. **删字段**：`structure.duplicate_coordinates` 与它的检查**整体删除**——v5 不按坐标去重（§6 第 4 条）。
-
-**因此三个版本的 `structure` 不可直接比较**：字段与判定都变了，读任何老报告前先看 `report_schema`。
+**`structure` 的字段清单**（`report_schema = "ard-acceptance-3"`）：`coverage` 段给出 `unit_total` /
+`text_unit_total` / `image_unit_total` / `knowledge_leaf_total` / `visual_leaf_total` / `plan_count` /
+`distinct_coordinates` / `coverage` / `density` / `full_rounds` / `last_round_size` / `rounds`，
+以及 `expected_total` / `expected_distinct_coordinates` / `expected_*`（计划低于一轮时为 `None`）。
+读任何报告前先看 `report_schema`，字段语义随该值而变。
 
 ## 10. 结构读数里的"有效多样性"——以及读数如何被误读
 
-**为什么非要报这两个数。** 早期审计（只读 import 本体加载器与真实 prompt 渲染器，不调用任何模型）发现：
-把合法受限块投影到**prompt 真正读到的受限轴**上，只剩 **112** 种（影像是 102 种）；**4282 对**块只差在
-`output_format` / `input_condition` / `answer_mode` 上——只要自由轴相同，它们发出的 prompt **逐字节相同**。
-也就是说：**"935 个块"曾被读成"935 个不同规格"，而当时只有 112 个规格真的影响生成。**
-后来把这六个 instruction 轴的措辞真的渲染进 prompt 之后，"有效投影"才等于块数（112/102 → 935/891，
-见本页 §4.1 逐字段消费点）。
+**为什么非要报这两个数。** 标称块数（`text_block_count` / `image_block_count`）只说明"计划枚举了多少个
+合法受限组合"，**不等于**"发出了多少个不同请求"，更不等于"有多少个不同规格能改变生成结果"。合法受限块
+必须投影到**prompt 真正读到的受限轴**上才成为规格：两个块若在那些轴上取值相同、自由轴也相同，它们发出的
+prompt 就**逐字节相同**。所以读数把标称块数与两个 distinct 数并列报出，让"枚举得多、区分得少"这种退化在
+零成本的结构读数里就暴露出来，而不是留给 `q95` 去承担它分辨不了的事（§8）。
 
 **于是结构读数并列报四个数**（`structure` 里，全部按模态分开；定义随读数一起落盘在 `structure.diversity`）：
 
@@ -281,9 +261,8 @@ flowchart TD
 1. **把标称块数当有效多样性**：`935/935 块覆盖` 只说明"计划枚举了 935 个合法受限组合"，
    **不说明**它们产生 935 个不同请求或 935 个不同规格。要读有效多样性，只能看上面后两个数。
 2. **把 `prompt_signature_distinct` 当"设计格数"**：签名 distinct=935 只说"935 个不同 prompt"。但签名互异
-   **可以靠单轴轮转撑起来**——早期在 instruction 轴措辞补齐之前的口径下测得多样性分解是
-   **有效受限投影 112 → 加 `language` 386 → 加 `knowledge_domain` 935**，即当时"935 个不同 prompt"
-   由 `knowledge_domain` 逐条轮转贡献了后 549 个。所以**签名互异 ≠ 受限规格互异**，两个数必须一起读；
+   **可以靠单轴轮转撑起来**——当有效的受限投影数远小于块数时，`knowledge_domain` 逐条轮转就足以让每行签名
+   互异。所以**签名互异 ≠ 受限规格互异**，两个数必须一起读；
    只看签名数会把"轮转出来的差异"当成"实验格子本身的差异"。
 3. **把 `noise.available=false` 当"没有噪声"**：`unavailable` 的含义是"**这批产物里没有同签名的重复生成**"，
    不是"噪声为零"。一轮内每格只生成一次，所以正常运行的读数就是 `unavailable`（§4.1）；此时

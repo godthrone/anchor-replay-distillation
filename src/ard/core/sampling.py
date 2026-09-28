@@ -2,7 +2,7 @@
 
 Responsibility: turn a validated v4 ontology into the run's anchor coordinates
 (:class:`Coordinate`) and :class:`~ard.core.types.AnchorSpec` objects, using the
-**cycle-shuffle** rule of ``docs/design-v5-sampling.md``.
+**cycle-shuffle** rule of ``docs/algorithm.md`` §2.
 
 The rule, in words:
 

@@ -10,7 +10,7 @@ Two families, one contract ("wording is data, coordinates are the ontology's"):
   system message** (one file per `system_prompt_mode` value).
 - `axis_instruction/` — the wording that tells the input generator what the
   **user message it writes must also satisfy**, for the six axes the ontology
-  labels `layer = "instruction"` (see `docs/algorithm.md` §4.1): one JSON file
+  labels `layer = "instruction"` (see `docs/algorithm.md` §5.1): one JSON file
   per axis, keyed by that axis's value.
 
 ## Layout
@@ -53,9 +53,9 @@ Two families, one contract ("wording is data, coordinates are the ontology's"):
    cannot masquerade as another axis), and `values` must cover
    **every value of that ontology axis** — one sentence per value.
 3. **Instruction text** — the sentence is used verbatim (stripped). It is
-   inserted into the input generator's system message, after the legacy
-   coordinate sentence, under the lead-in *"The user message you write must
-   also satisfy this:"*. No placeholders are substituted here.
+   inserted into the input generator's system message after the coordinate
+   sentence, under the lead-in *"The user message you write must also satisfy
+   this:"*. No placeholders are substituted here.
 4. **No absence case** — unlike `system_prompt`, every value of every
    instruction axis carries a sentence. An empty instruction is a load error.
 

@@ -1,5 +1,9 @@
 # anchor-replay-distillation
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
+## Introduction
+
 **Anchor Replay Distillation (ARD) turns an ontology-defined coordinate space into a
 reproducible supervised-finetuning corpus.** For every anchor coordinate it asks a question
 generator for the user turn and a target "teacher" model for the answer, then keeps the
@@ -23,13 +27,27 @@ there is **no upper bound**: a larger `N` simply rolls into round 1, 2, … Each
 already-generated id byte-identical and a resumed run appends cleanly. See
 [Choosing how many anchors](#choosing-how-many-anchors-n).
 
-## Quick start
+The words this document leans on:
+
+| Term | Meaning |
+|---|---|
+| anchor | one generated example — the question and the teacher's answer for one coordinate; one line of `anchor_bank.jsonl` |
+| ontology | `ontology/anchor_ontology.v4.json`: the axes, their values and which combinations are legal |
+| coordinate | the value tuple that labels an anchor: one value per axis, plus the sample field `modality` |
+| unit | one `(modality, legal restricted block)` pair; a round walks every unit exactly once |
+| round | one pass over every unit; its size `U` is enumerated from the ontology at run time |
+| plan | the ordered list of `N` coordinates a run generates, fixed before the first endpoint call |
+| N | how many anchors a run produces: the `[generation] count` field; unset = one round = `U` |
+| target set | the fixed point cloud the `q95` metric readout measures anchor distances against |
+| manifest | `manifest.json`, the run's authoritative declaration of what it built |
+
+Want the plain-language picture first? Read [docs/walkthrough.md](docs/walkthrough.md) — what the
+machine does after you press Enter, step by step.
+
+## Quick Start
 
 Three steps, ending in a real artifact. They call real endpoints — `--smoke` only makes the
 first artifact small.
-
-Want the plain-language picture first? Read [docs/walkthrough.md](docs/walkthrough.md) — what you
-do, and what the machine does at each step.
 
 ### 1. Install dependencies
 
@@ -182,7 +200,7 @@ count = 5000
   sample — the generator is stochastic, so the same labels yield a different question — and is
   never dropped. Definitions: [docs/measurement.md](docs/measurement.md) §6.
 
-## Data format
+## Data Format
 
 `anchor_bank.jsonl` holds one JSON object per line:
 
@@ -268,14 +286,13 @@ input locations and run boundaries only: `--config`, `--override`, `--image-dir`
 `configs/config.override.sample.toml` is the commented template step 2 copies; it is where
 deployment values (endpoints, model names, credentials) go, never `configs/config.toml` itself.
 
-### Interface change: image conversion moved into the config
+### Image transcoding is a config field
 
-`[images] convert` is new, and the `--no-convert` CLI flag has been removed. The flag decided
-what landed in `outputs/<run>/images`, so the project's engineering rule that **one config
-describes one artifact** puts that decision in the config: a run archived as `config.toml` must
-reproduce the image bytes as well as the anchors. The flag is deliberately **not** kept as a
-compatibility alias — a CLI flag and a config field for the same decision would be two sources
-of truth. The behaviour the old flag asked for is `convert = false` today.
+`[images] convert` decides what lands in `outputs/<run>/images`: `true` normalises every selected
+picture to JPEG, `false` copies the already-web formats verbatim. There is no CLI flag for that
+decision — the project's engineering rule is that **one config describes one artifact**, so a run
+archived as `config.toml` must reproduce the image bytes as well as the anchors; a flag and a field
+for the same decision would be two sources of truth.
 
 The archive is itself a valid `--config`: `python -m ard --config outputs/<run>/config.toml
 --override config.override.toml` re-runs the same configuration with your credentials supplied
