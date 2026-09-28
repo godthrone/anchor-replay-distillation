@@ -71,6 +71,10 @@ Line numbers drift with every edit, so a `file:line` reference is stale the mome
 file changes; the repository has deliberately dropped its line-reference guard, and no
 test scanning for `file:line` references should be added back.
 
+## Versioning
+
+The algorithm's behaviour is settled, so later improvements do not raise the major version number.
+
 ## License
 
 By contributing, you agree that your contributions will be licensed
