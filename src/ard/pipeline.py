@@ -2273,10 +2273,8 @@ def _relative_image_path(raw: str, output_dir: Path) -> str | None:
         not address a file inside it.
     """
     path = Path(raw)
-    try:
+    if path.is_relative_to(output_dir):
         return path.relative_to(output_dir).as_posix()
-    except ValueError:
-        pass
     if path.is_absolute():  # pragma: no cover - not addressed inside this run
         return None
     return path.as_posix()
