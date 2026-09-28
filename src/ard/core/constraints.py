@@ -36,8 +36,6 @@ RESTRICTED_AXES: tuple[str, ...] = (
     "answer_mode",
 )
 
-_STRICT = ConfigDict(extra="forbid", frozen=True)
-
 
 class ConstraintEvaluationError(ValueError):
     """Raised when the ontology's constraints cannot be evaluated as declared."""
@@ -46,7 +44,7 @@ class ConstraintEvaluationError(ValueError):
 class RestrictedBlock(BaseModel):
     """One six-axis coordinate inside the restricted subspace."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
     capability: str
     system_prompt_mode: str
     conversation_type: str
@@ -66,7 +64,7 @@ class RestrictedBlock(BaseModel):
 class AxisPairTable(BaseModel):
     """One resolved ``allowed_pairs`` table: from-values -> allowed to-values."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
     constraint_id: str
     from_axis: str
     to_axis: str
@@ -76,7 +74,7 @@ class AxisPairTable(BaseModel):
 class LegalBlockCounts(BaseModel):
     """Counts of the restricted-block subspace and of the free-axis product."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
     raw_restricted_block: int
     legal_restricted_block: int
     legal_restricted_block_image_capable: int

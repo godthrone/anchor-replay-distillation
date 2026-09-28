@@ -180,8 +180,6 @@ IndexGroup: TypeAlias = list[int]
 CheckRelation: TypeAlias = Literal["==", ">="]
 CountCheck: TypeAlias = tuple[str, int, int, CheckRelation]
 
-_STRICT = ConfigDict(extra="forbid", frozen=True)
-
 
 class AcceptanceError(Exception):
     """An input to the acceptance readout cannot be measured as declared."""
@@ -198,7 +196,7 @@ class Conventions(BaseModel):
             turn count — ``2 * n - 1``, so every spec has an odd turn count.
     """
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     sampling_module: str
     multi_turn_default: int
@@ -216,7 +214,7 @@ class ModalityDistinct(BaseModel):
     would hide a collapse that happens in only one of the two.
     """
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     text_only: int
     image: int
@@ -227,10 +225,10 @@ class DiversityDeclaration(BaseModel):
 
     A number called "distinct" is meaningless without the tuple it is distinct
     over, so the readout carries the axes, the join rule and the population it
-    was counted on (``docs/measurement.md`` §11).
+    was counted on (``docs/measurement.md`` §10).
     """
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     counted_over: str
     prompt_signature_axes: tuple[str, ...]
@@ -270,7 +268,7 @@ class PlanCoverage(BaseModel):
             ``full_rounds + (1 if last_round_size else 0)``.
     """
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     unit_total: int
     text_unit_total: int
@@ -342,7 +340,7 @@ class StructureReadout(BaseModel):
         within_rule: every check in :func:`structure_checks` holds.
     """
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     plan_total: int
     plan_text_entries: int
@@ -368,7 +366,7 @@ class StructureReadout(BaseModel):
 class EmbedderIdentity(BaseModel):
     """Who produced the vectors — model and dimension, never a key or endpoint."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     model: str
     dimension: int
@@ -395,7 +393,7 @@ class SpaceDeclaration(BaseModel):
             the target set's own intrinsic scale.
     """
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     anchors_source: str
     anchor_field: str
@@ -422,7 +420,7 @@ class NoiseSection(BaseModel):
         n_pairs: repeat-generation pairs measured.
     """
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     available: bool
     reason: str | None
@@ -434,7 +432,7 @@ class NoiseSection(BaseModel):
 class MetricReadout(BaseModel):
     """One anchor set measured against one target set, with its space declared."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     space: SpaceDeclaration
     quantiles: ruler.DistanceQuantiles
@@ -446,7 +444,7 @@ class MetricReadout(BaseModel):
 class AcceptanceReport(BaseModel):
     """The whole acceptance report of one run: structure, metrics, warnings."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     report_schema: str = REPORT_SCHEMA
     structure: StructureReadout
@@ -1051,7 +1049,7 @@ def render_markdown(report: AcceptanceReport) -> str:
         "these two counts say how many of them are different specifications. "
         "`MISMATCH` above means a planned cell does **not** produce its own "
         "prompt, so the block count must not be read as effective diversity "
-        "(`docs/measurement.md` §11).",
+        "(`docs/measurement.md` §10).",
         "",
     ]
     metrics = report.metrics

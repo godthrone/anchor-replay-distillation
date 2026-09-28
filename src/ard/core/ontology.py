@@ -24,7 +24,6 @@ from ard.core.types import StringList
 
 # ── Schema configuration ───────────────────────────────────────────────────
 
-_STRICT = ConfigDict(extra="forbid", frozen=True)
 _MISSING = "<nothing>"
 
 _EXPECTED_BY_ERROR_TYPE: dict[str, str] = {
@@ -67,7 +66,7 @@ class OntologySchemaError(ValueError):
 class AxisGroup(BaseModel):
     """One named value group of a grouped axis."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
     values: list[str]
     definition: str | None = None
 
@@ -87,7 +86,7 @@ class KnowledgeDomainTree(RootModel[dict[str, SubdomainLeaves]]):
 class FlatAxis(BaseModel):
     """An axis whose coordinate values are listed verbatim in ``values``."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
     layer: str
     cardinality: Literal["single"]
     applies_to: str | dict[str, str]
@@ -123,7 +122,7 @@ class FlatAxisWithAttributes(FlatAxis):
 class HierarchicalAxis(BaseModel):
     """An axis whose values are the deepest leaves of a named tree."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
     layer: str
     cardinality: Literal["single"]
     applies_to: str | dict[str, str]
@@ -136,7 +135,7 @@ class HierarchicalAxis(BaseModel):
 class GroupedAxis(BaseModel):
     """An axis whose values are the concatenation of its groups' values."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
     layer: str
     cardinality: Literal["single"]
     applies_to: str | dict[str, str]
@@ -157,7 +156,7 @@ AxisSpec = FlatAxis | HierarchicalAxis | GroupedAxis
 class Axes(BaseModel):
     """The twelve declared axes, one field per axis name."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
     language: FlatAxisWithSemantics
     knowledge_domain: HierarchicalAxis
     capability: GroupedAxis
@@ -188,14 +187,14 @@ class Axes(BaseModel):
 class AxisRef(BaseModel):
     """A reference to one axis by name, as used inside a constraint rule."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
     axis: str
 
 
 class AllowedPairRule(BaseModel):
     """One ``from_value -> to_values`` row; ``["*"]`` means every target value."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
     from_value: str
     to_values: list[str]
 
@@ -203,7 +202,7 @@ class AllowedPairRule(BaseModel):
 class ConstraintCoverage(BaseModel):
     """A coverage requirement attached to an ``allowed_pairs`` constraint."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
     axis: str
     require: str
 
@@ -211,7 +210,7 @@ class ConstraintCoverage(BaseModel):
 class ConstraintRelaxation(BaseModel):
     """A documented relaxation applied to one rule row in a previous round."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
     from_value: str
     added: str
     reason: str
@@ -220,7 +219,7 @@ class ConstraintRelaxation(BaseModel):
 class AllowedPairsConstraint(BaseModel):
     """A binary ``from.axis -> to.axis`` allowed-pairs table (R1/R2/R3/R4a/R4b)."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
     id: str
     type: Literal["allowed_pairs"]
     from_: AxisRef = Field(alias="from")
@@ -234,7 +233,7 @@ class AllowedPairsConstraint(BaseModel):
 class ConstraintSampleField(BaseModel):
     """A sample field referenced by a constraint rule."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
     name: str
     values: list[str]
 
@@ -242,7 +241,7 @@ class ConstraintSampleField(BaseModel):
 class CapabilityImagePolicy(BaseModel):
     """Which capabilities may carry an image, per the modality gate."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
     must_support_image: list[str]
     may_support_image: list[str]
     text_only: list[str]
@@ -251,7 +250,7 @@ class CapabilityImagePolicy(BaseModel):
 class ModalityGateConstraint(BaseModel):
     """The conditional-axis gate that switches ``visual_domain`` on and off (R5)."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
     id: str
     type: Literal["modality_gate"]
     sample_field: ConstraintSampleField
@@ -264,7 +263,7 @@ class ModalityGateConstraint(BaseModel):
 class SourceLanguagePolicy(BaseModel):
     """Where the source language lives when ``language`` is the output language."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
     carrier: str
     invariant: str
     required_prompt_metadata: list[str]
@@ -274,7 +273,7 @@ class SourceLanguagePolicy(BaseModel):
 class SemanticsDeclarationConstraint(BaseModel):
     """A meaning declaration with no combinatorial effect (R6)."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
     id: str
     type: Literal["semantics_declaration"]
     axis: str
@@ -290,7 +289,7 @@ class SemanticsDeclarationConstraint(BaseModel):
 class OrthogonalityConstraint(BaseModel):
     """A declaration that a set of axes is mutually free (R7)."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
     id: str
     type: Literal["orthogonality"]
     axes: list[str]
@@ -314,7 +313,7 @@ OntologyConstraint = Annotated[
 class SampleField(BaseModel):
     """A top-level ``sample_fields`` entry (a field that is not an axis)."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
     values: list[str]
     role: str
 
@@ -322,7 +321,7 @@ class SampleField(BaseModel):
 class PromptWordingLocation(BaseModel):
     """Recommended location for generator-facing prompt wording."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
     target: str
     shape: str
     status: str
@@ -331,7 +330,7 @@ class PromptWordingLocation(BaseModel):
 class WordingPolicy(BaseModel):
     """The separation between coordinate declarations and prompt wording."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
     ontology_holds: str
     banned_in_ontology: list[str]
     prompt_wording_location_recommendation: PromptWordingLocation
@@ -341,7 +340,7 @@ class WordingPolicy(BaseModel):
 class OntologyV4(BaseModel):
     """A fully validated ``anchor_ontology.v4.json`` coordinate ontology."""
 
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True)
     ontology_id: str
     version: str
     supersedes: str
