@@ -175,7 +175,10 @@ outputs/<run_name>/            # 默认 ard_dataset_<YYYYmmdd_HHMMSS>；--smoke 
   本次**计划**写出的条数，是计划值而非磁盘现状（中断时它只多不少）。所以半途产物的正确读法是
   "这个库属于哪个计划 + 计划多大"，**不是**"跑到哪一步"；真正已落库的条数只能读 `manifest.json` 的
   `total_anchors`（由 `ard.domain.bank.build_manifest_from_records` 从库里的**全量**记录数出，运行结束才写；
-  `generation.counters.written` 只是**本次调用**写入的条数，续跑时两者不等）。
+  `generation.counters.written` 只是**本次调用**写入的条数，续跑时两者不等）。记录把这条结论写成
+  机器可读的声明：`counters_are_live: false`，并由 `counters_note` 点名**计数真相源**——磁盘上真实记录读
+  `anchor_bank.jsonl`，最终条数读运行结束时的 `manifest.json`（`total_anchors`）——记录里的 `counters`
+  **不是**计数真相源。
 - **生命周期**：每次真正采样计划的调用都刷新这份记录（写前一次留下的记录会被替换，属**有意**：
   目录现在说的是这一次的计划）；运行正常结束时写完 manifest（同一 `plan_identity`）后把它删掉
   ——**完成的目录里只有一份申报**。续跑的空转调用（无锚点可生成）若发现已有 manifest 记录同一计划，

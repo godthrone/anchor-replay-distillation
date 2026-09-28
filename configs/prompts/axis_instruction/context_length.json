@@ -1,8 +1,8 @@
 {
   "axis": "context_length",
   "values": {
-    "short": "Keep the user message short: one or two sentences.",
-    "medium": "Keep the user message medium-length: a short paragraph.",
-    "long_context": "Make the user message long, with extended background context."
+    "short": "Give the user message almost no context material: state the request directly, with only the minimum information needed to make it intelligible.",
+    "medium": "Give the user message a small amount of context material: one or two sentences of background, setup or constraints before the request itself.",
+    "long_context": "Give the user message a large amount of context material to work from — a long passage, log, document excerpt or conversation history — and require the answer to be grounded in that material, not in a longer restatement of the question."
   }
 }

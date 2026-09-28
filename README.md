@@ -317,7 +317,10 @@ bank already held, `new` and `written` are the number of anchors this invocation
 write (the same number). They must never be read as a completion, progress or acceptance claim — the
 count of records actually persisted is `manifest.json`'s `total_anchors` — the full bank, records that
 were already on disk included; `generation.counters.written` counts only what this invocation wrote,
-so the two differ on a resumed run. The plan identity
+so the two differ on a resumed run. The record also declares this in machine-readable form:
+`counters_are_live: false`, with a `counters_note` naming the counting truth sources — `anchor_bank.jsonl`
+for the records actually on disk and the finished `manifest.json` for the declaration — so the record's
+`counters` are **not** a counting truth source. The plan identity
 in it can be verified by recomputing `PlanIdentity.of(...)` and comparing digests. See
 [docs/architecture.md](docs/architecture.md) section 4.
 

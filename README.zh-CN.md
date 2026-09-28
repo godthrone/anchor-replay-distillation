@@ -271,7 +271,9 @@ outputs/<run_name>/          # 默认 ard_dataset_<YYYYmmdd_HHMMSS>；--smoke �
 它的 `counters` 在第一次端点调用前定稿、此后不再刷新，描述的是**计划**而不是进度：`existing` = 库里已
 有多少，`new` 与 `written` = 本次计划生成、写出的锚点数（两者同值）。**不得**当作完成度、进度或验收申报
 来读——真正已落库的条数见 `manifest.json` 的 `total_anchors`——库里全量记录，含此前已在盘上的；
-`generation.counters.written` 只算**本次调用**写入的条数，续跑时两者不等；其中的计划身份可以用
+`generation.counters.written` 只算**本次调用**写入的条数，续跑时两者不等。记录另用机器可读的方式声明这一点：
+`counters_are_live: false`，并用 `counters_note` 点名计数真相源——磁盘上真实记录读 `anchor_bank.jsonl`，
+最终申报读运行结束时的 `manifest.json`——所以记录里的 `counters` **不是**计数真相源。其中的计划身份可以用
 `PlanIdentity.of(...)` 独立复算、逐位比对摘要。见 [docs/architecture.md](docs/architecture.md) 第 4 节。
 
 `results/coverage.{json,md}` 是**验收读数，不是训练数据**（`report_schema "ard-acceptance-3"`）：

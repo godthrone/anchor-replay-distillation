@@ -218,6 +218,10 @@ flowchart TD
   `{algorithm, version, sampling, ontology_sha256, seed, count, unit_total, plan_size, digest}`
   （`ard.core.sampling.PlanIdentity`，`PLAN_IDENTITY_VERSION = 2`）。它是续跑守卫读取的计划身份，
   也是"读数绑定到哪个计划"的锚点；`manifest.json` 的 `config` 段里的 `seed` **不是**这个锚点。
+- `plan_identity.in_progress.json`（仅运行未结束时存在；`ard.pipeline._build_progress_record`）：中间态记录，
+  **不是申报**，也**不是计数真相源**。它带 `counters_are_live: false` 与 `counters_note`：其中的 `counters`
+  在第一次端点调用前定稿、此后不再刷新，所以计数真相源是 `anchor_bank.jsonl`（磁盘上的真实记录）与运行结束
+  时的 `manifest.json`（`total_anchors`）。字段语义与生命周期见 `docs/architecture.md` 第 4 节。
 - `manifest.json` → `plan` 段（`ard.pipeline._declare_plan_readout`）：计划的形状与覆盖读数，
   与报告的结构读数同口径：`ontology_sha256` / `seed` / `count` / `unit_total` / `full_cycles` /
   `last_cycle_size` / `planned_anchors` / `written_anchors` / `distinct_coordinates` /
