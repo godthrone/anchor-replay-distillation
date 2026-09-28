@@ -101,6 +101,21 @@ plan(seed, N) = [coordinate(i) for i in range(N)]
 | `language` / `response_style` / `difficulty` / `context_length` | **按 `H(seed, 本体哈希, "free", i)` 抽取** | `ard.core.sampling._free_rng`、`_build_coordinate` |
 | `modality` | 采样字段（非轴）：来自单元所属模态组 | `ard.core.sampling.coverage_units` |
 
+**"轮转"的确切口径是每轮独立重洗，不是固定步长轮转。** 上表的轮转指取模
+`(b(u) + c) % K`：轮内确定、跨轮均匀——一轮内 `b(u)` 取遍连续下标，K 个知识叶各出现
+`⌈U/K⌉` 或 `⌊U/K⌋` 次（今天 `1826 = 209 × 8 + 154`，即 154 个叶 9 次、55 个叶 8 次），
+每个单元在 K 轮里走遍全部知识叶。承载受限块与自由轴的**单元顺序**则不同：它每轮把整个单元集合
+重新洗一遍（`order(c) = shuffle(units, H(seed, 本体哈希, "cycle", c))`，种子含 `c`），
+第 `c` 轮与第 `c+1` 轮之间没有任何固定步长关系，轮内每个单元恰好出现一次。
+
+**4 个自由轴等概率、无权重、彼此独立。** `ard.core.sampling._build_coordinate` 对每个轴调用
+`ard.core.sampling._draw`，实现是 `values[rng.randrange(len(values))]`——在**该轴自己的取值数组**上
+等概率抽取，没有权重、分层或截断一类会让分布偏斜的因素；4 个值来自同一次抽样里同一个
+`Random(H(seed, 本体哈希, "free", i))` 的顺序调用，互不条件化（唯一例外：本体若未声明
+`language` 取值，则回落到 `ard.core.sampling.DEFAULT_LANGUAGE` 且不消耗抽取）。
+因此自由轴的轮内计数**带抽样波动**（今天一轮内 `difficulty` 三值为 591 / 606 / 629），
+与轮转轴"每轮精确配平"是两种不同的均匀性。
+
 **N 无上限，按轮滚动。** 唯一入口是 `configs/config.toml` 的 `[generation] count`
 （`ard.config.GenerationConfig.count`，类型 `int | None`）。缺省 `None` = 一轮 = U。
 **没有 CLI 参数、没有 `run.sh` 透传、没有环境变量**（宪法 §10.1 推论 1/2：CLI 与 config 零交集）。

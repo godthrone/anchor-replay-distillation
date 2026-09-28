@@ -49,17 +49,14 @@ def _raw_v4() -> dict[str, Any]:
 def test_load_v4_parses_real_ontology() -> None:
     """The shipped v4 file parses into the typed model.
 
-    **shipped-ontology contract**：下面的 12 / 11 / 1 / 8 只对当前随仓库发布的
-    这份本体成立；运行时不依赖它 —— 运行时计数一律从叶子清单穷举。改本体时更新
-    这个数字即可，不需要改任何生产代码。
+    **shipped-ontology contract**：下面的 12 / 8 只对当前随仓库发布的
+    这份本体成立；运行时不依赖它 —— 轴数由 ``len(axis_names())`` 现算，运行时
+    计数一律从叶子清单穷举。改本体时更新这个数字即可，不需要改任何生产代码。
     """
     ontology = load_ontology_v4(ONTOLOGY_V4_PATH)
     assert ontology.ontology_id == "ard-anchor-ontology"
     assert ontology.version == "4.0.0"
     assert len(ontology.axis_names()) == 12
-    assert ontology.axis_count.universal == 11
-    assert ontology.axis_count.conditional == 1
-    assert ontology.axis_count.total == 12
     assert len(ontology.constraints) == 8
 
 
@@ -248,7 +245,7 @@ def test_extra_field_is_rejected(tmp_path: Path) -> None:
 def test_type_error_is_rejected(tmp_path: Path) -> None:
     """A wrongly typed field is rejected, naming field, expectation and value."""
     payload = _raw_v4()
-    payload["axis_count"]["total"] = "twelve"
+    payload["axes"]["conversation_type"]["value_attributes"]["single_turn"]["turns"] = ["one"]
     path = tmp_path / "type_error.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -256,9 +253,9 @@ def test_type_error_is_rejected(tmp_path: Path) -> None:
         load_ontology_v4(path)
 
     message = str(excinfo.value)
-    assert "axis_count.total" in message
+    assert "single_turn.turns.int" in message
     assert "expected int" in message
-    assert "'twelve'" in message
+    assert "['one']" in message
 
 
 def test_flat_axis_values_must_be_a_list(tmp_path: Path) -> None:

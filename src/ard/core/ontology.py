@@ -1,8 +1,9 @@
 """Ontology parsing for ARD anchor generation (v4 schema).
 
 Responsibility: validate an **already-decoded** ``anchor_ontology.v4.json``
-payload (12 axes, knowledge-domain tree, constraint declarations) into pydantic
-models and expose typed access to axis value sets.  A payload that does not
+payload (the axes the ontology declares, its knowledge-domain tree, its
+constraint declarations) into pydantic models and expose typed access to axis
+value sets.  A payload that does not
 match the v4 schema raises :class:`OntologySchemaError` naming the offending
 field, the expectation and the received value — it never degrades into an empty
 result set.
@@ -310,15 +311,6 @@ OntologyConstraint = Annotated[
 # ── Top-level models ───────────────────────────────────────────────────────
 
 
-class AxisCount(BaseModel):
-    """Declared count of universal, conditional and total axes."""
-
-    model_config = _STRICT
-    universal: int
-    conditional: int
-    total: int
-
-
 class SampleField(BaseModel):
     """A top-level ``sample_fields`` entry (a field that is not an axis)."""
 
@@ -355,7 +347,6 @@ class OntologyV4(BaseModel):
     supersedes: str
     scope_note: str
     axis_order: list[str]
-    axis_count: AxisCount
     reading_rules: dict[str, str]
     axes: Axes
     knowledge_domain_tree: KnowledgeDomainTree

@@ -17,11 +17,6 @@
     "answer_mode",
     "visual_domain"
   ],
-  "axis_count": {
-    "universal": 11,
-    "conditional": 1,
-    "total": 12
-  },
   "reading_rules": {
     "axis_value_set": "flat axes use `values`; hierarchical axes use every leaf at the deepest level of the tree named by `tree_ref`; grouped axes use the concatenation of each group's `values`.",
     "wildcard": "In constraint rules, \"*\" means every value of that side's axis.",
