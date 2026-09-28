@@ -31,14 +31,16 @@ uses. A smoke plan is *not* a prefix of the full plan: the full plan takes the f
 the single round-0 order, while smoke takes the first four *of each modality*, so an id the two
 share can point at a different coordinate. All 8 planned anchors are present in the bank.
 
-**The bank was completed in two invocations.** Anchor generation calls a live endpoint, and an
-anchor is only written when the whole conversation is obtained. The first invocation met a
-transient transport error and wrote 6 of the 8 anchors; re-running the same command against the
-same `output.directory` resumed it — the resume guard verified that each existing record still sat
-at its own plan position, then appended the 2 missing anchors. This is why the sample's
-`generation.counters` reads `requested 2 / succeeded 2 / written 2` while `total_anchors` and
-`plan.planned_anchors` are **8**: the counters describe the invocation that finished the run, the
-totals describe the whole bank (see `manifest.sample.json` below).
+**The bank was assembled over several invocations of the same command.** Anchor generation calls a
+live endpoint, and an anchor is only written when the whole conversation is obtained. The earlier
+invocations wrote most of the plan and abandoned the rest — a transient transport error, and a
+teacher that returned only reasoning when the configuration asked for both — and re-running the
+same command against the same `output.directory` resumed each time: the resume guard verified that
+every existing record still sat at its own plan position, then asked the endpoint only for the
+anchors still missing. The finishing invocation asked for the **2** anchors still absent. This is
+why the sample's `generation.counters` reads `requested 2 / succeeded 2 / written 2` while
+`total_anchors` and `plan.planned_anchors` are **8**: the counters describe the invocation that
+finished the run, the totals describe the whole bank (see `manifest.sample.json` below).
 
 **Re-running the command does not promise the same number of records.** Generation is stochastic
 and an anchor whose conversation fails — a transport error, empty generated content, or a teacher
@@ -52,7 +54,7 @@ rewriting the ones already there.
 ## Provenance — which build produced these files
 
 Both sample files are the artifacts of one `--smoke` run of this repository's v5 working tree
-(cycle-shuffle sampling, position-serial anchor ids, `schema_version 5.0.0`), made on 2026-09-27
+(cycle-shuffle sampling, position-serial anchor ids, `schema_version 5.0.0`), made on 2026-09-28
 against a real deployment endpoint (credentials taken from the gitignored local override). The
 metric readout was wired to the bundled wiring sample `examples/target_set.sample.jsonl`, so its
 `acceptance.metric_readout` is `true` and `q95` is a real number.
@@ -64,12 +66,12 @@ The run's manifest records the identity of the plan it drew:
   "algorithm": "sha256",
   "version": 2,
   "sampling": "cycle-shuffle/v1",
-  "ontology_sha256": "ab03156945150011d7c0815927ed59113d13c98d642b3d302f54f89f153019b7",
+  "ontology_sha256": "807cd068076f0b2bea7eb5d3eccdecac927b3521fa7034e599456bb3553ad36f",
   "seed": 7360,
   "count": 8,
   "unit_total": 1826,
   "plan_size": 8,
-  "digest": "412a399580112315e942923b49ccdc412fe256f7113ebd9df843d78a42253944"
+  "digest": "281d213334e7006c89807b18f0a345e7e353bb5c791e21ae3ab484f7e8c9e36a"
 }
 ```
 
@@ -84,7 +86,7 @@ Each line of `anchor_bank.sample.jsonl` is one anchor:
 
 ```jsonc
 {
-  "id": "2c6e1114-c00000p00000",   // plan-position serial number: run_key + round + position
+  "id": "f384795e-c00000p00000",   // plan-position serial number: run_key + round + position
   "source": "ard",                 // dataset tag of the ARD anchor-bank format
   "data_source": "ard_text",       // controlled vocabulary: ard_text | ard_multi
   "schema_version": "5.0.0",       // the record format version — same for every record
@@ -111,7 +113,7 @@ normalised-fields table below.
 ### `id` is a plan position, not a coordinate fingerprint
 
 An id is `` `run_key` + "-c" + round + "p" + position `` — here
-`2c6e1114-c00000p00000` through `2c6e1114-c00000p00007`. `run_key` is
+`f384795e-c00000p00000` through `f384795e-c00000p00007`. `run_key` is
 `H(ontology hash, seed, sampling algorithm)[:8]`; `c00000` is the round and `p00000` the position
 inside it. The id deliberately does **not** contain `N`, so raising `[generation] count` later
 leaves every id already on disk byte-identical and a resumed run can append cleanly. Because the
@@ -120,8 +122,8 @@ id is a position and not a fingerprint of the coordinate, **two records may carr
 produces a new, legitimate sample — and both are kept.
 
 The eight ids in this bank are the eight positions of the smoke plan. The bank's line order is
-write order (the two anchors appended by the resume come last), not plan order; sort by `id`, or by
-the `p…` field, to see the plan order.
+write order (the anchors appended by the later invocations come last), not plan order; sort by
+`id`, or by the `p…` field, to see the plan order.
 
 `anchor_meta` carries the sample field `modality` (`text_only` | `image`) and every axis
 value: `language`, `knowledge_domain`, `capability`, `system_prompt_mode`,
@@ -165,7 +167,7 @@ A multimodal user turn looks like this:
 {
   "role": "user",
   "content": [
-    { "type": "image", "image": "images/vehicles/sample_10.jpg" },
+    { "type": "image", "image": "images/urban_scenes/sample_10.jpg" },
     { "type": "text",  "text": "…the generated user question…" }
   ]
 }
@@ -173,10 +175,16 @@ A multimodal user turn looks like this:
 
 The path is relative to the run directory, so `outputs/<run_name>/images/<visual_domain>/…`
 resolves directly; the run copies (and, unless `[images] convert = false`, converts) the picture
-there. It was drawn from `<image_dir>/<visual_domain>/<file>` — the anchor's own `visual_domain`
-coordinate, never a flat pool, because a flat pool cannot guarantee that the image matches
-the label attached to it. The four files the sample bank references exist in this directory at
-exactly those paths, so pointing your own run at `--image-dir examples/images` resolves them.
+there. A picture filed under the anchor's own `visual_domain` coordinate is preferred, because it
+is the one whose content the user vouched for. **This sample did not have one to prefer:** the
+smoke plan's four image coordinates are `clothing`, `indoor_scenes`, `outdoor_scenes` and
+`urban_scenes`, and the checked-in `examples/images` tree carries a subdirectory for none of them,
+so all four were served by the **tree-wide fallback** — a reusable picture picked from the whole
+image tree in a deterministic order. That substitution is declared, not hidden: the manifest reads
+`fallback_visual_domains: [clothing, indoor_scenes, outdoor_scenes, urban_scenes]` and
+`fallback_anchor_count: 4` against a `pool_candidate_count` of 10, and every `resolved_images` row
+carries `fallback: true`. Re-running the documented command against `examples/images` reproduces
+exactly that fallback.
 
 ## `manifest.sample.json`
 
@@ -197,29 +205,31 @@ produce healthy data?":
 - `generation.counters` — what happened to every anchor *this invocation* requested (`requested` /
   `succeeded` / `written`, plus `abandoned_by_reason` when non-zero). It is an invocation-level
   counter, not a bank total: here it reads `requested 2 / written 2` because the finishing
-  invocation was the resume, while `total_anchors` is 8;
+  invocation only had to fill the last gaps, while `total_anchors` is 8;
 - `acceptance` — pointers to `results/coverage.{json,md}` (the acceptance report schema is
   `ard-acceptance-3`), plus `metric_readout` and `q95`;
 - `config` — the merged configuration the run actually used, with credential fields already
   redacted (`api_key = "***REDACTED***"`); `config.images.convert` is part of it;
-- `images` — the addressing convention, the domains it resolved and any it skipped. It is written
-  by the invocation that finished the run, so in this sample it lists the two images that the
-  **resume** resolved; the bank itself references four `visual_domain` directories (see the record
-  table below);
+- `images` — the addressing convention, the domains the bank references, and which of them were
+  served from the tree-wide fallback (`resolved_visual_domains`, `domain_candidate_counts`,
+  `pool_candidate_count`, `fallback_visual_domains`, `fallback_anchor_count`, plus a `fallback` flag
+  on each `resolved_images` row). It is written by the invocation that finished the run but
+  describes the **whole bank**, so here it lists all four `visual_domain` directories the bank
+  references (see the record table below) — every one of them a fallback;
 - `smoke` / `smoke_plan` — the self-declaration of a `--smoke` run.
 
 ### The eight sample records
 
 | # | Record id | `data_source` | `modality` | `visual_domain` | Image | Messages (user turns) | Language | Knowledge domain | Capability | `system_prompt_mode` | `conversation_type` |
 |---|-----------|---------------|-----------|-----------------|-------|:---:|----------|------------------|------------|----------------------|---------------------|
-| 1 | `2c6e1114-c00000p00000` | `ard_text` | `text_only` | – | – | 1 (1) | Español | origin of the universe | qa | `none` | single_turn |
-| 2 | `2c6e1114-c00000p00001` | `ard_text` | `text_only` | – | – | 2 (1) | English | causal reasoning | translation | `domain_style` | single_turn |
-| 3 | `2c6e1114-c00000p00002` | `ard_text` | `text_only` | – | – | 2 (1) | 简体中文 | collective mourning | explanation | `minimal_persona` | single_turn |
-| 4 | `2c6e1114-c00000p00003` | `ard_text` | `text_only` | – | – | 6 (3) | 日本語 | tone adaptation | planning | `domain_style` | iterative_revision |
-| 5 | `2c6e1114-c00000p00004` | `ard_multi` | `image` | animals | `images/animals/sample_05.jpg` | 5 (2) | 简体中文 | oral storytelling | debugging | `none` | iterative_revision |
-| 6 | `2c6e1114-c00000p00007` | `ard_multi` | `image` | plants | `images/plants/sample_07.jpg` | 6 (3) | Español | evidence interpretation | rewriting | `task_constraint` | iterative_revision |
-| 7 | `2c6e1114-c00000p00005` | `ard_multi` | `image` | vehicles | `images/vehicles/sample_10.jpg` | 1 (1) | English | percentage calculation | reasoning | `none` | single_turn |
-| 8 | `2c6e1114-c00000p00006` | `ard_multi` | `image` | everyday_objects | `images/everyday_objects/sample_03.jpg` | 6 (3) | 简体中文 | consciousness research | coding | `domain_style` | iterative_revision |
+| 1 | `f384795e-c00000p00000` | `ard_text` | `text_only` | – | – | 5 (3) | 日本語 | data cleaning | debugging | `none` | troubleshooting |
+| 2 | `f384795e-c00000p00001` | `ard_text` | `text_only` | – | – | 7 (4) | Español | beauty and ugliness | decision_analysis | `none` | source_review |
+| 3 | `f384795e-c00000p00002` | `ard_text` | `text_only` | – | – | 7 (4) | 日本語 | refactoring plan | translation | `none` | constraint_update |
+| 4 | `f384795e-c00000p00003` | `ard_text` | `text_only` | – | – | 7 (4) | 简体中文 | hypothesis formation | extraction | `none` | constraint_update |
+| 5 | `f384795e-c00000p00004` | `ard_multi` | `image` | indoor_scenes | `images/indoor_scenes/sample_05.jpg` | 2 (1) | Español | mysticism in literature | debugging | `domain_style` | single_turn |
+| 6 | `f384795e-c00000p00005` | `ard_multi` | `image` | urban_scenes | `images/urban_scenes/sample_10.jpg` | 4 (2) | English | schema mapping | qa | `minimal_persona` | clarification |
+| 7 | `f384795e-c00000p00006` | `ard_multi` | `image` | clothing | `images/clothing/sample_06.jpg` | 5 (3) | 简体中文 | dependency management | data_analysis | `none` | troubleshooting |
+| 8 | `f384795e-c00000p00007` | `ard_multi` | `image` | outdoor_scenes | `images/outdoor_scenes/sample_01.jpg` | 1 (1) | 简体中文 | workplace culture | decision_analysis | `none` | single_turn |
 
 This mixture is simply what the smoke plan drew; nothing was steered. The language / domain /
 capability mix of a full run is much broader.
@@ -261,8 +271,10 @@ would create a second source of truth that could drift.
 - Run the smoke command above with `--image-dir examples/images` to see the same shape
   produced locally.
 
-`images/` covers the four `visual_domain` directories this sample's smoke plan required
-(`animals`, `everyday_objects`, `plants`, `vehicles`). Which domains a smoke run needs depends on
+`images/` is the image tree the documented command points at. It ships four `visual_domain`
+directories (`animals`, `everyday_objects`, `plants`, `vehicles`) as placeholders; the sample's own
+smoke plan drew four *other* domains, so each of its image anchors was served from the tree-wide
+fallback described above and the run still completed. Which domains a smoke run needs depends on
 its seed, because it takes round 0's shuffled order; **a full run needs all 21 visual domains** —
 supply your own image directory and pass it with `--image-dir`.
 

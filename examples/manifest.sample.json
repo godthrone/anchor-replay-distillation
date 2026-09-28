@@ -1,36 +1,33 @@
 {
   "total_anchors": 8,
   "domains": {
-    "origin of the universe": 1,
-    "causal reasoning": 1,
-    "collective mourning": 1,
-    "tone adaptation": 1,
-    "oral storytelling": 1,
-    "evidence interpretation": 1,
-    "percentage calculation": 1,
-    "consciousness research": 1
+    "hypothesis formation": 1,
+    "schema mapping": 1,
+    "refactoring plan": 1,
+    "data cleaning": 1,
+    "dependency management": 1,
+    "workplace culture": 1,
+    "mysticism in literature": 1,
+    "beauty and ugliness": 1
   },
   "languages": {
-    "Español": 2,
-    "English": 2,
     "简体中文": 3,
-    "日本語": 1
+    "English": 1,
+    "日本語": 2,
+    "Español": 2
   },
   "capabilities": {
+    "extraction": 1,
     "qa": 1,
     "translation": 1,
-    "explanation": 1,
-    "planning": 1,
-    "debugging": 1,
-    "rewriting": 1,
-    "reasoning": 1,
-    "coding": 1
+    "debugging": 2,
+    "data_analysis": 1,
+    "decision_analysis": 2
   },
   "system_prompt_modes": {
-    "none": 3,
-    "domain_style": 3,
+    "none": 6,
     "minimal_persona": 1,
-    "task_constraint": 1
+    "domain_style": 1
   },
   "data_sources": {
     "ard_text": 4,
@@ -66,7 +63,7 @@
     "generation": {
       "count": null,
       "seed": 7360,
-      "concurrency": 2,
+      "concurrency": 4,
       "backpressure_threshold": 3,
       "backpressure_cooldown": 60.0
     },
@@ -101,15 +98,15 @@
     "algorithm": "sha256",
     "version": 2,
     "sampling": "cycle-shuffle/v1",
-    "ontology_sha256": "ab03156945150011d7c0815927ed59113d13c98d642b3d302f54f89f153019b7",
+    "ontology_sha256": "807cd068076f0b2bea7eb5d3eccdecac927b3521fa7034e599456bb3553ad36f",
     "seed": 7360,
     "count": 8,
     "unit_total": 1826,
     "plan_size": 8,
-    "digest": "412a399580112315e942923b49ccdc412fe256f7113ebd9df843d78a42253944"
+    "digest": "281d213334e7006c89807b18f0a345e7e353bb5c791e21ae3ab484f7e8c9e36a"
   },
   "plan": {
-    "ontology_sha256": "ab03156945150011d7c0815927ed59113d13c98d642b3d302f54f89f153019b7",
+    "ontology_sha256": "807cd068076f0b2bea7eb5d3eccdecac927b3521fa7034e599456bb3553ad36f",
     "seed": 7360,
     "count": 8,
     "unit_total": 1826,
@@ -129,16 +126,16 @@
       "written": 2
     },
     "failures": {
-      "reasoning_responses": 4,
-      "reasoning_chars": 8471,
-      "responses": 9
+      "reasoning_chars": 53305,
+      "responses": 11,
+      "reasoning_responses": 5
     }
   },
   "acceptance": {
     "coverage_json": "results/coverage.json",
     "coverage_md": "results/coverage.md",
     "metric_readout": true,
-    "q95": 0.7627489853962606
+    "q95": 0.7794399016216007
   },
   "smoke": true,
   "smoke_plan": {
@@ -154,25 +151,51 @@
     "addressing": "<image_dir>/<visual_domain>/<image file>",
     "skip_missing_images": false,
     "resolved_visual_domains": [
-      "everyday_objects",
-      "vehicles"
+      "clothing",
+      "indoor_scenes",
+      "outdoor_scenes",
+      "urban_scenes"
     ],
     "resolved_images": [
       {
         "cycle": 0,
-        "visual_domain": "everyday_objects",
-        "image": "sample_03.jpg"
+        "visual_domain": "clothing",
+        "image": "sample_06.jpg",
+        "fallback": true
       },
       {
         "cycle": 0,
-        "visual_domain": "vehicles",
-        "image": "sample_10.jpg"
+        "visual_domain": "indoor_scenes",
+        "image": "sample_05.jpg",
+        "fallback": true
+      },
+      {
+        "cycle": 0,
+        "visual_domain": "outdoor_scenes",
+        "image": "sample_01.jpg",
+        "fallback": true
+      },
+      {
+        "cycle": 0,
+        "visual_domain": "urban_scenes",
+        "image": "sample_10.jpg",
+        "fallback": true
       }
     ],
     "domain_candidate_counts": {
-      "everyday_objects": 3,
-      "vehicles": 2
+      "clothing": 0,
+      "indoor_scenes": 0,
+      "outdoor_scenes": 0,
+      "urban_scenes": 0
     },
+    "pool_candidate_count": 10,
+    "fallback_visual_domains": [
+      "clothing",
+      "indoor_scenes",
+      "outdoor_scenes",
+      "urban_scenes"
+    ],
+    "fallback_anchor_count": 4,
     "skipped_anchor_count": 0,
     "skipped_visual_domains": []
   },
