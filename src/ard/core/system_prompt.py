@@ -37,6 +37,8 @@ import string
 from pathlib import Path
 from typing import Any, TypeAlias
 
+from ard.core.system_prompt_template_error import SystemPromptTemplateError
+
 __all__ = [
     "SYSTEM_PROMPT_NONE",
     "SYSTEM_PROMPT_TEMPLATE_DIR",
@@ -90,14 +92,6 @@ _FIELD_SOURCES: dict[str, FieldSource] = {
 #: values keeps a bad ontology or metadata value from reading — or reporting —
 #: a file outside the wording directory (§2.3 边界校验).
 _MODE_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
-
-
-class SystemPromptTemplateError(RuntimeError):
-    """Raised when a mode's wording file is missing, empty or malformed.
-
-    The message always names the path and what was expected.  It never contains
-    credential material: a wording path and a mode name are not secret (§15).
-    """
 
 
 def system_prompt_template_path(mode: str, directory: str | Path | None = None) -> Path:

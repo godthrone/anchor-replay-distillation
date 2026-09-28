@@ -7,7 +7,7 @@ instruction for the input generator is data: one JSON file per axis under
 
 Six axes describe what the generated conversation must look like — the six the
 ontology labels ``layer = "instruction"`` (vocabulary defined in
-``docs/algorithm.md`` §4.1):
+``docs/algorithm.md`` §5.1):
 
 ``response_style`` / ``output_format`` / ``difficulty`` / ``context_length`` /
 ``input_condition`` / ``answer_mode``.
@@ -30,6 +30,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
+
+from ard.core.axis_instruction_error import AxisInstructionError
 
 __all__ = [
     "AXIS_INSTRUCTION_DIR",
@@ -68,15 +70,6 @@ AXIS_INSTRUCTION_SUFFIX = ".json"
 #: The clause that introduces the per-axis sentences in the generator prompt.
 #: Structural glue only — the sentences themselves are the data.
 AXIS_REQUIREMENT_LEAD_IN = "The user message you write must also satisfy this:"
-
-
-class AxisInstructionError(RuntimeError):
-    """Raised when an axis's wording file is missing, empty or malformed.
-
-    The message always names the file and the axis value it expected.  It never
-    contains credential material: a wording path and an axis value are not
-    secret (§15).
-    """
 
 
 def axis_instruction_path(axis: str, directory: str | Path | None = None) -> Path:
