@@ -51,7 +51,7 @@ from ard.backends.ontology_loader import load_ontology_v4
 from ard.config import ARDConfig, ConfigError, CoverageEmbedding
 from ard.core import acceptance
 from ard.core.ontology import OntologyV4
-from ard.core.quota import allocate_images
+from ard.core.quota import allocate_images, stamp_image_bookkeeping
 from ard.core.sampling import (
     PLAN_IDENTITY_ALGORITHM,
     PLAN_IDENTITY_AXES,
@@ -1174,14 +1174,20 @@ def _assign_images_by_domain(
     One ``(cycle, domain)`` = one group; :func:`ard.core.quota.allocate_images`
     is reused per group so the turn-filling rule (earliest eligible ``user``
     turn, at most :data:`IMAGES_PER_ANCHOR` images) keeps a single
-    implementation.  Text-only specs are stamped ``has_image=False`` and never
-    receive an image: their coordinate names no visual domain, so an image would
-    be the same coordinate/content mismatch the addressing exists to prevent.
+    implementation.  Text-only specs never receive an image: their coordinate
+    names no visual domain, so an image would be the same coordinate/content
+    mismatch the addressing exists to prevent.
+
+    This function only *places* pictures.  The ``has_image`` / ``image_count``
+    bookkeeping is not decided here: ``run`` stamps it for every spec it will
+    write, through the one implementation of that rule
+    (:func:`ard.core.quota.stamp_image_bookkeeping`), so a spec that this
+    function never sees is stamped exactly like the ones it does.
 
     ``cycle_of`` maps a spec's primary key to its plan round (``index // U`` over
     the full plan).  A spec whose round is unknown, or whose ``(cycle, domain)``
-    has no resolved file, is stamped text-only rather than being given some
-    other round's picture.
+    has no resolved file, is left without a picture — its record then declares
+    itself text-only rather than carrying some other round's image.
     """
     groups: dict[tuple[int, str], AnchorSpecList] = {}
     for spec in specs:
@@ -1190,9 +1196,6 @@ def _assign_images_by_domain(
         key = (cycle, domain) if isinstance(cycle, int) and isinstance(domain, str) else None
         if key is not None and key in rel_by_cycle_domain:
             groups.setdefault(key, []).append(spec)
-        else:
-            spec.anchor_meta["has_image"] = False
-            spec.anchor_meta["image_count"] = 0
     for key, group in groups.items():
         allocate_images(group, [rel_by_cycle_domain[key]], IMAGES_PER_ANCHOR, rng)
 
@@ -2122,6 +2125,16 @@ def run(
             rel_by_source[source] = placed[0]
             rel_by_cycle_domain[(cycle, domain)] = placed[0]
         _assign_images_by_domain(specs, rel_by_cycle_domain, cycle_of, output_dir, rng)
+
+    # Every record this run writes declares its own image state, whether or not
+    # this invocation addressed a picture.  Stamping only inside the copy step
+    # above coupled the value to the *invocation*: a finishing run whose pending
+    # set held nothing but text anchors selected no source, skipped the copy
+    # step, and wrote those records with both fields absent — while the README
+    # contract says a text-state coordinate carries ``has_image: false`` /
+    # ``image_count: 0``.  The fields belong to the coordinate, so they are
+    # stamped for the whole pending set from each spec's own turns (§1.4).
+    stamp_image_bookkeeping(specs)
 
     # ── Early plan-identity record (§2.4, before the first endpoint call) ──
     # The plan is fixed and the config snapshot exists, but the authoritative

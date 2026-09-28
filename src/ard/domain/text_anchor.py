@@ -61,7 +61,7 @@ from ard.core.types import (
 )
 from ard.domain.anchor_shape import expected_message_roles, message_shape_error
 from ard.domain.append_outcome import AppendOutcome
-from ard.domain.bank import append_anchor, data_source_error
+from ard.domain.bank import append_anchor, data_source_error, image_bookkeeping_error
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +108,8 @@ class AnchorGenerationStats:
         rejected_invalid_shape: Anchors refused by the bank's shape gate.
         rejected_invalid_data_source: Anchors refused by the bank's
             ``data_source`` vocabulary gate.
+        rejected_invalid_image_bookkeeping: Anchors refused by the bank's
+            ``has_image`` / ``image_count`` bookkeeping gate.
         duplicate_ids: Anchors refused by the bank's id-uniqueness gate.
         backpressure_events: Cooldowns triggered (each one paused the run).
         consecutive_server_failures: Counter value at the end of the run; it is
@@ -121,6 +123,7 @@ class AnchorGenerationStats:
     written: int = 0
     rejected_invalid_shape: int = 0
     rejected_invalid_data_source: int = 0
+    rejected_invalid_image_bookkeeping: int = 0
     duplicate_ids: int = 0
     backpressure_events: int = 0
     consecutive_server_failures: int = 0
@@ -140,6 +143,7 @@ class AnchorGenerationStats:
             "written": self.written,
             "rejected_invalid_shape": self.rejected_invalid_shape,
             "rejected_invalid_data_source": self.rejected_invalid_data_source,
+            "rejected_invalid_image_bookkeeping": self.rejected_invalid_image_bookkeeping,
             "duplicate_ids": self.duplicate_ids,
             "backpressure_events": self.backpressure_events,
         }
@@ -945,6 +949,7 @@ def generate_text_anchors(
     written = 0
     invalid_shape: list[StringPair] = []
     invalid_data_source: list[StringPair] = []
+    invalid_image_bookkeeping: list[StringPair] = []
     duplicate_ids: list[str] = []
 
     pbar = tqdm(total=target_count, desc="Text anchors", unit="anchor", disable=disable_progress)
@@ -1032,6 +1037,10 @@ def generate_text_anchors(
                         invalid_data_source.append(
                             (anchor.id, data_source_error(anchor) or "unknown")
                         )
+                    elif outcome is AppendOutcome.INVALID_IMAGE_BOOKKEEPING_SKIPPED:
+                        invalid_image_bookkeeping.append(
+                            (anchor.id, image_bookkeeping_error(anchor) or "unknown")
+                        )
                 # A produced anchor is positive evidence that the server is
                 # serving again, so it clears the streak.
                 consecutive_server_failures = 0
@@ -1046,6 +1055,7 @@ def generate_text_anchors(
     stats.written = written
     stats.rejected_invalid_shape = len(invalid_shape)
     stats.rejected_invalid_data_source = len(invalid_data_source)
+    stats.rejected_invalid_image_bookkeeping = len(invalid_image_bookkeeping)
     stats.duplicate_ids = len(duplicate_ids)
     stats.consecutive_server_failures = consecutive_server_failures
 
@@ -1059,20 +1069,23 @@ def generate_text_anchors(
                 f"{reason}={count}" for reason, count in sorted(stats.abandoned_by_reason.items())
             ),
         )
-    if invalid_shape or invalid_data_source or duplicate_ids:
+    if invalid_shape or invalid_data_source or invalid_image_bookkeeping or duplicate_ids:
         logger.warning(
             "Anchor bank %s accepted %d anchor(s); rejected %d with an invalid "
-            "message shape, %d with a data_source outside the vocabulary and "
-            "%d duplicate id(s).",
+            "message shape, %d with a data_source outside the vocabulary, %d with "
+            "missing or contradictory image bookkeeping and %d duplicate id(s).",
             output_path,
             written,
             len(invalid_shape),
             len(invalid_data_source),
+            len(invalid_image_bookkeeping),
             len(duplicate_ids),
         )
     for anchor_id, reason in invalid_shape:
         logger.warning("  rejected %s: %s", anchor_id, reason)
     for anchor_id, reason in invalid_data_source:
+        logger.warning("  rejected %s: %s", anchor_id, reason)
+    for anchor_id, reason in invalid_image_bookkeeping:
         logger.warning("  rejected %s: %s", anchor_id, reason)
     for duplicate_id in duplicate_ids:
         logger.warning(

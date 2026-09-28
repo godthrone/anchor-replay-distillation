@@ -92,7 +92,15 @@ def _anchor(
         anchor_meta=(
             anchor_meta
             if anchor_meta is not None
-            else {"language": "English", "knowledge_domain": "math"}
+            else {
+                "language": "English",
+                "knowledge_domain": "math",
+                # The bank's image-bookkeeping gate requires the pair the
+                # README promises on every record; this helper writes
+                # text-state records.
+                "has_image": False,
+                "image_count": 0,
+            }
         ),
         reasoning=None,
     )

@@ -90,7 +90,14 @@ def _spec(spec_id: str) -> AnchorSpec:
     """A single-turn spec (one user turn, answered by the target model)."""
     return AnchorSpec(
         id=spec_id,
-        anchor_meta={"language": "English", "knowledge_domain": "geography"},
+        anchor_meta={
+            "language": "English",
+            "knowledge_domain": "geography",
+            # The bank's image-bookkeeping gate requires the pair the README
+            # promises; these are text-state specs.
+            "has_image": False,
+            "image_count": 0,
+        },
         turns=[
             TurnSpec(
                 turn_index=0,

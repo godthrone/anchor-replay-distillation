@@ -213,3 +213,50 @@ def test_config_system_prompt_is_not_configurable():
     config_fields = set(GenerationConfig.model_fields)
     assert "system_persona" not in config_fields
     assert not any("system_prompt" in name for name in config_fields)
+
+
+# ── stamp_image_bookkeeping ─────────────────────────────────────────────────
+
+
+def test_stamp_image_bookkeeping_declares_a_text_coordinate_text_only():
+    """A spec whose turns carry no picture is stamped ``false`` / ``0``."""
+    from ard.core.quota import stamp_image_bookkeeping
+
+    spec = AnchorSpec(
+        id="text_001",
+        anchor_meta={},
+        turns=[
+            TurnSpec(turn_index=0, role="user", generation_instruction="Ask", is_final=True),
+        ],
+    )
+    assert stamp_image_bookkeeping([spec]) == [spec]
+    assert spec.anchor_meta == {"has_image": False, "image_count": 0}
+
+
+def test_stamp_image_bookkeeping_counts_the_turns_that_really_carry_a_picture():
+    """The pair is read back off the spec's own turns — no run state involved."""
+    from ard.core.quota import stamp_image_bookkeeping
+
+    spec = AnchorSpec(
+        id="image_001",
+        anchor_meta={},
+        turns=[
+            TurnSpec(
+                turn_index=0,
+                role="user",
+                generation_instruction="Ask",
+                image_path="/images/animals/a.png",
+            ),
+            TurnSpec(turn_index=1, role="assistant", generation_instruction="Answer"),
+            TurnSpec(turn_index=2, role="user", generation_instruction="Ask again", is_final=True),
+        ],
+    )
+    stamp_image_bookkeeping([spec])
+    assert spec.anchor_meta == {"has_image": True, "image_count": 1}
+
+    # Idempotent: the value is a function of the turns, so stamping again
+    # cannot change it — which is why the pipeline can stamp the whole pending
+    # set after the allocator already stamped its own groups.
+    before = dict(spec.anchor_meta)
+    stamp_image_bookkeeping([spec])
+    assert spec.anchor_meta == before

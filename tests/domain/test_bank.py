@@ -31,7 +31,15 @@ def _make_anchor(id="a", **kwargs):
         "target_answer": "answer",
         "target_model": "target",
         "input_generator_model": "input-gen",
-        "anchor_meta": {"knowledge_domain": "math", "language": "English", "capability": "qa"},
+        "anchor_meta": {
+            "knowledge_domain": "math",
+            "language": "English",
+            "capability": "qa",
+            # The bank's image-bookkeeping gate requires this pair on every
+            # record; these helpers build text-state records.
+            "has_image": False,
+            "image_count": 0,
+        },
     }
     defaults.update(kwargs)
     return GeneratedAnchor(**defaults)
@@ -54,6 +62,8 @@ def test_anchor_to_dict_format():
         "knowledge_domain": "math",
         "language": "English",
         "capability": "qa",
+        "has_image": False,
+        "image_count": 0,
     }
     assert d["teacher_id"] == "target"
 
@@ -382,6 +392,59 @@ def test_write_anchor_bank_refuses_invalid_shape(tmp_path):
     assert not path.exists()
 
 
+# ── Output gates: image bookkeeping ─────────────────────────────────────────
+#
+# WP-29: ``has_image`` / ``image_count`` are a record's own declaration of its
+# image state, and the README promises both on *every* record.  The resume path
+# once wrote a text-only finishing segment's records with both fields absent,
+# because the fields were decided by which image sources that invocation
+# happened to select.  This gate makes that class of defect a refusal at the
+# exit boundary instead of a hole a consumer finds in a published dataset.
+
+
+def test_append_anchor_rejects_a_record_without_image_bookkeeping(tmp_path, caplog):
+    """Both fields are required — a record without them is not published."""
+    path = tmp_path / "bank.jsonl"
+    anchor = _make_anchor("unbookkept", anchor_meta={"language": "English"})
+    with caplog.at_level("WARNING"):
+        outcome = append_anchor(anchor, path)
+
+    assert outcome is AppendOutcome.INVALID_IMAGE_BOOKKEEPING_SKIPPED
+    assert not path.exists(), "an unbookkept record must not reach the bank"
+    assert any("image bookkeeping gate" in record.message for record in caplog.records)
+
+
+def test_append_anchor_rejects_contradictory_image_bookkeeping(tmp_path):
+    """The two fields must agree, not merely exist."""
+    path = tmp_path / "bank.jsonl"
+    contradictory = _make_anchor("contradictory", anchor_meta={"has_image": True, "image_count": 0})
+    outcome = append_anchor(contradictory, path)
+    assert outcome is AppendOutcome.INVALID_IMAGE_BOOKKEEPING_SKIPPED
+    assert not path.exists()
+
+
+def test_append_anchor_accepts_a_consistent_image_bookkeeping_pair(tmp_path):
+    """The gate is a contract, not a burden: a consistent pair passes."""
+    path = tmp_path / "bank.jsonl"
+    image = _make_anchor("image", anchor_meta={"has_image": True, "image_count": 2})
+    assert append_anchor(image, path) is AppendOutcome.APPENDED
+    assert read_anchor_bank(path)[0]["anchor_meta"]["image_count"] == 2
+
+
+def test_write_anchor_bank_refuses_missing_image_bookkeeping(tmp_path):
+    """The bulk writer refuses the batch rather than hiding the hole."""
+    path = tmp_path / "bank.jsonl"
+    with pytest.raises(ValueError, match="has_image / image_count"):
+        write_anchor_bank(
+            [
+                _make_anchor("good"),
+                _make_anchor("bad", anchor_meta={"language": "English"}),
+            ],
+            path,
+        )
+    assert not path.exists()
+
+
 # ── Output gates: id de-duplication ─────────────────────────────────────────
 #
 # v5: the anchor id is an opaque primary key — a plan-position serial number
@@ -401,6 +464,8 @@ def test_identical_coordinates_under_different_ids_are_both_kept(tmp_path):
         "knowledge_domain": "math",
         "capability": "qa",
         "conversation_type": "single_turn",
+        "has_image": False,
+        "image_count": 0,
     }
     first = _make_anchor(format_anchor_id("c4f4aa6f", 0, 3), anchor_meta=meta)
     second = _make_anchor(format_anchor_id("c4f4aa6f", 7, 3), anchor_meta=meta)

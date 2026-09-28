@@ -46,6 +46,7 @@ from pathlib import Path
 
 import pytest
 
+from ard.core.quota import stamp_image_bookkeeping
 from ard.core.sampling import PlanIdentity
 from ard.core.types import AnchorSpec, GeneratedAnchor, TurnSpec
 from ard.domain.bank import anchor_to_dict, append_anchor, read_anchor_bank
@@ -120,7 +121,9 @@ def _identity(specs: list[AnchorSpec], *, plan_size: int = _PLAN_SIZE) -> dict:
 
 
 def _anchor_for(spec: AnchorSpec) -> GeneratedAnchor:
-    """A bank-valid anchor whose ``anchor_meta`` is exactly the spec's coordinate."""
+    """A bank-valid anchor whose ``anchor_meta`` is the spec's coordinate plus
+    the image bookkeeping the bank requires (stamped by the production rule)."""
+    stamp_image_bookkeeping([spec])
     return GeneratedAnchor(
         id=spec.id,
         messages=[{"role": "user", "content": f"question {spec.id}"}],

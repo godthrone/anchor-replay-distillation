@@ -14,6 +14,37 @@ from ard.core.types import AnchorSpec
 logger = logging.getLogger(__name__)
 
 
+def stamp_image_bookkeeping(anchor_specs: list[AnchorSpec]) -> list[AnchorSpec]:
+    """Stamp every spec with the image facts **its own turns** carry.
+
+    ``has_image`` / ``image_count`` describe a *record*, not a run: a coordinate
+    is text-state because its turns carry no picture, and image-state because
+    they do.  Deriving them from anything run-level — which image sources an
+    invocation selected, which specs it happened to route through image
+    addressing — makes the values depend on the segment that wrote the record:
+    a finishing invocation with nothing left but text anchors wrote neither
+    field, and two segments of one bank disagreed about the same coordinate.
+
+    This is the single implementation of that rule (§1.4 单一真相源): the
+    allocator calls it once its turns are filled, and ``pipeline.run`` calls it
+    for **every** spec it is about to write, whether or not any image was
+    addressed in that invocation.  Because the value is read back off the
+    turns, it can never contradict what the record actually carries.
+
+    Args:
+        anchor_specs: Specs whose ``anchor_meta`` is stamped.  Modified in
+            place.
+
+    Returns:
+        The same *anchor_specs* list.
+    """
+    for spec in anchor_specs:
+        image_count = sum(1 for turn in spec.turns if turn.image_path is not None)
+        spec.anchor_meta["has_image"] = image_count > 0
+        spec.anchor_meta["image_count"] = image_count
+    return anchor_specs
+
+
 def allocate_images(
     anchor_specs: list[AnchorSpec],
     image_pool: list[str],
@@ -31,8 +62,10 @@ def allocate_images(
     3. Walk each spec's turns in order and fill its **earliest** ``user`` turns
        — a turn that already carries an ``image_path`` is skipped and costs no
        budget — up to *max_turns_with_image* assigned images per spec
-    4. Stamp every visited spec's ``anchor_meta`` with ``has_image`` and
-       ``image_count``
+    4. Stamp every spec's ``anchor_meta`` with ``has_image`` and
+       ``image_count`` via :func:`stamp_image_bookkeeping` — the fields are read
+       back off the turns the walk just filled, so the allocator holds no second
+       opinion about them
 
     Allocation is therefore all-or-nothing per run, never "the first specs get
     images and the remainder go text-only": the pool is cycled, so it cannot run
@@ -85,10 +118,10 @@ def allocate_images(
                     break
                 turn.image_path = next(image_iter)
                 images_this_spec += 1
-        spec.anchor_meta["has_image"] = images_this_spec > 0
-        spec.anchor_meta["image_count"] = images_this_spec
         if images_this_spec > 0:
             specs_with_images += 1
+
+    stamp_image_bookkeeping(anchor_specs)
 
     if specs_with_images < len(anchor_specs):
         logger.warning(

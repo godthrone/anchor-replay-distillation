@@ -21,6 +21,7 @@ from ard.backends.api_client import (
     ChatAPIStats,
     ChatResponse,
 )
+from ard.core.quota import stamp_image_bookkeeping
 from ard.core.system_prompt import SYSTEM_PROMPT_NONE
 from ard.core.types import AnchorSpec, DataSource, TurnSpec
 from ard.domain.anchor_shape import message_shape_error
@@ -80,6 +81,10 @@ def _target_client() -> MagicMock:
 
 
 def _generate(spec: AnchorSpec, input_client: MagicMock, target_client: MagicMock):
+    # The pipeline stamps the image bookkeeping before it hands specs to the
+    # generator; these unit tests call the generator directly, so they apply the
+    # same production rule instead of hand-writing the pair into every spec.
+    stamp_image_bookkeeping([spec])
     return generate_text_anchors(
         specs=[spec],
         input_client=input_client,

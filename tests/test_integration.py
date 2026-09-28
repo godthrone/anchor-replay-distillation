@@ -172,7 +172,9 @@ def _make_spec_with_n_turns(spec_id: str, num_turns: int) -> AnchorSpec:
         )
     return AnchorSpec(
         id=spec_id,
-        anchor_meta={},
+        # The bank's image-bookkeeping gate requires the pair the README
+        # promises; these specs are text-state.
+        anchor_meta={"has_image": False, "image_count": 0},
         turns=turns,
         input_generator_id=None,
     )
@@ -632,6 +634,8 @@ class TestRoleDrivenGeneration:
             "knowledge_domain": "math",
             "capability": "qa",
             "conversation_type": "single_turn",
+            "has_image": False,
+            "image_count": 0,
         }
         anchor_id = format_anchor_id("c4f4aa6f", 0, 0)
         specs = [
@@ -837,7 +841,12 @@ def _scripted_generate_text_anchors(**kwargs: object) -> list[GeneratedAnchor]:
         target_answer="an answer long enough",
         target_model="target-model",
         input_generator_model="input-model",
-        anchor_meta={"language": "English", "knowledge_domain": "geography"},
+        anchor_meta={
+            "language": "English",
+            "knowledge_domain": "geography",
+            "has_image": False,
+            "image_count": 0,
+        },
         reasoning="the plumbing test's reasoning trace",
     )
     # Offered twice on purpose: the second offer must hit the id gate.

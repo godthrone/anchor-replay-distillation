@@ -913,3 +913,62 @@ def test_a_picture_shared_by_a_surviving_record_is_not_removed(
         for line in (output_dir / "anchor_bank.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert ids == ["a1", "p2"]
+
+
+# ── 6. the image bookkeeping belongs to the record, not to the invocation ────
+
+
+def test_a_text_only_resume_invocation_still_stamps_the_image_bookkeeping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every written record carries ``has_image`` / ``image_count`` (WP-29).
+
+    The defect: ``pipeline.run`` built ``selected_sources`` from the image
+    anchors *this invocation* had pending, and the only stamping site
+    (``_assign_images_by_domain``) sat behind ``if selected_sources and specs``.
+    A finishing invocation that had nothing left to do but the text anchor
+    ``t2`` therefore selected no source at all and wrote ``t2`` with **both
+    fields missing** — while the README contract says a text-state coordinate
+    carries ``has_image: false`` / ``image_count: 0``.  It was measured on real
+    artifacts (4/1826 and 1/200 records missing), so the bank of a segmented run
+    was not uniform: the first segment's records were stamped, the last
+    segment's were not.
+
+    This drives the real production path — ``run()``, its resume guard and its
+    image addressing — and only replaces the generator, so what is asserted is
+    the record the pipeline actually persists.
+    """
+    from ard import pipeline
+    from ard.pipeline import run
+
+    images = _image_dir(tmp_path, {"animals": 1})
+    # Plan order is the argument order here; the image anchor sits between the
+    # two text anchors, so run 1 can finish the image and abandon one text
+    # anchor, leaving run 2 with a text-only pending set.
+    specs = [_spec("t1", None), _spec("a1", "animals"), _spec("t2", None)]
+    output_dir, _spy, plan = _rig(tmp_path, monkeypatch, specs)
+    config = load_config(tmp_path / "config.toml")
+    bank = output_dir / "anchor_bank.jsonl"
+
+    # Run 1: writes t1 and a1, abandons t2 (its generation failed).
+    monkeypatch.setattr(pipeline, "generate_text_anchors", _AbandoningGeneratorSpy({"t2"}))
+    run(config, image_dir=str(images), generate_specs=plan)
+
+    # Run 2: the only pending coordinate is the text anchor t2.  No image
+    # source is selected in this invocation — exactly the state that used to
+    # leave both fields unwritten.
+    monkeypatch.setattr(pipeline, "generate_text_anchors", _GeneratorSpy())
+    run(config, image_dir=str(images), generate_specs=plan)
+
+    records = [json.loads(line) for line in bank.read_text(encoding="utf-8").splitlines()]
+    assert [record["id"] for record in records] == ["t1", "a1", "t2"]
+    for record in records:
+        meta = record["anchor_meta"]
+        assert "has_image" in meta, f"{record['id']} is missing has_image: {meta!r}"
+        assert "image_count" in meta, f"{record['id']} is missing image_count: {meta!r}"
+    by_id = {record["id"]: record["anchor_meta"] for record in records}
+    # Text-state coordinates are ``false`` / ``0``; the image-state one is
+    # ``true`` / 1 — identical whichever invocation wrote it.
+    assert (by_id["t1"]["has_image"], by_id["t1"]["image_count"]) == (False, 0)
+    assert (by_id["t2"]["has_image"], by_id["t2"]["image_count"]) == (False, 0)
+    assert (by_id["a1"]["has_image"], by_id["a1"]["image_count"]) == (True, 1)

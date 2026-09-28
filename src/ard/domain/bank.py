@@ -1,7 +1,7 @@
 """Anchor bank storage — unified format aligned with graspo.
 
 This module owns the *exit boundary* of anchor production.  Everything that
-reaches the anchor bank has passed three gates here:
+reaches the anchor bank has passed four gates here:
 
 1. **Message shape** (:func:`ard.domain.anchor_shape.message_shape_error`) —
    a conversation must start with ``user``, end with ``user`` and alternate
@@ -13,7 +13,16 @@ reaches the anchor bank has passed three gates here:
    the OPD routing key, and a value outside
    :class:`~ard.core.types.DataSource` is a record no consumer routes.  It used
    to be an unconstrained string, so a typo was persisted silently.
-3. **Id uniqueness** — one record per anchor id.  An anchor id is an opaque
+3. **Image bookkeeping** (:func:`image_bookkeeping_error`) — ``anchor_meta``
+   must carry the ``has_image`` / ``image_count`` pair the README contract
+   promises, and the two must agree.  A stamped-but-inconsistent coordinate is
+   worse than a missing field, so this gate checks the pair, not just presence.
+   It exists because the resume path once wrote records whose coordinate was
+   text-state *because the invocation that wrote them happened to address no
+   image source* — a run-level fact deciding a record-level field.  With this
+   gate, that class of defect is refused at the boundary instead of being
+   discovered months later on a published dataset.
+4. **Id uniqueness** — one record per anchor id.  An anchor id is an opaque
    *primary key*: a plan-position serial number minted by
    :func:`ard.core.sampling.format_anchor_id`, which carries no coordinate
    content at all.  Two plan positions therefore always carry different ids, and
@@ -349,12 +358,52 @@ def data_source_error(anchor: GeneratedAnchor) -> str | None:
     return None
 
 
+def image_bookkeeping_error(anchor: GeneratedAnchor) -> str | None:
+    """Validate an anchor's ``has_image`` / ``image_count`` bookkeeping.
+
+    The README contract is that *every* record declares its image state: a
+    text-state coordinate carries ``has_image: false`` / ``image_count: 0`` and
+    an image-state one carries the number of pictures its turns really hold.
+    A consumer that routes on multimodal-ness (or that counts images) reads
+    these two fields, so a record missing them is a consumer-visible hole —
+    exactly what the resume path once produced for the anchors a text-only
+    finishing invocation wrote.
+
+    The check is on the **pair**, not on presence alone: ``has_image: true``
+    with ``image_count: 0`` (or the reverse) is a contradiction no consumer can
+    resolve, so it is refused like a missing field.  Values come from the
+    coordinate's own turns (:func:`ard.core.quota.stamp_image_bookkeeping`),
+    which is what makes the pair meaningful; this gate ensures the exit
+    boundary holds whoever built the record to that contract (§2.3 边界校验即防呆).
+
+    Args:
+        anchor: The anchor about to be persisted.
+
+    Returns:
+        ``None`` when the bookkeeping is a well-formed, consistent pair,
+        otherwise a human-readable description of the violation.
+    """
+    meta = anchor.anchor_meta
+    has_image = meta.get("has_image")
+    image_count = meta.get("image_count")
+    if not isinstance(has_image, bool):
+        return f"anchor_meta.has_image is {has_image!r}, expected a bool"
+    if isinstance(image_count, bool) or not isinstance(image_count, int):
+        return f"anchor_meta.image_count is {image_count!r}, expected an int"
+    if has_image != (image_count > 0):
+        return (
+            f"anchor_meta image bookkeeping is contradictory: "
+            f"has_image={has_image!r} but image_count={image_count}"
+        )
+    return None
+
+
 def append_anchor(anchor: GeneratedAnchor, path: Path) -> AppendOutcome:
     """Validate and append a single anchor to a JSONL file (thread-safe).
 
-    The shape check, the ``data_source`` check and the id-uniqueness check
-    happen under one lock together with the write, so two threads racing on the
-    same id cannot both win.
+    The shape check, the ``data_source`` check, the image-bookkeeping check and
+    the id-uniqueness check happen under one lock together with the write, so
+    two threads racing on the same id cannot both win.
 
     Uses ``O_APPEND`` (via ``open(..., "a")``) which POSIX guarantees
     is atomic for writes up to ``PIPE_BUF`` bytes.  ``flush()`` ensures
@@ -396,6 +445,20 @@ def append_anchor(anchor: GeneratedAnchor, path: Path) -> AppendOutcome:
             path,
         )
         return AppendOutcome.INVALID_DATA_SOURCE_SKIPPED
+
+    bookkeeping_error = image_bookkeeping_error(anchor)
+    if bookkeeping_error is not None:
+        # Same reasoning as the two gates above: a record whose image state a
+        # consumer cannot read (or cannot trust) must not be published.  This
+        # is the gate that turns "the resume path forgot to stamp this field"
+        # from a months-later dataset audit into a line in the run's own log.
+        logger.warning(
+            "Anchor %s rejected by the image bookkeeping gate (%s) — not written to %s",
+            anchor.id,
+            bookkeeping_error,
+            path,
+        )
+        return AppendOutcome.INVALID_IMAGE_BOOKKEEPING_SKIPPED
 
     line = json.dumps(anchor_to_dict(anchor), ensure_ascii=False) + "\n"
     with _seen_ids_lock:
@@ -500,18 +563,20 @@ def write_anchor_bank(anchors: list[GeneratedAnchor], output_path: str | Path) -
     """Rewrite a whole JSONL bank, applying the same output gates as
     :func:`append_anchor`.
 
-    A malformed conversation or an off-vocabulary ``data_source`` is never
-    written — because this function writes the *entire* file at once, silently
-    dropping rows would hide the problem, so it raises instead.  Duplicate ids
-    are dropped (first occurrence wins) and reported.
+    A malformed conversation, an off-vocabulary ``data_source`` or a record
+    without a consistent image-bookkeeping pair is never written — because this
+    function writes the *entire* file at once, silently dropping rows would hide
+    the problem, so it raises instead.  Duplicate ids are dropped (first
+    occurrence wins) and reported.
 
     Args:
         anchors: Anchors to persist.
         output_path: Target JSONL file (parent directories are created).
 
     Raises:
-        ValueError: If any anchor violates the message-shape contract or
-            carries a ``data_source`` outside the controlled vocabulary.
+        ValueError: If any anchor violates the message-shape contract, carries
+            a ``data_source`` outside the controlled vocabulary, or declares
+            inconsistent ``has_image`` / ``image_count`` bookkeeping.
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -534,6 +599,18 @@ def write_anchor_bank(anchors: list[GeneratedAnchor], output_path: str | Path) -
         raise ValueError(
             "refusing to write a bank containing unrouteable data_source values: "
             + "; ".join(f"{anchor_id}: {reason}" for anchor_id, reason in rejected_sources)
+        )
+
+    rejected_bookkeeping = [
+        (a.id, image_bookkeeping_error(a))
+        for a in anchors
+        if image_bookkeeping_error(a) is not None
+    ]
+    if rejected_bookkeeping:
+        raise ValueError(
+            "refusing to write a bank containing records without a consistent "
+            "has_image / image_count pair: "
+            + "; ".join(f"{anchor_id}: {reason}" for anchor_id, reason in rejected_bookkeeping)
         )
 
     unique: dict[str, GeneratedAnchor] = {}

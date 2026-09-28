@@ -29,3 +29,7 @@ class AppendOutcome(Enum):
 
     INVALID_DATA_SOURCE_SKIPPED = "invalid_data_source_skipped"
     """The anchor's ``data_source`` was outside the controlled vocabulary."""
+
+    INVALID_IMAGE_BOOKKEEPING_SKIPPED = "invalid_image_bookkeeping_skipped"
+    """The anchor's ``anchor_meta`` lacked a well-formed ``has_image`` /
+    ``image_count`` pair, or the two contradicted each other."""
