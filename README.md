@@ -28,6 +28,9 @@ already-generated id byte-identical and a resumed run appends cleanly. See
 Three steps, ending in a real artifact. They call real endpoints — `--smoke` only makes the
 first artifact small.
 
+Want the plain-language picture first? Read [docs/walkthrough.md](docs/walkthrough.md) — what you
+do, and what the machine does at each step.
+
 ### 1. Install dependencies
 
 ```bash
