@@ -18,8 +18,6 @@ built-in default: the shipped file and the runtime model are one source of truth
 (§1.4).
 """
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 

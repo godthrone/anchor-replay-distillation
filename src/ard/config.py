@@ -472,7 +472,7 @@ ARDConfig.model_rebuild()
 # ── Empty string normalization ─────────────────────────────────────────────
 
 
-def _replace_empty_str_with_none(d: dict) -> dict:
+def _replace_empty_str_with_none(d: dict[str, Any]) -> dict[str, Any]:
     """Recursively replace all empty string ``""`` values with ``None``.
 
     TOML files often use ``api_key = ""`` as a placeholder for secret fields.
@@ -481,7 +481,7 @@ def _replace_empty_str_with_none(d: dict) -> dict:
     miss the empty string. This normalizer ensures that ``""`` is treated
     as "not provided" throughout the config.
     """
-    result: dict = {}
+    result: dict[str, Any] = {}
     for k, v in d.items():
         if isinstance(v, dict):
             result[k] = _replace_empty_str_with_none(v)

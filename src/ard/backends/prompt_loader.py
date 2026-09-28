@@ -18,8 +18,6 @@ There is no fallback wording: a silent default would be a second source of truth
 (§1.4).
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any
 

@@ -8,7 +8,6 @@
 # from the anchor id, not from a rejection threshold. There is therefore no
 # "too large" case in this file.
 
-from __future__ import annotations
 
 from pathlib import Path
 

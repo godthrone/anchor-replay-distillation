@@ -15,8 +15,6 @@ It is a boundary check, not a fallback (§2.3): a violation means the anchor
 must be discarded, loudly.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 from ard.core.types import AnchorSpec

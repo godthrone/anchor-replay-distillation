@@ -6,8 +6,6 @@ forwarded to the pipeline, a missing config file fails cleanly, and the
 three-tier override priority of §7.1.
 """
 
-from __future__ import annotations
-
 import logging
 import subprocess
 import sys

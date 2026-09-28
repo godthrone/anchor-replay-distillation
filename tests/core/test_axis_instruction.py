@@ -7,8 +7,6 @@ arithmetic is exact, malformed documents are rejected by name, and rendering is
 order-preserving and empty when nothing is present.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest

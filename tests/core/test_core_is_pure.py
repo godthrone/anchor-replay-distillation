@@ -10,8 +10,6 @@ The scan is AST-based, not textual, so a mention of ``read_text`` inside a
 docstring or a comment is not a violation — only real code is.
 """
 
-from __future__ import annotations
-
 import ast
 from pathlib import Path
 

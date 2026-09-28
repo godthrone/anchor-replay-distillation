@@ -15,8 +15,6 @@ hand edit that puts ``rawpy`` back at the root — fails here instead of shippin
 silently.
 """
 
-from __future__ import annotations
-
 import tomllib
 from pathlib import Path
 from typing import Any

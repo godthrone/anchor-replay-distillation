@@ -15,8 +15,6 @@ and the value — there is no built-in fallback wording, which would restore a
 second source of truth (§1.4).
 """
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 from typing import Any

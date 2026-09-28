@@ -51,8 +51,6 @@ filing it under its own name is required, instead of attaching it to the
 return values; it does **not** re-export it (§18.1 不留负债).
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import threading

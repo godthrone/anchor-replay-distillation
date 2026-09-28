@@ -5,8 +5,6 @@ modules, and ``configure_file_logging`` for persisting logs to disk in the
 output directory (called explicitly after the output directory is created).
 """
 
-from __future__ import annotations
-
 import logging
 import logging.handlers
 import sys
