@@ -13,9 +13,21 @@ The compared tuple is the one the audit pinned —
 
 * ``I`` — the input generator's first-turn system string
   (:func:`~ard.domain.text_anchor._build_user_prompt`);
+* ``U`` — the user half of that call, carrying the picture's data URI when the
+  coordinate has one;
 * ``S`` — the system-message generation request (``""`` for mode ``none``);
 * ``T`` — the spec turn count for the coordinate's ``conversation_type``;
-* ``V`` — the ``visual_domain`` leaf (``""`` for text-only).
+* ``V`` — the *resolved* picture address (``""`` for text-only).
+
+**Every axis is probed under both modalities.**  WP-26 showed why that matters:
+``_build_user_prompt`` chooses its instruction from ``image_data_url``, not from
+``modality``, so a probe that only flips the ``modality`` field while passing no
+picture never renders the image branch at all — the whole branch was untested, and
+``knowledge_domain`` was silently inert for image coordinates whose
+``system_prompt_mode`` is ``none``.  The picture therefore comes from
+:func:`domain_images <tests.conftest.domain_images>` — real, byte-distinct PNGs
+resolved by the production resolver — and an image coordinate without one is an
+error, never a silent fall back to the text branch (§2.3).
 
 A guard that cannot fail proves nothing, so the negative control removes the six
 axes' wording and asserts the guard then names **exactly** those six.
@@ -23,7 +35,7 @@ axes' wording and asserts the guard then names **exactly** those six.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -36,38 +48,80 @@ from ard.core.system_prompt import SYSTEM_PROMPT_NONE
 from ard.core.types import TurnSpec
 from ard.domain.text_anchor import _build_user_prompt
 
+if TYPE_CHECKING:
+    from tests.conftest import DomainImages
+
 #: The axes that must reach the prompt as wording (WP-S17).  Imported, not
 #: re-listed, so the guard cannot drift from the module it guards.
 WORDING_AXES = INSTRUCTION_AXES
 
+#: The two modalities every axis is probed under.  ``image`` uses the ontology's
+#: first ``visual_domain`` leaf, so the coordinate is legal in both directions.
+MODALITIES = ("text_only", "image")
 
-def _base_meta(ontology: OntologyV4) -> dict[str, Any]:
-    """One text-only coordinate: first value of every axis but ``visual_domain``."""
+
+def _base_meta(ontology: OntologyV4, modality: str = "text_only") -> dict[str, Any]:
+    """One coordinate: first value of every axis, in the requested modality.
+
+    ``visual_domain`` is set only for the image modality — the ontology declares
+    it ``{"requires_modality": "image"}``, so a text coordinate carrying a leaf
+    would not be a legal coordinate.
+    """
     meta: dict[str, Any] = {
         axis: ontology.axis_values(axis)[0]
         for axis in ontology.axis_names()
         if axis != "visual_domain"
     }
-    meta["modality"] = "text_only"
+    meta["modality"] = modality
+    if modality == "image":
+        meta["visual_domain"] = ontology.axis_values("visual_domain")[0]
     return meta
 
 
-def _input_generator_system(meta: dict[str, Any]) -> str:
-    messages = _build_user_prompt(TurnSpec(turn_index=0, role="user", is_final=True), [], meta)
+def _image_data_url(meta: dict[str, Any], domain_images: DomainImages) -> str | None:
+    """The data URI of the picture *meta* carries, or ``None`` for a text coordinate.
+
+    An image coordinate whose picture did not resolve is a fixture failure and is
+    reported as one — falling back to the text branch would make this guard pass
+    while testing nothing.
+    """
+    if meta.get("modality") != "image":
+        return None
+    url = domain_images.data_url(meta.get("visual_domain"))
+    assert url is not None, (
+        f"image coordinate {meta.get('visual_domain')!r} resolved to no picture: "
+        "the image branch would go unprobed"
+    )
+    return url
+
+
+def _input_generator_system(meta: dict[str, Any], domain_images: DomainImages) -> str:
+    """The input generator's system string for *meta* — the channel ``I``."""
+    turn = TurnSpec(turn_index=0, role="user", is_final=True)
+    messages = _build_user_prompt(
+        turn, [], meta, image_data_url=_image_data_url(meta, domain_images)
+    )
     content = messages[0]["content"]
     assert isinstance(content, str)
     return content
 
 
-def _signature(meta: dict[str, Any], turn_counts: dict[str, int]) -> tuple[str, str, int, str]:
-    """The deterministic generator-side requests a coordinate fixes (I, S, T, V)."""
+def _signature(
+    meta: dict[str, Any], turn_counts: dict[str, int], domain_images: DomainImages
+) -> tuple[Any, ...]:
+    """The deterministic generator-side requests a coordinate fixes (I, U, S, T, V)."""
     mode = meta["system_prompt_mode"]
     system_request = "" if mode == SYSTEM_PROMPT_NONE else build_system_prompt_prompt(meta, mode)
+    turn = TurnSpec(turn_index=0, role="user", is_final=True)
+    messages = _build_user_prompt(
+        turn, [], meta, image_data_url=_image_data_url(meta, domain_images)
+    )
     return (
-        _input_generator_system(meta),
+        messages[0]["content"],
+        messages[1]["content"],
         system_request,
         turn_counts[meta["conversation_type"]],
-        meta.get("visual_domain") or "",
+        domain_images.address(meta.get("visual_domain")),
     )
 
 
@@ -86,55 +140,76 @@ def _pair(
     return first, second
 
 
-def _axes_without_a_difference(ontology: OntologyV4) -> list[str]:
-    """Axes whose two values render the identical (I, S, T, V) tuple.
+def _inert_probes(ontology: OntologyV4, domain_images: DomainImages) -> list[tuple[str, str]]:
+    """``(axis, modality)`` probes whose two values render the identical tuple.
 
-    Empty means no mascot axis.  The negative control shows what a failure looks
-    like: the six wording axes reappear here, by name.
+    Empty means no mascot axis, in either modality.
     """
     turn_counts = turn_counts_by_conversation_type(ontology)
-    base = _base_meta(ontology)
-    without: list[str] = []
-    for axis in ontology.axis_names():
-        first, second = _pair(ontology, axis, base)
-        if _signature(first, turn_counts) == _signature(second, turn_counts):
-            without.append(axis)
-    return without
+    inert: list[tuple[str, str]] = []
+    for modality in MODALITIES:
+        base = _base_meta(ontology, modality)
+        for axis in ontology.axis_names():
+            first, second = _pair(ontology, axis, base)
+            if _signature(first, turn_counts, domain_images) == _signature(
+                second, turn_counts, domain_images
+            ):
+                inert.append((axis, modality))
+    return inert
 
 
-def test_every_axis_changes_the_generated_requests(ontology: OntologyV4) -> None:
-    """No axis may be a mascot: two coordinates differing only on it must differ."""
-    without = _axes_without_a_difference(ontology)
-    assert without == [], (
-        f"these axes do not change the generator-side requests, so they are inert: {without}"
+def _axes_without_a_difference(ontology: OntologyV4, domain_images: DomainImages) -> list[str]:
+    """Axis names that are inert in at least one modality, in ontology order.
+
+    The negative control shows what a failure looks like: the six wording axes
+    reappear here, by name.
+    """
+    inert = {axis for axis, _ in _inert_probes(ontology, domain_images)}
+    return [axis for axis in ontology.axis_names() if axis in inert]
+
+
+def test_every_axis_changes_the_generated_requests(
+    ontology: OntologyV4, domain_images: DomainImages
+) -> None:
+    """No axis may be a mascot: two coordinates differing only on it must differ.
+
+    The probe runs under ``text_only`` **and** ``image``; the image one renders a
+    real picture, so the image branch is genuinely exercised (WP-26's blind spot).
+    """
+    inert = _inert_probes(ontology, domain_images)
+    assert inert == [], (
+        "these (axis, modality) probes do not change the generator-side requests, "
+        f"so they are inert there: {inert}"
     )
 
 
 def test_negative_control_without_the_wording_names_exactly_the_six_axes(
-    ontology: OntologyV4, monkeypatch: pytest.MonkeyPatch
+    ontology: OntologyV4, domain_images: DomainImages, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Remove the six axes' wording: the guard must fail, naming exactly those six.
 
     This is the proof that the guard above can fail.  With
     :func:`~ard.backends.axis_instruction_loader.build_axis_requirements`
     neutralised — the pre-fix state — only the six instruction axes lose their
-    prompt difference; the other six axes still differ through I/S/T/V.
+    prompt difference; the other six axes still differ through I/U/S/T/V.
     """
     monkeypatch.setattr(
         "ard.domain.text_anchor.build_axis_requirements",
         lambda anchor_meta, directory=None: "",
     )
-    assert _axes_without_a_difference(ontology) == list(WORDING_AXES)
+    assert _axes_without_a_difference(ontology, domain_images) == list(WORDING_AXES)
 
 
 @pytest.mark.parametrize("axis", WORDING_AXES)
-def test_each_wording_axis_changes_the_prompt_text(axis: str, ontology: OntologyV4) -> None:
+def test_each_wording_axis_changes_the_prompt_text(
+    axis: str, ontology: OntologyV4, domain_images: DomainImages
+) -> None:
     """The six axes change the input-generator prompt itself, sentence by sentence."""
     base = _base_meta(ontology)
     first, second = _pair(ontology, axis, base)
     sentences = load_axis_instructions(axis)
-    first_prompt = _input_generator_system(first)
-    second_prompt = _input_generator_system(second)
+    first_prompt = _input_generator_system(first, domain_images)
+    second_prompt = _input_generator_system(second, domain_images)
     assert sentences[first[axis]] in first_prompt
     assert sentences[second[axis]] in second_prompt
     # Each prompt carries only its own value's sentence, never the other's.
@@ -143,7 +218,7 @@ def test_each_wording_axis_changes_the_prompt_text(axis: str, ontology: Ontology
 
 
 def test_legacy_coordinate_sentence_is_still_rendered_byte_for_byte(
-    ontology: OntologyV4,
+    ontology: OntologyV4, domain_images: DomainImages
 ) -> None:
     """WP-S17 adds the requirement clause; it does not rewrite the legacy words."""
     meta = _base_meta(ontology)
@@ -153,4 +228,4 @@ def test_legacy_coordinate_sentence_is_still_rendered_byte_for_byte(
         f"The user is asking for a {meta['capability']} task. "
         f"The conversation style is {meta['conversation_type']}."
     )
-    assert expected in _input_generator_system(meta)
+    assert expected in _input_generator_system(meta, domain_images)

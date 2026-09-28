@@ -195,7 +195,8 @@ id      = f"{run_key}-c{轮次:05d}p{轮内序号:05d}"
 `configs/prompts/system_prompt/<system_prompt_mode>.md`。
 
 **该位置的效力**：`prompt_wording_location_recommendation.status` 逐字为
-"recommendation only; no such file was created in this round (ontology-only round)"，即**推荐，非硬性要求**；
+"recommendation, implemented: one file per system_prompt_mode value exists at the target and is read by the production loader"，
+即**推荐，非硬性要求**（该字段是叙述该位置落地状态的说明，不是加载器读取的契约）；
 有约束力的是"坐标与措辞分离"本身。本工程按该推荐位置把措辞落地为数据文件，以下为**已实施的事实**。
 
 **数据位置**：`configs/prompts/system_prompt/` 下 5 个文件，文件名 = 本体轴 `system_prompt_mode` 的取值：

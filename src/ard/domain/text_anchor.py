@@ -263,6 +263,13 @@ def _build_user_prompt(
     # Build instruction — when an image is provided, focus on the image content
     # Image encoding is done by the caller (_generate_one_anchor) before the
     # API try/except block so that encoding failures propagate as fatal errors.
+    #
+    # Both branches carry ``domain``.  The ontology declares
+    # ``axes.knowledge_domain.applies_to = "all_samples"``, so the axis must reach
+    # the request for image coordinates too.  It cannot ride on the system prompt
+    # alone: ``system_prompt_mode = none`` is the absence case and
+    # ``_generate_system_message`` returns ``None`` for it, closing that channel
+    # (only ``visual_domain`` is declared image-only, and it is not this axis).
     if image_data_url is not None:
         if turn.generation_instruction:
             instruction = turn.generation_instruction
@@ -270,7 +277,7 @@ def _build_user_prompt(
             instruction = (
                 f"Look at the image and generate a "
                 f"{'follow-up ' if messages else ''}realistic user message in {language} "
-                f"about what you see in the image. "
+                f"about what you see in the image, on the topic of {domain}. "
                 f"The user is asking for a {capability} task. "
                 f"The conversation style is {conv_type}."
             )

@@ -1301,7 +1301,7 @@
     "prompt_wording_location_recommendation": {
       "target": "configs/prompts/system_prompt/<system_prompt_mode>.md",
       "shape": "one file per system_prompt_mode value, keyed by the axis value, holding the generator-facing wording",
-      "status": "recommendation only; no such file was created in this round (ontology-only round)"
+      "status": "recommendation, implemented: one file per system_prompt_mode value exists at the target and is read by the production loader"
     },
     "rationale": "The ontology declares the coordinate; wording is a separate, localisable, iterable artifact. Keeping the two in one file is what made the old ontology carry prompt text."
   }

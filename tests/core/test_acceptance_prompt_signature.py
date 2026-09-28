@@ -1,16 +1,21 @@
 # test_acceptance_prompt_signature.py — Guard the honesty of the structure readout.
 # Responsibility: pin the two WP-S18 readings against the code they describe:
 #   * `acceptance.PROMPT_SIGNATURE_AXES` is exactly the anchor_meta fields the
-#     generator-side assembly reads (no mascot, and no unlisted field matters);
+#     generator-side assembly reads (no mascot, and no unlisted field matters) —
+#     probed in **both** modalities, with a real picture, so the image branch is
+#     rendered rather than merely named (WP-26's blind spot);
 #   * `prompt_signature_distinct` / `effective_projection_distinct` count
 #     *distinct values*, not plan entries (the negative control behind WP-S18 ④);
 #   * the real plan lands on the 935 / 891 WP-S14's audit measured;
 #   * the noise band's repeat groups are prompt signatures, so a field no
-#     consumer reads cannot split one cell.
+#     consumer reads cannot split one cell;
+#   * two coordinates share a signature **iff** their rendered requests are
+#     byte-identical, over the materialised legal block set (WP-27).
 
 from __future__ import annotations
 
-from typing import Any
+import json
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -24,67 +29,239 @@ from ard.core.system_prompt import SYSTEM_PROMPT_NONE
 from ard.core.types import AnchorGenerationConfig, TurnSpec
 from ard.domain.text_anchor import _build_user_prompt
 
+if TYPE_CHECKING:
+    from tests.conftest import DomainImages
+
 #: The anchor_meta fields that are plan bookkeeping, not prompt input.  WP-S18
 #: claims they never reach the generated request; this file renders both ways
 #: to keep that claim honest.
 NON_PROMPT_FIELDS = ("modality", "has_image", "image_count")
+
+#: The modalities a coordinate is rendered under.  Both are probed: WP-26 found
+#: that ``_build_user_prompt`` chooses its instruction from ``image_data_url``
+#: rather than from ``modality``, so probing only the text branch left the whole
+#: image branch — and the ``knowledge_domain`` axis inside it — unrendered.
+MODALITIES = (sampling.MODALITY_TEXT, sampling.MODALITY_IMAGE)
 
 
 def _vector_set(name: str, rows: EmbeddingMatrix) -> ruler.VectorSet:
     return ruler.VectorSet(name=name, vectors=rows)
 
 
-def _meta(ontology: OntologyV4, modality: str = "text_only") -> dict[str, Any]:
-    """One full coordinate: first value of every axis, in ontology order."""
-    meta: dict[str, Any] = {axis: ontology.axis_values(axis)[0] for axis in ontology.axis_names()}
+def _meta(ontology: OntologyV4, modality: str = sampling.MODALITY_TEXT) -> dict[str, Any]:
+    """One coordinate: first value of every axis, in the requested modality.
+
+    ``visual_domain`` is carried only by an image coordinate — the ontology makes
+    it conditional on ``modality == "image"`` and
+    :meth:`ard.core.sampling.Coordinate.as_dict` omits the key from a text-only
+    coordinate, so a text coordinate naming a leaf is not a legal coordinate.
+    """
+    meta: dict[str, Any] = {
+        axis: ontology.axis_values(axis)[0]
+        for axis in ontology.axis_names()
+        if modality == sampling.MODALITY_IMAGE or axis != "visual_domain"
+    }
     meta["modality"] = modality
     return meta
 
 
-def _rendered_request(meta: dict[str, Any], turn_counts: dict[str, int]) -> tuple[Any, ...]:
+def _image_data_url(meta: dict[str, Any], domain_images: DomainImages) -> str | None:
+    """The data URI of the picture *meta* carries, or ``None`` for a text coordinate.
+
+    ``visual_domain`` is the image-selecting free axis, so its presence decides the
+    branch here.  A named domain whose picture did not resolve is reported as a
+    fixture failure — silently rendering the text branch would make every assertion
+    below pass while testing nothing.
+    """
+    visual_domain = meta.get("visual_domain")
+    if visual_domain is None:
+        return None
+    url = domain_images.data_url(visual_domain)
+    assert url is not None, (
+        f"no fixture picture for {visual_domain!r}: the image branch would go unrendered"
+    )
+    return url
+
+
+def _rendered_request(
+    meta: dict[str, Any], turn_counts: dict[str, int], domain_images: DomainImages
+) -> tuple[Any, ...]:
     """The generator-side request tuple WP-S14 used as its signature witness.
 
-    ``I`` = the input generator's system string; ``S`` = the system-message
-    generation request (``""`` for mode ``none``); ``T`` = the spec turn count;
-    ``V`` = the image-selecting ``visual_domain`` leaf (``""`` when absent).
+    ``I`` = the input generator's system string; ``U`` = the user half of that call,
+    carrying the picture's data URI when the coordinate has one; ``S`` = the
+    system-message generation request (``""`` for mode ``none``); ``T`` = the spec
+    turn count; ``V`` = the address of the picture the coordinate **resolved to**
+    (``""`` when absent) — the resolved picture, not the raw leaf name, so ``V``
+    stands for what the generator actually receives.
     """
-    messages = _build_user_prompt(TurnSpec(turn_index=0, role="user", is_final=True), [], meta)
-    first = messages[0]["content"]
-    assert isinstance(first, str)
+    turn = TurnSpec(turn_index=0, role="user", is_final=True)
+    messages = _build_user_prompt(
+        turn, [], meta, image_data_url=_image_data_url(meta, domain_images)
+    )
     mode = meta["system_prompt_mode"]
     mode_request = "" if mode == SYSTEM_PROMPT_NONE else build_system_prompt_prompt(meta, mode)
     return (
-        first,
+        messages[0]["content"],
+        messages[1]["content"],
         mode_request,
         str(turn_counts[meta["conversation_type"]]),
-        meta.get("visual_domain") or "",
+        domain_images.address(meta.get("visual_domain")),
     )
 
 
+def _probe_pair(ontology: OntologyV4, base: dict[str, Any], axis: str) -> dict[str, Any]:
+    """*base* with *axis* moved to a different value, legal in the same modality.
+
+    ``visual_domain`` is conditional on the image modality, so its second value can
+    only exist on an image coordinate; the contrast moves the modality with it and
+    stays legal (§2.3).  Every other axis keeps *base*'s modality.
+    """
+    values = ontology.axis_values(axis)
+    other = {**base, axis: values[-1]}
+    if axis == "visual_domain":
+        other["modality"] = sampling.MODALITY_IMAGE
+    return other
+
+
 def test_prompt_signature_axes_are_exactly_the_fields_the_renderers_read(
-    ontology: OntologyV4,
+    ontology: OntologyV4, domain_images: DomainImages
 ) -> None:
-    """Every listed axis changes the render; no unlisted field does."""
+    """Every listed axis changes the render; no unlisted field does.
+
+    Probed under **both** modalities.  The image probe renders a real picture
+    (byte-distinct per domain, resolved by the production resolver), which is what
+    covers the image branch at all.
+    """
     turn_counts = turn_counts_by_conversation_type(ontology)
-    base = _meta(ontology)
-    baseline = _rendered_request(base, turn_counts)
 
-    for axis in acceptance.PROMPT_SIGNATURE_AXES:
-        values = ontology.axis_values(axis)
-        assert len(values) >= 2, f"{axis} cannot be probed with {len(values)} value(s)"
-        other = {**base, axis: values[1]}
-        assert other != base, f"{axis} is listed but changing it changed nothing"
-        assert _rendered_request(other, turn_counts) != baseline, (
-            f"{axis} is in PROMPT_SIGNATURE_AXES but does not change the generator-side "
-            "request — a mascot axis must not be counted as prompt-effective"
-        )
+    for modality in MODALITIES:
+        base = _meta(ontology, modality)
+        baseline = _rendered_request(base, turn_counts, domain_images)
 
-    for field in NON_PROMPT_FIELDS:
-        stamped = {**base, field: "image" if field == "modality" else 1}
-        assert _rendered_request(stamped, turn_counts) == baseline, (
-            f"{field} is not in PROMPT_SIGNATURE_AXES but changes the generator-side "
-            "request: the signature is missing a field the assembly consumes"
+        for axis in acceptance.PROMPT_SIGNATURE_AXES:
+            values = ontology.axis_values(axis)
+            assert len(values) >= 2, f"{axis} cannot be probed with {len(values)} value(s)"
+            other = _probe_pair(ontology, base, axis)
+            assert other != base, f"{axis} is listed but changing it changed nothing"
+            assert _rendered_request(other, turn_counts, domain_images) != baseline, (
+                f"{axis} is in PROMPT_SIGNATURE_AXES but does not change the generator-side "
+                f"request under modality {modality!r} — a mascot axis must not be counted "
+                "as prompt-effective"
+            )
+
+        for field in NON_PROMPT_FIELDS:
+            stamped = {**base, field: "image" if field == "modality" else 1}
+            assert _rendered_request(stamped, turn_counts, domain_images) == baseline, (
+                f"{field} is not in PROMPT_SIGNATURE_AXES but changes the generator-side "
+                "request: the signature is missing a field the assembly consumes"
+            )
+
+
+def _legal_block_coordinates(ontology: OntologyV4) -> list[dict[str, Any]]:
+    """Every legal block, materialised, with the free axes decorrelated.
+
+    One base coordinate per ``(modality, legal restricted block)`` coverage unit,
+    plus — for each free axis the modality actually carries — the same coordinate
+    with that axis moved to a *different* value.  The result contains, inside every
+    legal block, a contrast on every free axis, so an axis that is inert in any one
+    region shows up as a pair whose signatures differ while its requests are
+    byte-identical.
+
+    ``visual_domain`` is swept only on image coordinates: the ontology makes it
+    conditional on the image modality, and only image-capable capabilities form
+    legal image blocks (R5), so it has no text-side contrast to move.
+
+    Enumerating the whole free-axis product (≈ 5·10⁷ coordinates) is not feasible;
+    this set is exhaustive over the blocks and one-contrast-per-axis inside each.
+    """
+    coordinates: list[dict[str, Any]] = []
+    for modality, blocks in (
+        (sampling.MODALITY_TEXT, constraints.enumerate_legal_blocks(ontology)),
+        (
+            sampling.MODALITY_IMAGE,
+            constraints.enumerate_legal_blocks(ontology, image_capable_only=True),
+        ),
+    ):
+        swept = constraints.FREE_AXES
+        if modality == sampling.MODALITY_IMAGE:
+            swept = (*constraints.FREE_AXES, "visual_domain")
+        for block in blocks:
+            base = {**_meta(ontology, modality), **block.as_dict()}
+            coordinates.append(base)
+            for axis in swept:
+                coordinates.append({**base, axis: ontology.axis_values(axis)[-1]})
+    return coordinates
+
+
+def test_shared_prompt_signature_iff_byte_identical_request(
+    ontology: OntologyV4, domain_images: DomainImages
+) -> None:
+    """★ Two coordinates share a prompt signature **iff** their requests are identical.
+
+    ``PROMPT_SIGNATURE_AXES`` names the fields the assembly "actually reads", and
+    ``PROMPT_SIGNATURE_DEFINITION`` promises the signature is shared exactly when the
+    generator-side request is the same.  This pins the second direction, the one that
+    can fail: coordinates equal on the signature agree on every axis the renderer
+    reads, so equal bytes ⇒ equal signature is the direction an inert axis breaks —
+    it makes two byte-identical requests carry two different signatures, splitting
+    the noise band's repeat groups.
+
+    Method: materialise the legal block set (:func:`_legal_block_coordinates`),
+    render each coordinate once, and compare the two partitions of the same index
+    set — ``{prompt_signature}`` and ``{rendered request bytes}``.  The invariant
+    holds iff the partitions are equal.
+    """
+    turn_counts = turn_counts_by_conversation_type(ontology)
+    coordinates = _legal_block_coordinates(ontology)
+
+    by_signature: dict[tuple[Any, ...], list[int]] = {}
+    by_bytes: dict[str, list[int]] = {}
+    signature_of: dict[int, tuple[Any, ...]] = {}
+    for index, meta in enumerate(coordinates):
+        signature = acceptance.prompt_signature(meta)
+        wire = json.dumps(_rendered_request(meta, turn_counts, domain_images), ensure_ascii=False)
+        by_signature.setdefault(signature, []).append(index)
+        by_bytes.setdefault(wire, []).append(index)
+        signature_of[index] = signature
+
+    # The two partitions are equal iff the invariant holds.  On failure, name the
+    # first few conflicting groups (an inert axis in a wide region conflicts in
+    # hundreds of groups; listing them all would bury the report).
+    signature_partition = {frozenset(group) for group in by_signature.values()}
+    byte_partition = {frozenset(group) for group in by_bytes.values()}
+
+    n_conflicting = 0
+    offenders: list[str] = []
+    for group in by_bytes.values():
+        signatures = {signature_of[index] for index in group}
+        if len(signatures) <= 1:
+            continue
+        n_conflicting += 1
+        if len(offenders) >= 3:
+            continue
+        first, second = sorted(group)[:2]
+        differing = [
+            axis
+            for axis in acceptance.PROMPT_SIGNATURE_AXES
+            if coordinates[first].get(axis) != coordinates[second].get(axis)
+        ]
+        offenders.append(
+            f"{len(group)} coordinates render identically but hold {len(signatures)} "
+            f"signatures; {first} vs {second} differ only on {differing} "
+            f"(modality {coordinates[first].get('modality')!r})"
         )
+    assert signature_partition == byte_partition, (
+        "prompt signature and rendered request disagree over the legal block set: "
+        f"{n_conflicting} rendered-request group(s) hold more than one signature — "
+        + "; ".join(offenders)
+    )
+
+    # Non-vacuity: the swept set is large, and every coordinate in it holds a
+    # distinct signature — so the two partitions can only coincide because the
+    # render really is a function of the signature, not because the set collapsed.
+    assert len(coordinates) > 10_000
+    assert len(by_signature) == len(coordinates)
 
 
 def test_prompt_signature_axes_cover_every_ontology_axis(ontology: OntologyV4) -> None:
