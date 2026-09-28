@@ -7,6 +7,12 @@ Thanks for your interest in contributing!
 ```bash
 git clone https://github.com/godthrone/anchor-replay-distillation.git
 cd anchor-replay-distillation
+# Keep uv's managed Python inside this checkout.  `.venv/bin/python` points into
+# uv's managed-Python directory, and an interpreter installed on a volatile disk
+# (a `/tmp` path, wiped by a reboot or a WSL restart) leaves the environment
+# broken.  uv has no settings-file key for that directory — the environment
+# variable below is the only knob — so export it before any `uv` command.
+export UV_PYTHON_INSTALL_DIR="$PWD/.local/uv-python"
 uv sync --extra dev
 ```
 

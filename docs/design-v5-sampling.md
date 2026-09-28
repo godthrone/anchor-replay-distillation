@@ -136,7 +136,7 @@ plan(seed, N) = [coordinate(i) for i in range(N)]
 3. [x] 删本体手写计数块（`counts` / `derived_counts` / `reachability`），运行时穷举为唯一来源。
 4. [x] 本体计数不再写死期望值；改数本体后"跑的时候不报错"。
 5. [x] `docs/` 与 README 的手抄计数表改成"命令 + 输出"，不手抄数字。
-6. [x] 删 `tests/test_doc_line_references.py`（它自我声明抓不到行号漂移），文档改符号引用。
+6. [x] 按裁定删掉那个"盯行号"的守卫测试（它自我声明抓不到行号漂移），文档改符号引用。
 7. [x] 测试从写死 1826/935/891/209/21 改为对任意 N 的不变量测试 + 负控。
 8. [x] 验收读数从"等于 1826"改为按本 run 的 N 与轮分解判定（smoke 不再误报 MISMATCH）。
 9. [x] 本体指纹沿革表删除；本体哈希进 `manifest.json` / `plan_identity`，身份自动派生，用户零登记。

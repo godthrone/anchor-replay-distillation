@@ -1079,16 +1079,20 @@ def _declare_images(
     # for, in canonical order.  A record whose round is not derivable (a
     # hand-written or legacy record) is read as round 0 rather than dropped: the
     # readout describes the bank, so a record must never vanish from it.
-    held: dict[tuple[int, str], StringList] = {}
+    held: dict[tuple[int, str], int] = {}
     for record in records:
         meta = record.get("anchor_meta")
         domain = meta.get("visual_domain") if isinstance(meta, dict) else None
         if not isinstance(domain, str):
             continue
-        cycle = cycle_of.get(record.get("id"))
-        held.setdefault((cycle if isinstance(cycle, int) else 0, domain), []).append(
-            record.get("id")
-        )
+        # A bank record's ``id`` is a JSON value, so it is narrowed before it
+        # indexes the plan's ``str`` keys.  The count is unconditional: the
+        # readout describes the bank, so a record with a valid domain is counted
+        # even when its id is not a string (it is then read as round 0).
+        anchor_id = record.get("id")
+        cycle = cycle_of.get(anchor_id) if isinstance(anchor_id, str) else None
+        key = (cycle if isinstance(cycle, int) else 0, domain)
+        held[key] = held.get(key, 0) + 1
 
     # Scanned once per domain, not once per round: the candidates of a domain do
     # not depend on the round (only the pick does).
@@ -1105,11 +1109,11 @@ def _declare_images(
         domain for domain, candidates in candidates_by_domain.items() if not candidates and pool
     }
     fallback_anchors = sum(
-        len(anchor_ids) for (_, domain), anchor_ids in held.items() if domain in fallback_domains
+        count for (_, domain), count in held.items() if domain in fallback_domains
     )
 
     resolved_images: list[JsonObject] = []
-    for (cycle, domain), _anchor_ids in sorted(held.items()):
+    for cycle, domain in sorted(held):
         candidates = candidates_by_domain[domain]
         if candidates:
             chosen = select_domain_image(candidates, domain, seed, cycle=cycle)
