@@ -40,7 +40,7 @@ _PLAN_SIZE = 3
 
 
 def _plan() -> list[AnchorSpec]:
-    """A small deterministic plan; distinct coordinates keep the noise band empty."""
+    """A small deterministic plan with distinct coordinates."""
     return [
         AnchorSpec(
             id=f"plumbing-{index}",
@@ -278,10 +278,9 @@ def test_a_pre_removal_coverage_block_still_loads_with_one_warning(
 ) -> None:
     """An old override / snapshot must not refuse the run — it warns instead.
 
-    The embedding ruler's keys are gone, but ``ARDConfig`` forbids extras (§2.3)
-    and a run's own ``config.toml`` snapshot invites reuse as ``--config``, so a
-    leftover ``[coverage.embedding]`` has to be dropped loudly (§3.2) instead of
-    rejecting the load.
+    ``target_set_path`` and ``[coverage.embedding]`` are gone, but ``ARDConfig``
+    forbids extras (§2.3) and a run's own ``config.toml`` snapshot invites reuse
+    as ``--config``, so exactly those two leftovers are dropped loudly (§3.2).
     """
     legacy = tmp_path / "legacy.toml"
     _write_config(
@@ -309,13 +308,33 @@ def test_a_pre_removal_coverage_block_still_loads_with_one_warning(
     assert "embedding" in dropped[0]
     assert "target_set_path" in dropped[0]
 
-    # A config with no leftover keys loads with no coverage warning at all.
-    caplog.clear()
+
+def test_a_coverage_section_without_leftovers_warns_nothing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Only the two removed keys are announced; a clean table says nothing."""
     clean = tmp_path / "clean.toml"
     _write_config(clean, tmp_path / "out-clean", "[coverage]\nenabled = false\n")
+
     with caplog.at_level(logging.WARNING):
-        load_config(clean)
+        config = load_config(clean)
+
+    assert config.coverage.enabled is False
     assert not [r for r in caplog.records if "coverage" in r.getMessage()], caplog.records
+
+
+def test_a_misspelled_coverage_key_is_refused_by_extra_forbid(tmp_path: Path) -> None:
+    """The exemption covers the removed keys only — a typo still fails the boundary.
+
+    Dropping every unknown ``[coverage]`` key would accept ``enabeld = true`` as an
+    "embedding ruler leftover" and run with a setting the operator never wrote;
+    ``extra="forbid"`` must name it instead (§2.3 边界校验即防呆).
+    """
+    typo = tmp_path / "typo.toml"
+    _write_config(typo, tmp_path / "out-typo", "[coverage]\nenabeld = true\n")
+
+    with pytest.raises(ValueError, match="enabeld"):
+        load_config(typo)
 
 
 # ── §7.1 field mirror ───────────────────────────────────────────────────────

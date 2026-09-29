@@ -401,26 +401,29 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 
 # ── Removed-feature compatibility (§3.2 透明退路) ──────────────────────────
 
-#: The ``[coverage]`` keys this build still declares.  Anything else under that
-#: table is a leftover from the embedding ruler removed in v5.
-_COVERAGE_KNOWN_KEYS = frozenset({"enabled"})
+#: The ``[coverage]`` keys that were **removed** with the embedding ruler.  Only
+#: these are exempted from ``extra="forbid"``; every other unknown key under that
+#: table (a misspelling, say) is left for pydantic to refuse (§2.3).
+_COVERAGE_REMOVED_KEYS = frozenset({"target_set_path", "embedding"})
 
 
 def _drop_removed_coverage_keys(merged: dict[str, Any]) -> None:
-    """Drop ``[coverage]`` keys this build no longer declares, with a WARNING.
+    """Drop the ``[coverage]`` keys removed with the embedding ruler, with a WARNING.
 
-    The embedding ruler (``target_set_path`` and the whole
-    ``[coverage.embedding]`` table) is gone, but a run's own
-    ``<output_dir>/config.toml`` snapshot is explicitly offered for reuse as
-    ``--config``, and any unknown key is refused by ``extra="forbid"`` (§2.3).
-    Dropping the leftovers keeps every existing base config, override and
-    snapshot loadable — and says so out loud rather than silently ignoring them
+    ``target_set_path`` and the whole ``[coverage.embedding]`` table are gone, but
+    a run's own ``<output_dir>/config.toml`` snapshot is explicitly offered for
+    reuse as ``--config``, so those two leftovers keep loading and are announced
     (§3.2): their feature no longer exists, which the operator must know.
+
+    Nothing else is exempted.  A key that was never removed — a typo such as
+    ``enabeld``, or a setting this build has not been taught — is left in the
+    merged dict and refused by ``extra="forbid"``, naming the field: silently
+    dropping it would accept an invalid config at the boundary (§2.3 边界校验即防呆).
     """
     coverage = merged.get("coverage")
     if not isinstance(coverage, dict):
         return
-    removed = sorted(key for key in coverage if key not in _COVERAGE_KNOWN_KEYS)
+    removed = sorted(key for key in coverage if key in _COVERAGE_REMOVED_KEYS)
     if not removed:
         return
     for key in removed:

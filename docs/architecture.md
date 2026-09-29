@@ -457,7 +457,7 @@ flowchart TD
 |---|---|
 | 库比计划少一条计划坐标 | 读数仍描述计划，但被如实改为 `within_rule: false`，并在 warnings 里**列出缺失坐标**（`ard.pipeline._missing_plan_coordinates` / `_missing_coordinates_warning`；一条计划坐标没落库时，计划再合规也不算"产物合规"） |
 | `[coverage] enabled = false` | 整个相位跳过：不写 `results/`，manifest 里也没有 `acceptance` 指针 |
-| 旧配置残留 `[coverage]` 子键（`target_set_path` / `[coverage.embedding]`） | 加载时**丢弃并发一条 WARNING**（`ard.config._drop_removed_coverage_keys`），不静默、不拒绝——旧 override 仍可跑 |
+| 旧配置残留 `[coverage]` 子键（`target_set_path` / `[coverage.embedding]`） | 加载时**丢弃并发一条 WARNING**（`ard.config._drop_removed_coverage_keys`），不静默、不拒绝——旧 override 仍可跑。豁免**仅限这两个已移除的键**：其余未知键（拼写错误如 `enabeld`、或本 build 不认识的设置）仍由 `extra="forbid"` **拒绝并点名该键**（§2.3 边界校验即防呆） |
 
 **产物字段**：
 
