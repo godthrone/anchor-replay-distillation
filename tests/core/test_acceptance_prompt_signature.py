@@ -301,7 +301,7 @@ def test_distinct_counts_fall_when_one_prompt_axis_is_shared(ontology: OntologyV
     assert readout.effective_projection_distinct.text_only == 1
 
 
-def test_the_real_plan_lands_on_the_s14_numbers(ontology: OntologyV4) -> None:
+def test_the_real_plan_lands_on_the_enumerated_block_counts(ontology: OntologyV4) -> None:
     """Regression pin: the real plan's 935 / 891 block counts."""
     plan = sample_anchors(ontology, AnchorGenerationConfig(seed=42))
     readout = acceptance.structure_readout([spec.anchor_meta for spec in plan], ontology=ontology)
