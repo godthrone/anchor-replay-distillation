@@ -191,7 +191,7 @@ class DiversityDeclaration(BaseModel):
 
     A number called "distinct" is meaningless without the tuple it is distinct
     over, so the readout carries the axes, the join rule and the population it
-    was counted on (``docs/algorithm.md`` §8).
+    was counted on (``docs/algorithm.md`` §6).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -704,7 +704,7 @@ def render_markdown(report: AcceptanceReport) -> str:
         "these two counts say how many of them are different specifications. "
         "`MISMATCH` above means a planned cell does **not** produce its own "
         "prompt, so the block count must not be read as effective diversity "
-        "(`docs/algorithm.md` §8).",
+        "(`docs/algorithm.md` §6).",
         "",
     ]
     lines += ["## Warnings", ""]
