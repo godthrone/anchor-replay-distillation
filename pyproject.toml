@@ -20,9 +20,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-hf = [
-  "transformers>=4.53.0",
-]
 # RAW camera formats (.cr2/.nef/.arw/.dng, ...) only.  The rawpy wheel bundles
 # LibRaw (LGPL-2.1 / CDDL-1.0), so it is opt-in rather than a default dependency.
 raw = [
