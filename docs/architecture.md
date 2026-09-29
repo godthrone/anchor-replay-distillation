@@ -140,6 +140,14 @@ flowchart LR
 
 - `run.sh` 以 `--network=host` 启动容器，只读挂载 `configs/`、`ontology/`、`examples/`、`.local/`，
   可写挂载 `outputs/`。
+- `--image-dir` 按位置分两种处理：路径在检出树内时原样以相对路径透传（相应目录已挂在 `/app` 下）；
+  在树外时先转成绝对路径，再以只读方式挂到容器 `/data/images`，并把该参数改写为 `/data/images`。
+  镜像名默认 `ard:<git describe --tags --abbrev=0>`（无标签时 `1.0.0`），`ARD_IMAGE` 可换名；
+  `ARD_IMAGE_DIR` 可改挂载源。首次运行时若镜像不存在，`run.sh` 以 `IMAGE_NAME` 调用
+  `docker/build.sh` 就地构建——构建命令只存在于 `docker/build.sh` 一处。项目**不发布 ARD 镜像**，
+  `run.sh` 因此从不 `docker pull`；但 `docker build` 本身在基础镜像 `python:3.11.15-slim` 未被本机
+  缓存时仍需从容器 registry 拉取它（§14.3 的固定 patch 基础镜像），故构建的前置条件是
+  PyPI 可达 **且** 该基础镜像可用。
 - 容器入口是 `python -m ard`（`docker/Dockerfile` 的 `ENTRYPOINT`），即 `ard.__main__.main` →
   `ard.cli.main`。
 - CLI 参数只有 `--config`（必需）、`--override`、`--image-dir`、`--smoke`。图片是否转码由

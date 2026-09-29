@@ -7,9 +7,10 @@ results land, and the questions that come next. For the exact construction rule 
 [docs/measurement.md](measurement.md); for the module boundaries behind these steps see
 [docs/architecture.md](architecture.md) §2.
 
-**What you have to do is three steps, and they live in exactly one place** — the
-[Quick Start](../README.md#quick-start) section of `README.md` (install, fill in credentials, run
-one command). This page never repeats them.
+**What you have to do lives in exactly one place** — the
+[Quick Start](../README.md#quick-start) section of `README.md` (copy the credentials template and
+fill it in, then run one command; Docker is the only prerequisite for the default path). This page
+never repeats them.
 
 A few words used below:
 
