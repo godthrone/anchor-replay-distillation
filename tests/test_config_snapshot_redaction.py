@@ -71,7 +71,7 @@ NestedSection: TypeAlias = tuple[str, JsonObject]
 def _toml_dump(data: dict, prefix: str = "") -> str:
     """Minimal nested-dict TOML writer (str/int/float/bool/list leaves).
 
-    Supports nested sections (``[coverage.embedding]``): a table's own leaves are
+    Supports nested sections (``[<table>.<subtable>]``): a table's own leaves are
     emitted before its sub-tables, which is what TOML requires.
     """
     lines: list[str] = []

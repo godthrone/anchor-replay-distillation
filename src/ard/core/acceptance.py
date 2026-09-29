@@ -1,12 +1,17 @@
-"""Acceptance readouts for one ARD run: structure counts and metric readouts.
+"""Acceptance readout for one ARD run: the structure readout.
 
 Responsibility: assemble the acceptance report of a run — the **structure
-readout** (what the plan covers, versus what this run's own ``N`` and round
-decomposition expect) and the **metric readout** (``q95`` / ``q50`` / ``q90`` /
-``r_max`` / ``Extent(ε)`` and the ε sensitivity band, measured with
-:mod:`ard.core.coverage`).  Pure computation: numpy + pydantic only — this module
-touches no file, no network, no endpoint and no other ``ard`` module beyond the
-two pure ``core`` modules it reads its口径 from.
+readout**: what the plan covers, next to what this run's own ``N`` and round
+decomposition expect.  Pure computation: pydantic only — this module touches no
+file, no network, no endpoint, and no other ``ard`` module beyond the pure
+``core`` modules it reads its 口径 from.
+
+The embedding-side ruler (``q95`` / ``q50`` / ``q90`` / ``r_max`` /
+``Extent(ε)``, the ε sensitivity band, the noise band and the target set) has
+been removed: measuring a run against an embedder cost an endpoint, a key and a
+vector store, and the structure readout answers the question this project
+actually asks — *did the plan cover what the construction rule says it must?* —
+with zero model calls and zero numpy.
 
 Two rules are absolute here:
 
@@ -15,29 +20,18 @@ Two rules are absolute here:
   :func:`~ard.core.sampling.plan_rounds` / ``axis_values``) — no rule count is
   written down in this module, so an ontology change or a larger ``N`` cannot
   leave a stale expectation behind;
-* an input that cannot be measured (an anchor record without a final user turn,
-  a run whose bank is empty, a target set that is too small to have an intrinsic
-  scale) is refused with :class:`AcceptanceError` instead of yielding a
-  meaningless number (§2.3 边界校验即防呆).
-
-The metric readout never invents its own maths: distances, quantiles, Extent and
-the ε band all come from :mod:`ard.core.coverage`.  What this module adds is the
-**space declaration** (which field of which artifact was embedded, ``|A|``,
-``|T|``, and the embedder identity — model and dimension only, never an endpoint
-or a key), the noise-band assembly, and the report rendering.
-
-The declared anchor field is the final user turn's **text parts only**
-(:data:`ANCHOR_TEXT_FIELD`): an image-modality anchor participates through the
-text of its request, and its image pixels never enter the metric space.
+* an input that cannot be read (an unusable count, a plan entry that is not an
+  ``axis -> value`` mapping) is refused with :class:`AcceptanceError` instead of
+  yielding a meaningless number (§2.3 边界校验即防呆).
 
 Two readings exist so that a count of *planned blocks* cannot be mistaken for a
 count of *effective specifications* (WP-S14 audit, WP-S18):
 
 * :data:`PROMPT_SIGNATURE_AXES` names the ``anchor_meta`` fields the
-  generator-side prompt assembly actually reads.  Both the noise band's repeat
-  groups and the structure readout's ``prompt_signature_distinct`` are defined
-  on that tuple — grouping by the whole ``anchor_meta`` would split two records
-  that issue the identical request and therefore **understate** the noise;
+  generator-side prompt assembly actually reads.  ``prompt_signature_distinct``
+  is defined on that tuple — grouping by the whole ``anchor_meta`` would split
+  two records that issue the identical request and therefore **overstate** the
+  effective diversity;
 * ``effective_projection_distinct`` counts the distinct projections onto the
   restricted axes that reach the prompt, so a block count that includes axes no
   prompt consumer reads cannot be reported as "effective diversity".
@@ -45,52 +39,27 @@ count of *effective specifications* (WP-S14 audit, WP-S18):
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any, Final, Literal, TypeAlias
 
-import numpy as np
 from pydantic import BaseModel, ConfigDict
 
 from ard.core import axis_instruction, constraints, sampling
-from ard.core import coverage as ruler
 from ard.core.ontology import OntologyV4
 from ard.core.types import JsonObjectSequence, StringPairs
 
 #: Version of the acceptance report schema — bumped when a field changes meaning.
-#: ``ard-acceptance-3`` (WP-5) replaces the v4 rule "every count equals the full
-#: cycle's constant" with this run's own ``N`` and round decomposition, adds
+#: ``ard-acceptance-4`` removes the whole metric half (``metrics`` and its space
+#: declaration): the report is now the structure readout plus its warnings, so a
+#: reader of ``ard-acceptance-3`` must not look for ``metrics`` here.
+#:
+#: ``ard-acceptance-3`` (WP-5) replaced the v4 rule "every count equals the full
+#: cycle's constant" with this run's own ``N`` and round decomposition, added
 #: ``structure.coverage`` (coverage by coordinate, density by entry), and
-#: **removes** ``structure.duplicate_coordinates``: under the v5 id rule a
+#: **removed** ``structure.duplicate_coordinates``: under the v5 id rule a
 #: coordinate is content, not identity, so the same coordinate sampled in a later
-#: round is a new sample and is never reported as a duplicate.  A reader of an
-#: ``ard-acceptance-2`` report must not read ``within_rule`` or the
-#: ``expected_*`` fields as the same quantities.
-REPORT_SCHEMA: Final[str] = "ard-acceptance-3"
-
-#: Which artifact field the anchor side embeds, declared in every report.
-#: The ``(text parts only)`` qualifier is load-bearing, not decoration: an
-#: image-modality anchor's final user turn is a multimodal part list, and this
-#: ruler embeds **only its ``text`` parts**.  Image pixels never enter the
-#: metric space, so the declaration must say so wherever the space is read
-#: (``docs/architecture.md`` §8).
-ANCHOR_TEXT_FIELD: Final[str] = "messages[last].content(text parts only)"
-
-#: The multimodal part type whose ``text`` field is the embeddable text.
-#: Parts of any other type (``image``, ``image_url``, …) contribute no text.
-TEXT_PART_TYPE: Final[str] = "text"
-
-#: How the text parts of one turn are joined when it carries more than one.
-#: The writer emits a single text part, so this is a boundary default rather
-#: than a live behaviour; it is named so it cannot drift silently.
-TEXT_PART_SEPARATOR: Final[str] = "\n"
-
-#: Which field of a target-set entry this project embeds.
-TARGET_TEXT_FIELD: Final[str] = "text"
-
-#: Statement written whenever no repeat-generation data is available.
-NOISE_UNAVAILABLE_REASON: Final[str] = (
-    "noise band unavailable (no repeated generation data provided)"
-)
+#: round is a new sample and is never reported as a duplicate.
+REPORT_SCHEMA: Final[str] = "ard-acceptance-4"
 
 #: The ``anchor_meta`` fields the generator-side prompt assembly **actually
 #: reads**, in signature order.  Two coordinates that agree on all of them issue
@@ -170,9 +139,6 @@ DIVERSITY_COUNTED_OVER: Final[str] = (
 
 #: One restricted-axis value tuple: a sampled block's identity in the plan.
 BlockKey: TypeAlias = tuple[Any, ...]
-
-#: Record indices of anchors that share one prompt signature.
-IndexGroup: TypeAlias = list[int]
 
 #: One structure check: its label, the measured count, the expected count, and
 #: the comparison that must hold.  ``>=`` expresses the cycle rule's *guarantee*
@@ -363,92 +329,13 @@ class StructureReadout(BaseModel):
     within_rule: bool
 
 
-class EmbedderIdentity(BaseModel):
-    """Who produced the vectors — model and dimension, never a key or endpoint."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    model: str
-    dimension: int
-    normalize: bool
-
-
-class SpaceDeclaration(BaseModel):
-    """The space the metric readout was measured in — stated, not implied.
-
-    Attributes:
-        anchors_source: where the anchor vectors' texts came from.
-        anchor_field: which field of that artifact was embedded —
-            ``ANCHOR_TEXT_FIELD``, which for a multimodal turn names the text
-            parts only, so the declaration cannot be read as "the image too".
-        targets_source: path of the target-set file.
-        target_field: which field of an entry was embedded.
-        n_anchor: ``|A|``.
-        n_target: ``|T|``.
-        embedder: model + dimension + normalisation flag.
-        distance: the distance definition (``1 - cos``).
-        quantile_method: the quantile definition used (``linear`` = type-7).
-        epsilon: the coverage radius the ``Extent`` was measured at.
-        epsilon_source: where ``epsilon`` came from — the target-set header, or
-            the target set's own intrinsic scale.
-    """
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    anchors_source: str
-    anchor_field: str
-    targets_source: str
-    target_field: str
-    n_anchor: int
-    n_target: int
-    embedder: EmbedderIdentity
-    distance: str
-    quantile_method: str
-    epsilon: float
-    epsilon_source: str
-
-
-class NoiseSection(BaseModel):
-    """The same-cell repeat-generation noise band, or why it is missing.
-
-    Attributes:
-        available: whether a band could be measured.
-        reason: the explicit unavailability statement when ``available`` is
-            ``False`` — the band is never silently omitted (§3.2).
-        band: ``[q50, max]`` of the repeat-generation pair distances.
-        n_repeat_groups: prompt signatures that appeared more than once.
-        n_pairs: repeat-generation pairs measured.
-    """
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    available: bool
-    reason: str | None
-    band: ruler.NoiseBand | None
-    n_repeat_groups: int
-    n_pairs: int
-
-
-class MetricReadout(BaseModel):
-    """One anchor set measured against one target set, with its space declared."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    space: SpaceDeclaration
-    quantiles: ruler.DistanceQuantiles
-    extent: float
-    epsilon_band: ruler.EpsilonSensitivity
-    noise: NoiseSection
-
-
 class AcceptanceReport(BaseModel):
-    """The whole acceptance report of one run: structure, metrics, warnings."""
+    """The whole acceptance report of one run: the structure readout, warnings."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     report_schema: str = REPORT_SCHEMA
     structure: StructureReadout
-    metrics: MetricReadout | None
     warnings: list[str]
 
 
@@ -719,238 +606,6 @@ def structure_mismatch(structure: StructureReadout) -> str | None:
     return "plan does not match the construction rule — " + "; ".join(failed)
 
 
-def user_turn_text(content: object, where: str) -> str:
-    """Return the embeddable text of one final user turn's ``content``.
-
-    The writer emits two shapes and this ruler accepts both:
-
-    * a plain ``str`` — every text-only anchor, byte-identical to before;
-    * a multimodal part list — the image-modality anchors.  Only the parts
-      whose ``type`` is :data:`TEXT_PART_TYPE` and whose ``text`` is a
-      non-blank string contribute; parts of any other type (``image``,
-      ``image_url``, …) are ignored, because **this ruler embeds text only and
-      image pixels never enter the metric space**.  The contributing parts are
-      joined with :data:`TEXT_PART_SEPARATOR` in list order.
-
-    A multimodal turn with no usable text part is refused, naming the record and
-    what it did carry: silently skipping it would publish a ``q95`` over a
-    smaller anchor set than the run produced, and substituting an empty string
-    would fabricate a point in the space.
-
-    Args:
-        content: the ``content`` field of the final user-role message.
-        where: a human-readable record label used in every error message.
-
-    Returns:
-        The embeddable text, stripped of no characters (the raw string wins as
-        written; only the emptiness test looks at whitespace).
-
-    Raises:
-        AcceptanceError: if *content* is missing/blank, is neither a string nor
-            a part list, or is a part list with no non-blank text part.
-    """
-    if content is None:
-        raise AcceptanceError(f"{where}: the final user turn has blank content")
-    if isinstance(content, str):
-        if not content.strip():
-            raise AcceptanceError(f"{where}: the final user turn has blank content")
-        return content
-    if not isinstance(content, list):
-        raise AcceptanceError(
-            f"{where}: the final user turn's content must be a string or a multimodal part "
-            f"list, got {type(content).__name__}"
-        )
-    texts = [
-        part["text"]
-        for part in content
-        if isinstance(part, Mapping)
-        and part.get("type") == TEXT_PART_TYPE
-        and isinstance(part.get("text"), str)
-        and part["text"].strip()
-    ]
-    if not texts:
-        carried = sorted({str(part.get("type")) for part in content if isinstance(part, Mapping)})
-        raise AcceptanceError(
-            f"{where}: the final user turn carries no text part "
-            f"({len(content)} part(s), types {carried}) — the metric space embeds the text "
-            "parts only, so this anchor has nothing to measure and is not skipped silently"
-        )
-    return TEXT_PART_SEPARATOR.join(texts)
-
-
-def anchor_texts(records: JsonObjectSequence) -> list[str]:
-    """Return the embedded text of every bank record, in file order.
-
-    The anchor side is the record's **final user-role turn**: that is the
-    question the anchor actually poses, and it is the only text a generated
-    record is guaranteed to carry.  (The plan itself holds coordinates only, so
-    it cannot supply this — see the space declaration in every report.)
-
-    An image-modality anchor's final user turn is a multimodal part list; its
-    text parts are extracted by :func:`user_turn_text`, so image anchors take
-    part in the readout **as text** while their pixels stay out of the metric
-    space.
-
-    Raises:
-        AcceptanceError: if the bank is empty, a record has no ``messages``
-            list, its last message is not a user turn, or its content yields no
-            text (blank string, or a part list with no text part).
-    """
-    if not records:
-        raise AcceptanceError(
-            "anchor bank holds no records: a nearest-anchor distance needs at least one anchor text"
-        )
-    texts: list[str] = []
-    for index, record in enumerate(records):
-        anchor_id = record.get("id")
-        messages = record.get("messages")
-        where = f"anchor record {index} (id={anchor_id!r})"
-        if not isinstance(messages, list) or not messages:
-            raise AcceptanceError(f"{where} has no non-empty 'messages' list")
-        last = messages[-1]
-        if not isinstance(last, Mapping) or last.get("role") != "user":
-            raise AcceptanceError(
-                f"{where}: the last message is not a user turn "
-                f"(role={last.get('role') if isinstance(last, Mapping) else type(last).__name__!r})"
-            )
-        texts.append(user_turn_text(last.get("content"), where))
-    return texts
-
-
-def repeat_groups(coordinates: JsonObjectSequence) -> list[IndexGroup]:
-    """Group record indices that carry the **same prompt signature**.
-
-    The noise band answers "how far apart do two generations of *the same
-    request* land?", so the grouping key is :func:`prompt_signature` — the fields
-    the generator-side assembly actually reads — and not the whole
-    ``anchor_meta``.  Grouping by the whole mapping would split two records whose
-    requests are byte-identical (they differ only in a field no consumer reads)
-    and would therefore **understate** the noise band (WP-S14 §3, WP-S18 ①).
-
-    The bar for measuring a band is unchanged and is deliberately not relaxed: a
-    signature must appear at least twice.  The v4 plan has no repeated signature,
-    so this list is normally empty and the band is reported ``unavailable``; it
-    becomes non-empty only when the bank holds repeated generations of one cell.
-
-    Raises:
-        AcceptanceError: if a record carries no ``anchor_meta`` mapping.
-    """
-    groups: dict[tuple[Any, ...], IndexGroup] = {}
-    for index, meta in enumerate(coordinates):
-        if not isinstance(meta, Mapping) or not meta:
-            raise AcceptanceError(
-                f"anchor record {index} carries no 'anchor_meta' coordinate mapping, so "
-                "repeat-generation groups cannot be formed"
-            )
-        groups.setdefault(prompt_signature(meta), []).append(index)
-    return [indices for indices in groups.values() if len(indices) >= 2]
-
-
-def intrinsic_epsilon(targets: ruler.VectorSet) -> float:
-    """Return the target set's own scale: median nearest-neighbour distance.
-
-    Used only when the target-set file does not declare an ``epsilon``.  The
-    scale is computed from the target points themselves (no convention value is
-    hard-coded anywhere), and the report names this source explicitly.
-
-    Raises:
-        AcceptanceError: if the target set has fewer than two rows, so no
-            nearest neighbour exists.
-    """
-    vectors = targets.vectors
-    if vectors.shape[0] < 2:
-        raise AcceptanceError(
-            f"target set {targets.name!r} has {vectors.shape[0]} row(s): at least 2 are "
-            "needed to calibrate epsilon from the target set's own scale — declare "
-            "'epsilon' in the target-set header instead"
-        )
-    distances = 1.0 - vectors @ vectors.T
-    np.fill_diagonal(distances, np.inf)
-    nearest = np.clip(distances.min(axis=1), 0.0, ruler.DISTANCE_UPPER_BOUND)
-    return float(np.percentile(nearest, ruler.QUANTILE_LEVELS[0], method=ruler.PERCENTILE_METHOD))
-
-
-def noise_section(anchors: ruler.VectorSet, groups: Sequence[IndexGroup]) -> NoiseSection:
-    """Assemble the noise band from repeat-generation groups, or state its absence.
-
-    Args:
-        anchors: the embedded anchor set, indexed like the bank records.
-        groups: index groups of records sharing one prompt signature.
-
-    Returns:
-        An available band when at least one prompt signature has repeats,
-        otherwise an explicit :data:`NOISE_UNAVAILABLE_REASON` statement.
-    """
-    if not groups:
-        return NoiseSection(
-            available=False,
-            reason=NOISE_UNAVAILABLE_REASON,
-            band=None,
-            n_repeat_groups=0,
-            n_pairs=0,
-        )
-    samples = [
-        ruler.pairwise_distances(
-            ruler.VectorSet(
-                name=f"repeat-group-{position}",
-                vectors=anchors.vectors[list(indices)],
-            )
-        )
-        for position, indices in enumerate(groups)
-    ]
-    values = np.concatenate([sample.values for sample in samples])
-    combined = ruler.DistanceSample(
-        label="same-cell repeat generations",
-        values=values,
-        unit_id="repeat-group",
-    )
-    return NoiseSection(
-        available=True,
-        reason=None,
-        band=ruler.noise_band(combined),
-        n_repeat_groups=len(groups),
-        n_pairs=int(values.shape[0]),
-    )
-
-
-def metric_readout(
-    anchors: ruler.VectorSet,
-    targets: ruler.VectorSet,
-    *,
-    epsilon: float,
-    epsilon_source: str,
-    anchors_source: str,
-    targets_source: str,
-    embedder: EmbedderIdentity,
-    noise: NoiseSection,
-) -> MetricReadout:
-    """Measure *anchors* against *targets* and declare the space it happened in.
-
-    The statistics come from :func:`ard.core.coverage.acceptance_readout`; this
-    function only attaches the space declaration and the noise section.
-    """
-    measured = ruler.acceptance_readout(targets, anchors, epsilon=epsilon, label="ard-run")
-    return MetricReadout(
-        space=SpaceDeclaration(
-            anchors_source=anchors_source,
-            anchor_field=ANCHOR_TEXT_FIELD,
-            targets_source=targets_source,
-            target_field=TARGET_TEXT_FIELD,
-            n_anchor=anchors.vectors.shape[0],
-            n_target=targets.vectors.shape[0],
-            embedder=embedder,
-            distance="1 - cos",
-            quantile_method=ruler.PERCENTILE_METHOD,
-            epsilon=epsilon,
-            epsilon_source=epsilon_source,
-        ),
-        quantiles=measured.quantiles,
-        extent=measured.extent,
-        epsilon_band=measured.epsilon_band,
-        noise=noise,
-    )
-
-
 def _status(measured: int, expected: int, relation: CheckRelation) -> str:
     """``OK`` / ``MISMATCH`` marker for one counted-vs-expected row."""
     ok = measured >= expected if relation == ">=" else measured == expected
@@ -1052,47 +707,6 @@ def render_markdown(report: AcceptanceReport) -> str:
         "(`docs/algorithm.md` §8).",
         "",
     ]
-    metrics = report.metrics
-    if metrics is None:
-        lines += ["## Metric readout", "", "not computed — structure readout only.", ""]
-    else:
-        space = metrics.space
-        band = metrics.epsilon_band
-        lines += [
-            "## Metric readout",
-            "",
-            f"- anchors: `{space.anchors_source}`, field `{space.anchor_field}`, "
-            f"|A| = {space.n_anchor}",
-            f"- targets: `{space.targets_source}`, field `{space.target_field}`, "
-            f"|T| = {space.n_target}",
-            f"- embedder: model `{space.embedder.model}`, dimension "
-            f"{space.embedder.dimension}, normalize `{space.embedder.normalize}` "
-            "(no endpoint or key is recorded)",
-            f"- distance `{space.distance}`, quantile method `{space.quantile_method}`",
-            f"- epsilon = {space.epsilon:.6f} (source: {space.epsilon_source})",
-            "",
-            "| reading | value |",
-            "|---|---:|",
-            f"| q50 | {metrics.quantiles.q50:.6f} |",
-            f"| q90 | {metrics.quantiles.q90:.6f} |",
-            f"| **q95** | **{metrics.quantiles.q95:.6f}** |",
-            f"| r_max | {metrics.quantiles.r_max:.6f} |",
-            f"| Extent(epsilon) | {metrics.extent:.6f} |",
-            f"| Extent(0.95 * epsilon) | {band.extent_at_095:.6f} |",
-            f"| Extent(1.00 * epsilon) | {band.extent_at_100:.6f} |",
-            f"| Extent(1.05 * epsilon) | {band.extent_at_105:.6f} |",
-            "",
-        ]
-        noise = metrics.noise
-        if noise.available and noise.band is not None:
-            lines += [
-                f"- noise band `[{noise.band.lower:.6f}, {noise.band.upper:.6f}]` from "
-                f"{noise.n_repeat_groups} repeated prompt signature(s), "
-                f"{noise.n_pairs} pair(s)",
-                "",
-            ]
-        else:
-            lines += [f"- noise band: **unavailable** — {noise.reason}", ""]
     lines += ["## Warnings", ""]
     if report.warnings:
         lines += [f"- {warning}" for warning in report.warnings]

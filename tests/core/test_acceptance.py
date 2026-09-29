@@ -1,23 +1,16 @@
-# test_acceptance.py — Unit tests for the pure acceptance readout assembly.
+# test_acceptance.py — Unit tests for the pure structure readout assembly.
 # Responsibility: freeze the structure readout (counts come from ard.core.sampling
-# at call time, never from this module), the anchor-text / repeat-group
-# extraction contracts, the noise-band statement, and the space declaration.
+# at call time, never from this module), its mismatch reporting, and the
+# markdown rendering of the report.
 
 from __future__ import annotations
 
 import pytest
 
-from ard.backends.embedding_client import EmbeddingMatrix
 from ard.core import acceptance, sampling
-from ard.core import coverage as ruler
 from ard.core.ontology import OntologyV4
 from ard.core.sampling import sample_anchors
 from ard.core.types import AnchorGenerationConfig
-
-
-def _vector_set(name: str, rows: EmbeddingMatrix) -> ruler.VectorSet:
-    return ruler.VectorSet(name=name, vectors=rows)
-
 
 # ── Conventions and structure readout ───────────────────────────────────────
 
@@ -204,232 +197,14 @@ def test_structure_mismatch_names_every_disagreeing_count(ontology: OntologyV4) 
     assert str(sampling.unit_total(ontology)) in message
 
 
-# ── Anchor text extraction ──────────────────────────────────────────────────
-
-
-def _record(anchor_id: str, messages: list[dict], meta: dict | None = None) -> dict:
-    return {
-        "id": anchor_id,
-        "messages": messages,
-        "anchor_meta": meta if meta is not None else {"knowledge_domain": "k"},
-    }
-
-
-def test_anchor_texts_uses_the_final_user_turn() -> None:
-    records = [
-        _record(
-            "a1",
-            [
-                {"role": "user", "content": "first question"},
-                {"role": "assistant", "content": "answer"},
-                {"role": "user", "content": "final question"},
-            ],
-        )
-    ]
-    assert acceptance.anchor_texts(records) == ["final question"]
-
-
-@pytest.mark.parametrize(
-    ("records", "fragment"),
-    [
-        ([], "holds no records"),
-        ([_record("a", [])], "non-empty 'messages' list"),
-        ([_record("a", [{"role": "assistant", "content": "x"}])], "not a user turn"),
-        ([_record("a", [{"role": "user", "content": "   "}])], "blank content"),
-    ],
-)
-def test_anchor_texts_refuses_unusable_records(records: list[dict], fragment: str) -> None:
-    with pytest.raises(acceptance.AcceptanceError, match=fragment):
-        acceptance.anchor_texts(records)
-
-
-def test_anchor_field_declares_the_text_parts_only_space() -> None:
-    """The declared anchor field must say the image pixels are not embedded."""
-    assert acceptance.ANCHOR_TEXT_FIELD == "messages[last].content(text parts only)"
-
-
-def test_anchor_texts_takes_the_text_part_of_a_multimodal_turn() -> None:
-    """An image-modality anchor is measured through its request text."""
-    records = [
-        _record(
-            "img1",
-            [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "image": "images/aesthetics/sample_01.jpg"},
-                        {"type": "text", "text": "What is happening in this painting?"},
-                    ],
-                }
-            ],
-        )
-    ]
-    assert acceptance.anchor_texts(records) == ["What is happening in this painting?"]
-
-
-def test_anchor_texts_joins_every_text_part_and_ignores_non_text_parts() -> None:
-    records = [
-        _record(
-            "img2",
-            [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}},
-                        {"type": "text", "text": "first half"},
-                        {"type": "image", "image": "images/x/y.jpg"},
-                        {"type": "text", "text": "   "},
-                        {"type": "text", "text": "second half"},
-                    ],
-                }
-            ],
-        )
-    ]
-    assert acceptance.anchor_texts(records) == [
-        "first half" + acceptance.TEXT_PART_SEPARATOR + "second half"
-    ]
-
-
-def test_anchor_texts_refuses_a_turn_without_any_text_part() -> None:
-    """An image-only anchor is named and refused — never skipped, never blank-filled."""
-    records = [
-        _record("a1", [{"role": "user", "content": "text anchor"}]),
-        _record(
-            "img-only",
-            [{"role": "user", "content": [{"type": "image", "image": "images/x/y.jpg"}]}],
-        ),
-    ]
-    with pytest.raises(acceptance.AcceptanceError) as excinfo:
-        acceptance.anchor_texts(records)
-    message = str(excinfo.value)
-    assert "anchor record 1" in message
-    assert "img-only" in message
-    assert "no text part" in message
-    assert "image" in message
-
-
-def test_anchor_texts_refuses_blank_text_parts() -> None:
-    records = [
-        _record(
-            "img-blank",
-            [{"role": "user", "content": [{"type": "text", "text": "   "}]}],
-        )
-    ]
-    with pytest.raises(acceptance.AcceptanceError, match="no text part"):
-        acceptance.anchor_texts(records)
-
-
-def test_user_turn_text_refuses_a_non_string_non_list_content() -> None:
-    with pytest.raises(acceptance.AcceptanceError, match="must be a string"):
-        acceptance.user_turn_text(42, "anchor record 0 (id='a')")
-
-
-# ── Repeat groups and the noise band ────────────────────────────────────────
-
-
-def test_repeat_groups_only_returns_coordinates_with_repeats() -> None:
-    groups = acceptance.repeat_groups(
-        [
-            {"knowledge_domain": "k1"},
-            {"knowledge_domain": "k2"},
-            {"knowledge_domain": "k1"},
-        ]
-    )
-    assert groups == [[0, 2]]
-
-
-def test_repeat_groups_refuses_a_record_without_coordinates() -> None:
-    with pytest.raises(acceptance.AcceptanceError, match="anchor_meta"):
-        acceptance.repeat_groups([{}])
-
-
-def test_noise_section_states_unavailability_without_repeats() -> None:
-    section = acceptance.noise_section(_vector_set("anchors", [[1.0, 0.0]]), [])
-    assert section.available is False
-    assert section.band is None
-    assert section.reason == acceptance.NOISE_UNAVAILABLE_REASON
-    assert section.n_pairs == 0
-
-
-def test_noise_section_measures_a_repeat_group() -> None:
-    anchors = _vector_set("anchors", [[1.0, 0.0], [0.0, 1.0], [1.0, 0.0]])
-    section = acceptance.noise_section(anchors, [[0, 1, 2]])
-    assert section.available is True
-    assert section.reason is None
-    assert section.n_repeat_groups == 1
-    assert section.n_pairs == 3
-    assert section.band is not None
-    # pair distances: a-b = 1, a-c = 0, b-c = 1 ⇒ q50 = 1, max = 1
-    assert section.band.lower == pytest.approx(1.0)
-    assert section.band.upper == pytest.approx(1.0)
-
-
-def test_intrinsic_epsilon_is_the_median_nearest_neighbour_distance() -> None:
-    targets = _vector_set("targets", [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]])
-    # nearest neighbours: 1, 1, 1 ⇒ median 1.0
-    assert acceptance.intrinsic_epsilon(targets) == pytest.approx(1.0)
-
-
-def test_intrinsic_epsilon_needs_two_targets() -> None:
-    with pytest.raises(acceptance.AcceptanceError, match="at least 2"):
-        acceptance.intrinsic_epsilon(_vector_set("targets", [[1.0, 0.0]]))
-
-
-# ── Metric readout and rendering ────────────────────────────────────────────
-
-
-def _metric_readout() -> acceptance.MetricReadout:
-    anchors = _vector_set("anchors", [[1.0, 0.0], [0.0, 1.0]])
-    targets = _vector_set("targets", [[1.0, 0.0], [0.7071067811865476, 0.7071067811865476]])
-    return acceptance.metric_readout(
-        anchors,
-        targets,
-        epsilon=0.5,
-        epsilon_source="unit-test source",
-        anchors_source="out/anchor_bank.jsonl",
-        targets_source="targets.jsonl",
-        embedder=acceptance.EmbedderIdentity(model="mock-embed", dimension=2, normalize=True),
-        noise=acceptance.noise_section(anchors, []),
-    )
-
-
-def test_metric_readout_declares_its_space_and_matches_the_ruler() -> None:
-    anchors = _vector_set("anchors", [[1.0, 0.0], [0.0, 1.0]])
-    targets = _vector_set("targets", [[1.0, 0.0], [0.7071067811865476, 0.7071067811865476]])
-    readout = _metric_readout()
-    expected = ruler.acceptance_readout(targets, anchors, epsilon=0.5, label="ard-run")
-
-    assert readout.quantiles == expected.quantiles
-    assert readout.extent == pytest.approx(expected.extent)
-    assert readout.epsilon_band == expected.epsilon_band
-    assert readout.space.n_anchor == 2
-    assert readout.space.n_target == 2
-    assert readout.space.anchor_field == acceptance.ANCHOR_TEXT_FIELD
-    assert readout.space.target_field == acceptance.TARGET_TEXT_FIELD
-    assert readout.space.embedder.model == "mock-embed"
-    assert readout.space.embedder.dimension == 2
-    assert readout.space.epsilon_source == "unit-test source"
-
-
-def test_render_markdown_states_the_missing_noise_band(ontology: OntologyV4) -> None:
+def test_render_markdown_renders_the_structure_readout(ontology: OntologyV4) -> None:
     report = acceptance.AcceptanceReport(
-        structure=acceptance.structure_readout([], ontology=ontology),
-        metrics=_metric_readout(),
-        warnings=["metric readout not measured: coverage.target_set_path is unset"],
+        structure=acceptance.structure_readout([], ontology=ontology), warnings=[]
     )
     markdown = acceptance.render_markdown(report)
-    assert "unavailable" in markdown
-    assert acceptance.NOISE_UNAVAILABLE_REASON in markdown
-    assert "metric readout not measured" in markdown
-    assert "q95" in markdown
-    assert "coverage" in markdown and "density" in markdown
+    assert "## Structure readout (zero model calls)" in markdown
+    assert "within the construction rule" in markdown
+    assert "**coverage**" in markdown and "**density**" in markdown
     assert acceptance.REPORT_SCHEMA in markdown
-
-
-def test_render_markdown_says_not_computed_without_metrics(ontology: OntologyV4) -> None:
-    report = acceptance.AcceptanceReport(
-        structure=acceptance.structure_readout([], ontology=ontology), metrics=None, warnings=[]
-    )
-    markdown = acceptance.render_markdown(report)
-    assert "not computed" in markdown
+    assert "## Warnings" in markdown
     assert "- none" in markdown

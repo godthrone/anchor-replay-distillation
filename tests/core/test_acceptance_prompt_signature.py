@@ -7,8 +7,6 @@
 #   * `prompt_signature_distinct` / `effective_projection_distinct` count
 #     *distinct values*, not plan entries (the negative control behind WP-S18 ④);
 #   * the real plan lands on the 935 / 891 WP-S14's audit measured;
-#   * the noise band's repeat groups are prompt signatures, so a field no
-#     consumer reads cannot split one cell;
 #   * two coordinates share a signature **iff** their rendered requests are
 #     byte-identical, over the materialised legal block set (WP-27).
 
@@ -17,12 +15,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-import pytest
-
-from ard.backends.embedding_client import EmbeddingMatrix
 from ard.backends.prompt_loader import build_system_prompt_prompt
 from ard.core import acceptance, constraints, sampling
-from ard.core import coverage as ruler
 from ard.core.ontology import OntologyV4
 from ard.core.sampling import sample_anchors, turn_counts_by_conversation_type
 from ard.core.system_prompt import SYSTEM_PROMPT_NONE
@@ -42,10 +36,6 @@ NON_PROMPT_FIELDS = ("modality", "has_image", "image_count")
 #: rather than from ``modality``, so probing only the text branch left the whole
 #: image branch — and the ``knowledge_domain`` axis inside it — unrendered.
 MODALITIES = (sampling.MODALITY_TEXT, sampling.MODALITY_IMAGE)
-
-
-def _vector_set(name: str, rows: EmbeddingMatrix) -> ruler.VectorSet:
-    return ruler.VectorSet(name=name, vectors=rows)
 
 
 def _meta(ontology: OntologyV4, modality: str = sampling.MODALITY_TEXT) -> dict[str, Any]:
@@ -324,58 +314,6 @@ def test_the_real_plan_lands_on_the_s14_numbers(ontology: OntologyV4) -> None:
     assert readout.effective_projection_distinct.image == 891
     assert readout.within_rule is True
     assert acceptance.structure_mismatch(readout) is None
-
-
-def test_repeat_groups_key_on_the_prompt_signature_not_the_whole_mapping(
-    ontology: OntologyV4,
-) -> None:
-    """Fields no consumer reads must not split a repeat group."""
-    meta = _meta(ontology, modality="image")
-    stamped = {**meta, "has_image": True, "image_count": 1}
-    unstamped = dict(meta)  # ``quota.allocate_images`` stamps nothing for an empty pool
-
-    assert stamped != unstamped
-    assert acceptance.repeat_groups([stamped, unstamped]) == [[0, 1]]
-
-
-def test_repeat_groups_split_when_a_prompt_signature_differs(ontology: OntologyV4) -> None:
-    """A genuine prompt axis (instruction wording) is not one cell."""
-    meta = _meta(ontology)
-    other = ontology.axis_values("response_style")[1]
-    assert acceptance.repeat_groups([dict(meta), {**meta, "response_style": other}]) == []
-
-
-def test_noise_band_is_available_for_a_repeated_prompt_signature(ontology: OntologyV4) -> None:
-    """Positive use case: two identical signatures ⇒ a band with numbers."""
-    meta = _meta(ontology)
-    groups = acceptance.repeat_groups([dict(meta), dict(meta)])
-    assert groups == [[0, 1]]
-    anchors = _vector_set("anchors", [[1.0, 0.0], [0.6, 0.8]])
-    section = acceptance.noise_section(anchors, groups)
-
-    assert section.available is True
-    assert section.reason is None
-    assert section.n_repeat_groups == 1
-    assert section.n_pairs == 1
-    assert section.band is not None
-    assert section.band.lower == pytest.approx(0.4)
-    assert section.band.upper == pytest.approx(0.4)
-
-
-def test_noise_band_stays_unavailable_without_a_repeated_signature(
-    ontology: OntologyV4,
-) -> None:
-    """Negative use case: no repeat ⇒ the literal ``unavailable`` statement."""
-    meta = _meta(ontology)
-    other = ontology.axis_values("answer_mode")[1]
-    groups = acceptance.repeat_groups([dict(meta), {**meta, "answer_mode": other}])
-    assert groups == []
-    section = acceptance.noise_section(_vector_set("anchors", [[1.0, 0.0], [0.0, 1.0]]), groups)
-
-    assert section.available is False
-    assert section.band is None
-    assert section.reason == acceptance.NOISE_UNAVAILABLE_REASON
-    assert section.reason == "noise band unavailable (no repeated generation data provided)"
 
 
 def test_diversity_declaration_is_carried_by_the_readout(ontology: OntologyV4) -> None:

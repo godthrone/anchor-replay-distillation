@@ -1,19 +1,19 @@
 # test_acceptance_wiring.py — The acceptance phase as the pipeline runs it.
 # Responsibility: freeze that ``pipeline.run`` writes results/coverage.json and
-# coverage.md after generation and before the manifest, that the structure-only
-# path costs zero model calls and announces itself in a WARNING, that the mock-
-# embedded metric path reaches the artifacts with its space declared, that a bad
-# target set is refused *before* the output directory exists, and that both
-# shipped configs mirror each other's coverage fields and full field set
-# (§7.1 mirror).
+# coverage.md after generation and before the manifest, that the structure
+# readout costs zero model calls, that the phase writes nothing when disabled,
+# that a leftover pre-removal ``[coverage]`` block still loads with a WARNING
+# (§3.2), and that both shipped configs mirror each other's coverage fields and
+# full field set (§7.1 mirror).
 #
-# No test dials a real endpoint: the metric-path test installs an in-process
-# ``httpx.MockTransport``, the structure-only test installs a client that fails
-# if it is ever constructed.
+# No test dials a real endpoint: every test points ``httpx.Client`` at a stub
+# that fails if it is ever constructed, and the generator is an in-process
+# writer.
 
 from __future__ import annotations
 
 import json
+import logging
 import re
 import tomllib
 from collections.abc import Mapping
@@ -24,25 +24,15 @@ import httpx
 import pytest
 
 from ard import pipeline
-from ard.backends import embedding_client as ec
-from ard.backends.coverage_wiring import CoverageWiringError
-from ard.backends.embedding_client import EmbeddingRequestError
 from ard.config import load_config
-from ard.core.types import AnchorSpec, DataSource, GeneratedAnchor, TurnSpec
+from ard.core.types import AnchorSpec, GeneratedAnchor, TurnSpec
 from ard.domain.bank import append_anchor
 
-_REAL_HTTPX_CLIENT = httpx.Client
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 #: The production ontology.  The injected-plan seam still passes this to the
 #: acceptance readout: the structure readout is defined against the run's own
 #: sampling space, so it needs the real ontology even when the plan is injected.
 _V4_ONTOLOGY = str(_REPO_ROOT / "ontology" / "anchor_ontology.v4.json")
-API_BASE = "https://mock.invalid/v1"
-#: Assembled from parts so the tracked source carries no key-shaped literal
-#: (§15.1); distinctive enough for the "key never reaches the artifacts" checks.
-API_KEY = "sk-" + "test-pipeline-wiring-not-a-real-key"
-MODEL = "mock-embed"
-DIMENSION = 3
 _PLAN_SIZE = 3
 
 
@@ -104,25 +94,7 @@ def _write_config(
     )
 
 
-_STRUCTURE_ONLY = '[coverage]\nenabled = true\ntarget_set_path = ""\n'
-
-
-def _metric_block(target_set_path: Path) -> str:
-    return "\n".join(
-        [
-            "[coverage]",
-            "enabled = true",
-            f'target_set_path = "{target_set_path}"',
-            "",
-            "[coverage.embedding]",
-            f'api_base = "{API_BASE}"',
-            f'api_key = "{API_KEY}"',
-            f'model = "{MODEL}"',
-            f"dimension = {DIMENSION}",
-            "batch_size = 2",
-            "normalize = true",
-        ]
-    )
+_STRUCTURE_ONLY = "[coverage]\nenabled = true\n"
 
 
 def _install_offline_generator(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -166,74 +138,40 @@ def _rig(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_offline_generator(monkeypatch)
 
 
-class _MockEmbeddings:
-    """Records requests and answers from a text → vector map (or a fixed status)."""
-
-    def __init__(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        vectors: Mapping[str, ec.EmbeddingRow],
-        *,
-        status: int | None = None,
-    ) -> None:
-        self.vectors = dict(vectors)
-        self.status = status
-        self.requests: list[httpx.Request] = []
-        monkeypatch.setattr(ec.httpx, "Client", self._fake_client)
-
-    def _fake_client(self, *args: object, **kwargs: object) -> httpx.Client:
-        kwargs.pop("timeout", None)
-        return _REAL_HTTPX_CLIENT(
-            transport=httpx.MockTransport(self._handler), timeout=httpx.Timeout(None)
-        )
-
-    def _handler(self, request: httpx.Request) -> httpx.Response:
-        self.requests.append(request)
-        if self.status is not None:
-            return httpx.Response(self.status, json={"error": "mock failure"})
-        payload = json.loads(request.content)
-        data = [
-            {"index": index, "embedding": self.vectors[text]}
-            for index, text in enumerate(payload["input"])
-        ]
-        return httpx.Response(200, json={"data": data, "model": MODEL})
-
-
 # ── Structure-only path ─────────────────────────────────────────────────────
 
 
 def test_structure_only_run_writes_the_readout_without_any_model_call(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     output_dir = tmp_path / "out"
     config_path = tmp_path / "config.toml"
     _write_config(config_path, output_dir, _STRUCTURE_ONLY)
     _rig(monkeypatch)
     monkeypatch.setattr(
-        ec.httpx,
+        httpx,
         "Client",
         lambda *args, **kwargs: pytest.fail("the structure readout must cost no model call"),
     )
 
-    with caplog.at_level("WARNING"):
-        result_dir = pipeline.run(load_config(config_path), generate_specs=lambda cfg: _plan())
+    result_dir = pipeline.run(load_config(config_path), generate_specs=lambda cfg: _plan())
 
     report = json.loads((result_dir / "results" / "coverage.json").read_text(encoding="utf-8"))
     markdown = (result_dir / "results" / "coverage.md").read_text(encoding="utf-8")
     manifest = json.loads((result_dir / "manifest.json").read_text(encoding="utf-8"))
 
-    assert report["metrics"] is None
-    assert any("metric readout not measured" in warning for warning in report["warnings"])
+    assert report["report_schema"] == "ard-acceptance-4"
+    assert "metrics" not in report
+    assert report["warnings"] == []
     assert report["structure"]["plan_total"] == _PLAN_SIZE
     # The readout's expectations now come from the plan's own ``count`` (= its
     # length on the injected seam): three planned entries against a count of
     # three is exactly the rule's shape, so it reads green.  The old fixed
     # "= 1,826" expectation is what WP-5 removed.
     assert report["structure"]["within_rule"] is True
-    assert "not computed" in markdown
-    assert manifest["acceptance"]["metric_readout"] is False
-    assert manifest["acceptance"]["q95"] is None
-    assert any("target_set_path is unset" in record.getMessage() for record in caplog.records)
+    assert "## Structure readout (zero model calls)" in markdown
+    assert manifest["acceptance"]["coverage_json"] == "results/coverage.json"
+    assert manifest["acceptance"]["coverage_md"] == "results/coverage.md"
 
 
 def test_disabled_acceptance_phase_writes_nothing(
@@ -263,7 +201,7 @@ def test_smoke_run_is_marked_in_all_three_places_and_costs_no_model_call(
     _write_config(config_path, output_dir, _STRUCTURE_ONLY, ontology_path=_V4_ONTOLOGY)
     _install_offline_generator(monkeypatch)
     monkeypatch.setattr(
-        ec.httpx,
+        httpx,
         "Client",
         lambda *args, **kwargs: pytest.fail("the structure readout must cost no model call"),
     )
@@ -289,7 +227,7 @@ def test_smoke_run_is_marked_in_all_three_places_and_costs_no_model_call(
 
     # the acceptance readout still exists, and it is honest about the short plan
     report = json.loads((result_dir / "results" / "coverage.json").read_text(encoding="utf-8"))
-    assert report["metrics"] is None
+    assert "metrics" not in report
     assert report["structure"]["plan_total"] == 8
     # A smoke plan is measured against its OWN count (8), not against one full
     # cycle: the old expectation of 1,826 turned a normal smoke artifact into a
@@ -332,211 +270,52 @@ def test_two_smoke_runs_with_the_same_seed_are_byte_identical(
     assert report["structure"]["plan_total"] == 8
 
 
-# ── Metric path ─────────────────────────────────────────────────────────────
+# ── Removed-feature compatibility (§3.2) ────────────────────────────────────
 
 
-def test_metric_run_writes_q95_and_declares_the_space(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_a_pre_removal_coverage_block_still_loads_with_one_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    output_dir = tmp_path / "out"
-    target_set_path = tmp_path / "targets.json"
-    target_set_path.write_text(
-        json.dumps(
-            {
-                "epsilon": 0.5,
-                "targets": [{"text": "target-x"}],
-            }
-        ),
-        encoding="utf-8",
-    )
-    config_path = tmp_path / "config.toml"
-    _write_config(config_path, output_dir, _metric_block(target_set_path))
-    _rig(monkeypatch)
-    mock = _MockEmbeddings(
-        monkeypatch,
-        {
-            "question plumbing-0": [1.0, 0.0, 0.0],
-            "question plumbing-1": [0.0, 1.0, 0.0],
-            "question plumbing-2": [0.0, 0.0, 1.0],
-            "target-x": [1.0, 0.0, 0.0],
-        },
-    )
+    """An old override / snapshot must not refuse the run — it warns instead.
 
-    result_dir = pipeline.run(load_config(config_path), generate_specs=lambda cfg: _plan())
-
-    report_text = (result_dir / "results" / "coverage.json").read_text(encoding="utf-8")
-    report = json.loads(report_text)
-    manifest = json.loads((result_dir / "manifest.json").read_text(encoding="utf-8"))
-    metrics = report["metrics"]
-
-    assert mock.requests, "the metric path must actually call the embedding endpoint"
-    assert metrics["space"]["n_anchor"] == _PLAN_SIZE
-    assert metrics["space"]["n_target"] == 1
-    assert metrics["space"]["embedder"] == {
-        "model": MODEL,
-        "dimension": DIMENSION,
-        "normalize": True,
-    }
-    assert metrics["space"]["anchor_field"] == "messages[last].content(text parts only)"
-    assert metrics["space"]["target_field"] == "text"
-    assert metrics["space"]["epsilon"] == pytest.approx(0.5)
-    assert "header 'epsilon'" in metrics["space"]["epsilon_source"]
-    assert metrics["quantiles"]["q95"] == pytest.approx(0.0)
-    assert metrics["epsilon_band"]["extent_at_100"] == pytest.approx(1.0)
-    assert metrics["noise"]["available"] is False
-    assert "unavailable" in metrics["noise"]["reason"]
-    assert manifest["acceptance"]["q95"] == pytest.approx(0.0)
-    assert manifest["acceptance"]["metric_readout"] is True
-    # §15: neither the key nor the endpoint reaches the artifacts.
-    assert API_KEY not in report_text
-    assert API_BASE not in report_text
-    assert API_KEY not in (result_dir / "config.toml").read_text(encoding="utf-8")
-
-
-def test_metric_run_embeds_the_text_part_of_a_multimodal_anchor(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """An image-modality anchor joins the readout through its request text.
-
-    The bank record's final user turn is a multimodal part list (image first,
-    then the text the writer emits).  Before WP-S9b the whole run was refused
-    here; now the text part is embedded and the report says the space is
-    text-parts-only.
+    The embedding ruler's keys are gone, but ``ARDConfig`` forbids extras (§2.3)
+    and a run's own ``config.toml`` snapshot invites reuse as ``--config``, so a
+    leftover ``[coverage.embedding]`` has to be dropped loudly (§3.2) instead of
+    rejecting the load.
     """
-    output_dir = tmp_path / "out"
-    target_set_path = tmp_path / "targets.json"
-    target_set_path.write_text(
-        json.dumps({"epsilon": 0.5, "targets": [{"text": "target-x"}]}), encoding="utf-8"
-    )
-    config_path = tmp_path / "config.toml"
-    _write_config(config_path, output_dir, _metric_block(target_set_path))
-    monkeypatch.setattr(
-        pipeline,
-        "sample_specs",
-        lambda config: pytest.fail("the plan double must replace the v4 sampler"),
-    )
-
-    def spy(**kwargs: object) -> list[GeneratedAnchor]:
-        specs = kwargs["specs"]
-        output_path = kwargs["output_path"]
-        stats = kwargs["stats"]
-        assert isinstance(specs, list)
-        assert isinstance(output_path, Path)
-        written: list[GeneratedAnchor] = []
-        for spec in specs:
-            assert isinstance(spec, AnchorSpec)
-            anchor = GeneratedAnchor(
-                id=spec.id,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "image", "image": "images/aesthetics/sample_01.jpg"},
-                            {"type": "text", "text": f"question {spec.id}"},
-                        ],
-                    }
-                ],
-                target_answer=f"answer {spec.id}",
-                target_model="target-model",
-                input_generator_model="input-model",
-                anchor_meta=spec.anchor_meta,
-                reasoning=None,
-                data_source=DataSource.ARD_MULTI,
-            )
-            append_anchor(anchor, output_path)
-            written.append(anchor)
-        stats.requested = len(specs)
-        stats.written = len(written)
-        stats.succeeded = len(written)
-        return written
-
-    monkeypatch.setattr(pipeline, "generate_text_anchors", spy)
-    mock = _MockEmbeddings(
-        monkeypatch,
-        {
-            "question img-0": [1.0, 0.0, 0.0],
-            "question img-1": [0.0, 1.0, 0.0],
-            "target-x": [1.0, 0.0, 0.0],
-        },
-    )
-    plan = [
-        AnchorSpec(
-            id=f"img-{index}",
-            anchor_meta={
-                "modality": "image",
-                "language": "English",
-                "knowledge_domain": f"k{index}",
-                "visual_domain": "aesthetics",
-            },
-            turns=[TurnSpec(turn_index=0, role="user", is_final=True)],
-        )
-        for index in range(2)
-    ]
-
-    result_dir = pipeline.run(load_config(config_path), generate_specs=lambda cfg: plan)
-
-    metrics = json.loads((result_dir / "results" / "coverage.json").read_text(encoding="utf-8"))[
-        "metrics"
-    ]
-    # both image anchors were accepted (before the fix this raised AcceptanceError)
-    assert metrics["space"]["n_anchor"] == 2
-    assert metrics["space"]["anchor_field"] == "messages[last].content(text parts only)"
-    # the embedded texts are the text parts; the image parts never reached the client
-    embedded = [text for request in mock.requests for text in json.loads(request.content)["input"]]
-    assert "question img-0" in embedded
-    assert "question img-1" in embedded
-    assert all("sample_01.jpg" not in text for text in embedded)
-
-
-def test_embedding_failure_keeps_the_structure_readout_on_disk(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A failed embedding call aborts the run, but never erases the zero-cost readout."""
-    output_dir = tmp_path / "out"
-    target_set_path = tmp_path / "targets.json"
-    target_set_path.write_text(json.dumps(["target-x"]), encoding="utf-8")
-    config_path = tmp_path / "config.toml"
-    _write_config(config_path, output_dir, _metric_block(target_set_path) + "\nmax_retries = 0")
-    _rig(monkeypatch)
-    _MockEmbeddings(monkeypatch, {}, status=500)
-
-    with pytest.raises(EmbeddingRequestError):
-        pipeline.run(load_config(config_path), generate_specs=lambda cfg: _plan())
-
-    report = json.loads((output_dir / "results" / "coverage.json").read_text(encoding="utf-8"))
-    assert report["metrics"] is None
-    assert report["structure"]["plan_total"] == _PLAN_SIZE
-    assert not (output_dir / "manifest.json").exists()
-
-
-# ── Boundary: target set is checked before any side effect ──────────────────
-
-
-def test_missing_target_set_fails_before_the_output_directory_exists(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    output_dir = tmp_path / "out"
-    config_path = tmp_path / "config.toml"
-    _write_config(config_path, output_dir, _metric_block(tmp_path / "missing.jsonl"))
-    _rig(monkeypatch)
-
-    with pytest.raises(CoverageWiringError, match="not found"):
-        pipeline.run(load_config(config_path), generate_specs=lambda cfg: _plan())
-
-    assert not output_dir.exists(), "a refused target set must leave no half-built output directory"
-
-
-def test_config_load_refuses_a_target_set_without_an_embedder(tmp_path: Path) -> None:
-    output_dir = tmp_path / "out"
-    config_path = tmp_path / "config.toml"
+    legacy = tmp_path / "legacy.toml"
     _write_config(
-        config_path,
-        output_dir,
-        '[coverage]\nenabled = true\ntarget_set_path = "targets.jsonl"\n\n'
-        '[coverage.embedding]\nmodel = "mock-embed"\n',
+        legacy,
+        tmp_path / "out-legacy",
+        "[coverage]\n"
+        "enabled = true\n"
+        'target_set_path = "targets.jsonl"\n'
+        "\n"
+        "[coverage.embedding]\n"
+        'model = "old-embed"\n'
+        "dimension = 8\n"
+        "normalize = true\n",
     )
-    with pytest.raises(ValueError, match="coverage.embedding"):
-        load_config(config_path)
+    with caplog.at_level(logging.WARNING):
+        config = load_config(legacy)
+
+    assert config.coverage.enabled is True
+    dropped = [
+        record.getMessage()
+        for record in caplog.records
+        if "ignoring [coverage] key" in record.getMessage()
+    ]
+    assert len(dropped) == 1, dropped
+    assert "embedding" in dropped[0]
+    assert "target_set_path" in dropped[0]
+
+    # A config with no leftover keys loads with no coverage warning at all.
+    caplog.clear()
+    clean = tmp_path / "clean.toml"
+    _write_config(clean, tmp_path / "out-clean", "[coverage]\nenabled = false\n")
+    with caplog.at_level(logging.WARNING):
+        load_config(clean)
+    assert not [r for r in caplog.records if "coverage" in r.getMessage()], caplog.records
 
 
 # ── §7.1 field mirror ───────────────────────────────────────────────────────

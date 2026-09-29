@@ -116,36 +116,8 @@ convert = true
 [coverage]
 # Acceptance readout of a run, written to <output_dir>/results/coverage.json and
 # coverage.md after generation and before the manifest.
-# The structure readout (plan counts vs the construction rule) needs no model
-# call and is always produced when the phase is enabled.
-# Set false to skip the acceptance phase entirely.
+# The report is the structure readout (plan counts vs the construction rule): it
+# needs no model call, no endpoint and no target set, and is always produced when
+# the phase is enabled.
+# Set false to skip the phase entirely.
 enabled = true
-# Target set for the metric readout (q95 / Extent(epsilon) / epsilon band).
-# Leave empty to publish the structure readout only: the run then announces in a
-# WARNING that no metric readout was measured (never silently).
-# Format: JSON (array, or object with a "targets" array) or JSONL. Every entry
-# is a non-empty string or an object with a non-empty "text" field. An optional
-# object header may also declare "expected_count", "dimension" and "epsilon"
-# (a declared epsilon is used as-is; otherwise the target set's own median
-# nearest-neighbour distance calibrates it).
-target_set_path = ""
-
-[coverage.embedding]
-# OpenAI-compatible /embeddings endpoint used by the metric readout only.
-api_base = ""
-# Secret — leave empty here and put the real key in config.override.toml.
-api_key = ""
-model = ""
-# Expected vector length. Required when target_set_path is set.
-# dimension = 384
-# Texts per HTTP request.
-batch_size = 32
-# TCP connect + TLS handshake timeout, in seconds.
-connect_timeout = 10.0
-# Whole-response read budget, in seconds.
-read_timeout = 60.0
-# Retries after the first attempt (0 = exactly one attempt).
-max_retries = 2
-# Must stay true: the acceptance ruler (coverage.VectorSet) requires
-# L2-normalised rows so that dot == cos and distance == 1 - cos.
-normalize = true
