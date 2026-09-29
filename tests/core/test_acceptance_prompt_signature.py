@@ -195,7 +195,7 @@ def test_shared_prompt_signature_iff_byte_identical_request(
     can fail: coordinates equal on the signature agree on every axis the renderer
     reads, so equal bytes ⇒ equal signature is the direction an inert axis breaks —
     it makes two byte-identical requests carry two different signatures, splitting
-    the noise band's repeat groups.
+    the diversity readout's distinct count.
 
     Method: materialise the legal block set (:func:`_legal_block_coordinates`),
     render each coordinate once, and compare the two partitions of the same index

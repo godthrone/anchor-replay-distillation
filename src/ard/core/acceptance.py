@@ -63,8 +63,8 @@ REPORT_SCHEMA: Final[str] = "ard-acceptance-4"
 
 #: The ``anchor_meta`` fields the generator-side prompt assembly **actually
 #: reads**, in signature order.  Two coordinates that agree on all of them issue
-#: the byte-identical generator-side request, so they are one cell for the noise
-#: band and one prompt for the diversity readout.
+#: the byte-identical generator-side request, so they count as one prompt in the
+#: diversity readout.
 #:
 #: Evidence in the current tree — one entry per consumer, no inference:
 #:
@@ -364,7 +364,7 @@ def prompt_signature(meta: Mapping[str, Any]) -> tuple[Any, ...]:
     :data:`PROMPT_SIGNATURE_AXES` values, in signature order.
 
     Two coordinates with the same signature issue the same generator-side
-    request, so they are one cell for the noise band.  A missing axis becomes
+    request, so they are one prompt in the diversity readout.  A missing axis becomes
     ``None`` rather than a default: ``None`` is "the coordinate does not carry
     the axis", which is not the same as carrying the axis' first value.
 
