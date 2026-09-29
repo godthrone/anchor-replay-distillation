@@ -1,12 +1,14 @@
-# ARD 算法：构造规则与验收尺子
+# ARD 算法：构造规则与计划身份
 
 > 职责：本页是 ARD 的**规范**——本体坐标空间的口径（12 轴分类）、计划的**构造规则**（cycle-shuffle）、
-> **锚点 id** 方案、**轮数口径**、**验收尺子**（距离 / 分位 / ε 敏感带 / 配对 bootstrap / 噪声带 /
-> 覆盖与密度）、结构读数的**有效多样性**与尺子的**分辨力上限**、**计划身份**与复现，以及仓库自带
-> 目标集样例的构造规则与复核路径。
+> **锚点 id** 方案、**轮数口径**、**覆盖率 / 密度 / 轮分解**口径、结构读数的**有效多样性**，以及
+> **计划身份**与复现。
 >
-> 纯计算实现见 `ard.core.sampling` / `ard.core.constraints` / `ard.core.ontology` / `ard.core.coverage` /
+> 纯计算实现见 `ard.core.sampling` / `ard.core.constraints` / `ard.core.ontology` /
 > `ard.core.acceptance`；读数组装与产物字段见 `docs/architecture.md` §8；人话版流程见 `docs/walkthrough.md`。
+>
+> **本页不含验收尺子**：向量距离、分位、ε 敏感带、配对 bootstrap 与噪声带随 embedding 验收半边一并
+> 移除（报告 schema `ard-acceptance-4`），运行只产出零模型的**结构读数**。
 >
 > 引用约定：本页一律使用**符号引用**（如 `ard.core.sampling.sample_coordinates`），**不写 `文件:行`**
 > ——行号会随任何代码改动漂移，符号名不会（规则原文见 `CONTRIBUTING.md`）。
@@ -146,7 +148,7 @@ plan(seed, N) = [coordinate(i) for i in range(N)]
 | I4 | 同一坐标可以在不同轮再次出现，且两条都留存 | 坐标是内容不是身份；id 与坐标脱钩（§3） |
 
 由此，**N 没有上限**：越过 U 后照常进入下一轮，覆盖率在 `N >= U` 后饱和于 `1.0`，密度继续线性增长
-（两个口径的读数定义见 §7）。
+（两个口径的读数定义见 §5）。
 
 ## 3. 锚点 id：计划位置，不是坐标指纹
 
@@ -171,7 +173,7 @@ id      = f"{run_key}-c{轮次:05d}p{轮内序号:05d}"
 | **可读可定位** | `cNNNNN` / `pNNNNN` 五位补零 | 一条 id 就能说出"哪一轮的第几条" |
 
 **id 是位置序号，不是内容指纹** —— 同一 id 在新旧两个计划里**不保证**指向同一坐标。
-这正是续跑守卫不能用"id 集合是子集"来判定的原因（§10）。
+这正是续跑守卫不能用"id 集合是子集"来判定的原因（§7）。
 
 ## 4. 轮数口径
 
@@ -193,84 +195,7 @@ id      = f"{run_key}-c{轮次:05d}p{轮内序号:05d}"
   并设硬门：本体一旦声明比它更大的轮数，`_spec_turns` 直接报错，不静默采用。
 - 轮数**不是配置项**：`configs/config.toml` 无对应字段，改轮数只能改本体（或该常量）。
 
-## 5. 验收尺子：距离、分位与 ε 敏感带
-
-**距离**：`d(x) = min_{a ∈ A} (1 − cos(x, a))`，逐目标点取其到**最近锚点**的距离。两侧向量必须
-**L2 归一化**，这样点积即余弦、`1 − dot` 即距离；结果夹到 `[0, 2]` 以免浮点噪声产生负距离。
-实现：`ard.core.coverage.nearest_anchor_distances`；归一化门 `ard.core.coverage.validate_vector_set`
-（容差常量 `UNIT_NORM_TOLERANCE`）。
-
-**分位**：**Hyndman–Fan type-7**（`numpy.percentile(method="linear")`，`ard.core.coverage._type7`），
-全项目统一口径。
-
-**主尺子 `q95`**：最近锚点距离的 **type-7 95 分位**（`ard.core.coverage.distance_quantiles`）。
-并报 `q50` / `q90` / `r_max`（最大距离），以及样本量 `|T|`（目标点个数）。
-
-`Extent(ε) = mean(d ≤ ε)`：落在半径 ε 内的目标点比例，**仅作参考**，从不作为判定尺子
-（`ard.core.coverage.extent`）。
-
-**ε 敏感带**：`Extent` 对 ε 的选择敏感，故并列三点（`ard.core.coverage.epsilon_sensitivity`，
-乘子常量在其模块内具名）：
-
-| 字段 | 含义 |
-|---|---|
-| `extent_at_095` | `Extent(0.95 × ε)` |
-| `extent_at_100` | `Extent(1.00 × ε)` = 报告的主覆盖读数 |
-| `extent_at_105` | `Extent(1.05 × ε)` |
-
-ε 的来源被显式落在空间声明里（`ard.backends.coverage_wiring`）：
-
-1. 目标集文件头部声明了 `epsilon` ⇒ 原样使用；
-2. 未声明 ⇒ 用目标集**自身尺度**：目标点之间最近邻距离的 type-7 中位数
-   （`ard.core.acceptance.intrinsic_epsilon`）；目标点少于 2 个时**报错**，不猜测。
-
-**配对 bootstrap**：用于比较两臂的 `q95` 差（`ard.core.coverage.paired_bootstrap_q95_ci`）：
-
-- **单位 = 目标点**：每次重采样抽的是目标点下标；
-- **两臂共用同一次索引抽取**（同一 `positions` 同时索引两臂）——这是"配对"的定义，也是它与独立重采样的区别；
-- **B = 2000**（`DEFAULT_BOOTSTRAP_RESAMPLES`），置信水平 0.95（`DEFAULT_CONFIDENCE_LEVEL`）；
-- 点估计 = `q95(A) − q95(B)`（原始样本上的 type-7 分位差）；CI = bootstrap 差值的 type-7 2.5% / 97.5% 分位；
-- 两臂长度不一致、或 `unit_id` 不同的目标集 ⇒ `PairingMismatchError`，不静默产出。
-
-## 6. 噪声带
-
-同格重复生成（**同一请求**被生成多次）的距离分布，下沿 `q50`、上沿 `max`
-（`ard.core.coverage.noise_band`）。原料是同一格的**互异对**距离（`ard.core.coverage.pairwise_distances`）。
-判据 `ard.core.coverage.within_noise_band` 为闭区间判定：落在 `[q50, max]` 内 = 与重复生成噪声**不可分辨**。
-
-组装：`ard.core.acceptance.noise_section` 从库记录中找**同 prompt 签名**的分组
-（`ard.core.acceptance.repeat_groups`），无重复生成数据时按 `NOISE_UNAVAILABLE_REASON`
-显式写 **`unavailable`**，绝不省略。
-
-### 6.1 分组键 = prompt 签名（不是整份 `anchor_meta`）
-
-分组的定义是"两次生成发给输入生成器的请求逐字节相同"，因此分组键必须是
-**prompt 组装实际读到的字段序列**，而不是 `anchor_meta` 的全部键：
-
-- 签名 = `PROMPT_SIGNATURE_AXES`（`ard.core.acceptance.PROMPT_SIGNATURE_AXES`）的取值**有序元组**；
-  缺轴 = `None`，不是"取该轴第一个值"（`ard.core.acceptance.prompt_signature`）。
-- 这 12 个轴就是**全部 12 个本体轴**：`language` / `knowledge_domain` / `capability` /
-  `conversation_type`（`ard.domain.text_anchor._build_user_prompt` 读并拼进指令、
-  `_generate_system_message` 组装 system 串）、`system_prompt_mode`
-  （`ard.backends.prompt_loader.load_system_prompt_template` 选措辞文件，
-  `ard.core.system_prompt.render_system_prompt_prompt` 填占位符）、六个 instruction 轴
-  （`ard.domain.text_anchor._build_user_prompt` → `ard.backends.axis_instruction_loader.build_axis_requirements`）、
-  `visual_domain`（`ard.domain.image_store.domain_directory` 决定选图时优先看哪个目录；该目录没有候选时
-  实际图来自全局复用池，域目录本身仍是坐标的寻址依据）。
-- **不在**签名里的是计划记账字段 `modality` / `has_image` / `image_count`：它们不改变发给生成器的请求文本。
-  `image_count = min(用户轮数, IMAGES_PER_ANCHOR)` 且 `IMAGES_PER_ANCHOR = 1`
-  （`ard.pipeline.IMAGES_PER_ANCHOR`），信息量为零；契约测试
-  `tests/core/test_acceptance_prompt_signature.py` 双向渲染两遍（列出轴必须改变渲染、未列字段必须不改变渲染）
-  来守住这个集合，轴一旦变成"吉祥物"即失败。
-- **判据没有放宽**：仍然只在"同一签名出现 **≥2** 条"时才标定噪声带。一轮之内每条签名只出现一次，
-  所以正常运行的读数**就是** `unavailable`；重复组是因为"同一格被生成多次"才出现，不是为了"能出数"而放宽。
-  **跨轮**可能再次抽到同一签名（坐标允许重复），那时重复组会出现——这是真实噪声，不是放宽。
-
-**为什么旧口径会低估噪声**：按整份 `anchor_meta` 分组时，两条**只差不进 prompt 的字段**的记录会被分到两格，
-于是"同一请求的两次生成"被算成"两个格子"，重复对消失、噪声带被报成 `unavailable` 或偏窄，
-而 `q95` 的臂间差反而显得"可分辨"。
-
-## 7. 覆盖率 / 密度 / 轮分解
+## 5. 覆盖率 / 密度 / 轮分解
 
 **两个口径必须分开读，不得混用**（`ard.core.acceptance.PlanCoverage`）：
 
@@ -301,13 +226,17 @@ id      = f"{run_key}-c{轮次:05d}p{轮内序号:05d}"
 （`ard.pipeline._build_plan`），所以 8 条计划按 8 条判定，`within_rule: true`；
 它只会在 coverage 上如实显示 `8 / 1826 ≈ 0.0044`。
 
-## 8. 结构读数里的"有效多样性"——以及读数如何被误读
+**库比计划少一条计划坐标时**读数被如实改为 `within_rule: false`，并在 warnings 里**列出缺失坐标**
+（`ard.pipeline._missing_plan_coordinates` / `_missing_coordinates_warning`）——一条计划坐标没落库时，
+计划再合规也不算"产物合规"。
+
+## 6. 结构读数里的"有效多样性"——以及读数如何被误读
 
 **为什么非要报这两个数。** 标称块数（`text_block_count` / `image_block_count`）只说明"计划枚举了多少个
 合法受限组合"，**不等于**"发出了多少个不同请求"，更不等于"有多少个不同规格能改变生成结果"。合法受限块
 必须投影到**prompt 真正读到的受限轴**上才成为规格：两个块若在那些轴上取值相同、自由轴也相同，它们发出的
 prompt 就**逐字节相同**。所以读数把标称块数与两个 distinct 数并列报出，让"枚举得多、区分得少"这种退化在
-零成本的结构读数里就暴露出来，而不是留给 `q95` 去承担它分辨不了的事（§9）。
+零成本的结构读数里就暴露出来。
 
 **于是结构读数并列报四个数**（`structure` 里，全部按模态分开；定义随读数一起落盘在 `structure.diversity`）：
 
@@ -319,14 +248,14 @@ prompt 就**逐字节相同**。所以读数把标称块数与两个 distinct �
 | `knowledge_domain_leaves` / `visual_domain_leaves` | 轮转叶覆盖数 |
 
 具体数值随本体与 N 变化，`coverage.json` / `coverage.md` 里就是本 run 的实测值；
-一轮（`N >= U`）时的期望值 = 运行时穷举的 `U_text` / `U_image` / `K` / `V`（§7）。
+一轮（`N >= U`）时的期望值 = 运行时穷举的 `U_text` / `U_image` / `K` / `V`（§5）。
 `prompt_signature_distinct` 与 `effective_projection_distinct` 都是 `{text_only, image}` 两个整数；
 `structure.diversity` 写明签名包含哪些轴、按什么顺序拼、在什么集合上数（`counted_over`），
 本页只讲"为什么要报"。任何一个 distinct 数**小于**同模态的块数且 `N >= U` 时，
 `within_rule` 即为 `false`、`coverage.md` 对应行标 `MISMATCH`、`structure_mismatch` 的 warning 逐行点名
 ——这是防呆，不是给读数化妆。
 
-**读数如何被误读（三种典型错误，都必须避免）**
+**读数如何被误读（两种典型错误，都必须避免）**
 
 1. **把标称块数当有效多样性**：`935/935 块覆盖` 只说明"计划枚举了 935 个合法受限组合"，
    **不说明**它们产生 935 个不同请求或 935 个不同规格。要读有效多样性，只能看上面后两个数。
@@ -334,32 +263,11 @@ prompt 就**逐字节相同**。所以读数把标称块数与两个 distinct �
    **可以靠单轴轮转撑起来**——当有效的受限投影数远小于块数时，`knowledge_domain` 逐条轮转就足以让每行签名
    互异。所以**签名互异 ≠ 受限规格互异**，两个数必须一起读；
    只看签名数会把"轮转出来的差异"当成"实验格子本身的差异"。
-3. **把 `noise.available=false` 当"没有噪声"**：`unavailable` 的含义是"**这批产物里没有同签名的重复生成**"，
-   不是"噪声为零"。一轮内每格只生成一次，所以正常运行的读数就是 `unavailable`（§6.1）；此时
-   `q95` 的臂间差**没有标定过**可分辨性，不得据此写"某臂更优/更差"（§9）。
 
 **复算**：这些数都是零成本的纯结构计数，`ard.core.acceptance.structure_readout(plan, ontology=…, count=…)`
-即可复得；本机既有产物上重跑读数的做法见 §12 结尾，不需要任何生成调用。
+即可复得，不需要任何生成调用。
 
-## 9. 验收尺子的分辨力上限
-
-**这是本尺子的硬约束，读任何 `q95` 数字前必须先读它：**
-
-- 噪声带的语义是"**同格重复生成**这条管道自身产生的距离散布"。当两臂的 `q95` 差值**小于**该噪声时，
-  指标层**无法区分**这两臂——差异可能来自生成随机性，而非被测的设计因素。
-- **尾部读数已被噪声主导。** 报告里的噪声带就是这个上界的实测值：同格重复生成之间的距离分布
-  `[q50, max]` 决定了 `q95`（以及 `r_max`）能分辨的最小差异。当噪声带量级与臂间 `q95` 差相当时，
-  **指标层已到顶**——再多臂、再多尺子层都不会让排名变得可分。
-- **由此得出的口径**：在该分辨力上限内，**结构保证才是硬约束**——即
-  "每个模态组内每个合法受限块恰好 1 条、`prompt_signature_distinct` 等于块数、
-  `effective_projection_distinct` 等于块数、知识叶 / 视觉叶在全轮上轮转、`coverage` 在 `N >= U` 时饱和于 1.0"
-  这类可零成本复核的结构事实，比臂间 `q95` 排名更可靠。`q95` 用于**自证与回归**（同一构造的读数是否稳定），
-  不用于主张细微的算法优劣。
-  后两个 distinct 数不是装饰（§8）：它们正是"935 个格子"与"935 个不同规格"之间那道必须被读出来的差别。
-- 报告的措辞要求：当读数落在噪声带内时，不得写"某臂更优/更差"，只能报
-  **效应量 + CI 宽度 + 最小可辨差（≈ CI 半宽）**，并明确声明"不可分辨"。
-
-## 10. 计划身份与复现
+## 7. 计划身份与复现
 
 **计划由 `(本体, seed, N)` 唯一决定。** 采样只用显式的 `random.Random(seed)` 派生生成器
 （`ard.core.sampling._free_rng` 等），自由轴取值来自本体的有序数组，受限块按固定嵌套顺序枚举
@@ -395,8 +303,8 @@ prompt 就**逐字节相同**。所以读数把标称块数与两个 distinct �
 
 **绑定规则**：
 
-1. **产品级读数（`q95` / `Extent` / 覆盖与密度）只能绑定到 `plan_identity.digest`**：写报告时引用该摘要，
-   而不是引用 seed；两个摘要相同才允许把两次读数并列比较。
+1. **结构读数（覆盖与密度）只能绑定到 `plan_identity.digest`**：写报告时引用该摘要，而不是引用 seed；
+   两个摘要相同才允许把两次读数并列比较。
 2. **续跑守卫比的是"逐条坐标一致"，不是摘要相等**（`ard.pipeline._refuse_foreign_records_on_resume`）：
    id 是位置序号（§3），smoke 计划与全量计划的 id 形状相同却指向不同坐标，所以守卫逐条比对已有记录
    在其 id 位置的坐标；不一致 ⇒ 拒绝续跑（明确报错并提示换目录），绝不把两份计划的锚点写进同一份
@@ -409,57 +317,3 @@ prompt 就**逐字节相同**。所以读数把标称块数与两个 distinct �
 **本体身份自动派生，文档零手抄。** 本体内容的 sha256（`ard.core.sampling.ontology_sha256`）由运行时
 算出并写进 `plan_identity` / `manifest.json`（`ard.pipeline._declare_plan_readout`）——用户无需登记任何
 指纹，文档也不维护任何指纹表。
-
-## 11. 目标集样例的构造规则
-
-`examples/target_set.sample.jsonl` 是**接线样例（wiring sample），不是产品目标集**。它的构造规则写在文件头
-（`axes` / `selection` / `template` 三个字段）里，机器可读、可复算：
-
-- **用到的轴**：`knowledge_domain` 与 `language`（取自 `ontology/anchor_ontology.v4.json`）；
-- **`knowledge_domain` 取法**：按 `knowledge_domain_tree` 的文档序展开成叶值列表，
-  取下标 `floor(k × (len − 1) / 7)`，`k = 0..7` —— 等距 8 个，**含首尾**；
-- **`language` 取法**：`axes.language.values` 的**全部**取值，按本体序；
-- **文本模板**（唯一一条，逐字）：
-  `Explain {leaf} in depth: what it is, how it is studied, and why it matters. Answer in {language}.`
-- **顺序与数量**：`knowledge_domain` 外层、`language` 内层，共 **8 × 4 = 32 条**；文件头声明
-  `expected_count: 32`，条目数不符即被 `load_target_set` 拒绝。
-
-该文件不含端点、密钥、模型名或个人信息。文件是**一行 JSON 文档**（外层是带 `targets` 数组的对象），
-这同时满足 JSONL 的"一行一个 JSON 值"与 `load_target_set` 的"对象文档可带头部"两种读法——JSONL 逐行读取
-时不支持头部，头部因此只能由对象文档承载。
-
-**它不保证读出的数字有意义**：32 条同模板句子的自身尺度很小（本机离线 MiniLM 384-d 下 ε ≈ 0.021，
-故 `Extent(ε)` 通常为 0）。样例只证明"目标集 → 嵌入 → 距离 → 读数"这条**接线**通，不构成任何覆盖结论；
-产品级读数需要真正的目标集与真正的锚点库。
-
-## 12. 复核指标路径：三步
-
-指标读数**完全由配置驱动**（没有 CLI 开关，`ard.config.CoverageConfig`）。要让复核员能零成本复跑：
-
-1. **配嵌入器**：在 `.local/config.override.toml`（被 gitignore 的本机覆写文件，**绝不入库**）里写
-   `[coverage.embedding]`。下文只给**字段名与占位符**，不给真实端点/模型/密钥：
-
-   ```toml
-   [coverage.embedding]
-   api_base = "<OpenAI 兼容的 /embeddings 基址，含 /v1>"
-   model = "<嵌入模型名>"
-   dimension = <该模型的向量维度>
-   # api_key = "<服务端需要时填>"
-   # batch_size = 32
-   # normalize = true      # 必须为 true：尺子要求 L2 归一化行
-   ```
-
-2. **指向目标集**：设 `coverage.target_set_path`。仓库自带一个小而确定的样例
-   （`examples/target_set.sample.jsonl`，32 条，构造规则见 §11），开箱可用：
-
-   ```toml
-   [coverage]
-   target_set_path = "examples/target_set.sample.jsonl"
-   ```
-
-3. **跑一次**：`--smoke`（8 条锚点，几分钟）或完整运行。产物在 `<output_dir>/results/coverage.json`
-   与 `coverage.md`：`metrics.space` 是空间声明，`metrics.quantiles.q95` 是主读数。
-
-三种配置组合的行为见 `docs/architecture.md` §8 的契约表：都没设 ⇒ 结构读数 + WARNING；只设目标集不配
-嵌入器 ⇒ fail-fast 报错；两者都设 ⇒ 指标读数。只想验证接线、不想调用生成端点时，可以对**已有的**
-`anchor_bank.jsonl` 直接调用 `ard.pipeline._prepare_coverage` + `ard.pipeline._run_acceptance`。

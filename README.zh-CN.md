@@ -44,8 +44,7 @@ registry 拉取它——受限网络或离线机器需要先在本机备好这�
 mkdir -p .local && cp configs/config.override.sample.toml .local/config.override.toml
 ```
 
-然后填写 `[input_generator]` 与 `[target_model]` 的 `api_base`、`model_name`、`api_key`
-（只有在需要 `q95` 读数时才填 `[coverage.embedding]`）。
+然后填写 `[input_generator]` 与 `[target_model]` 的 `api_base`、`model_name`、`api_key`。
 
 `mkdir -p` 不是装饰：`.local/` 被 gitignore，全新 clone 里没有这个目录，直接 `cp` 会以
 `No such file or directory` 失败。**如果 `.local/config.override.toml` 已存在，请直接编辑它，
@@ -103,9 +102,9 @@ bash docker/build.sh
 `[output] directory` 可以钉住目录名）。几分钟后应当看到：
 
 - `anchor_bank.jsonl`——8 条锚点，`schema_version` 为 `5.0.0`；
-- `results/coverage.json` + `results/coverage.md`——验收读数（`report_schema
-  "ard-acceptance-3"`）。结构读数零模型调用、恒产出；未配置目标集时 `metrics: null` 加一条
-  WARNING，明说指标读数没有测。报告绝不假装 8 条锚点就是一份完整轮的交付物；
+- `results/coverage.json` + `results/coverage.md`——零模型的结构读数（`report_schema
+  "ard-acceptance-4"`）：计划计数对照构造规则，含 `within_rule` 与多样性计数。不调用模型、
+  不访问端点、恒产出。报告绝不假装 8 条锚点就是一份完整轮的交付物；
 - `manifest.json`——库构成，外加 `plan_identity`（v2）与 `plan`、`images` 两段；
 - `config.toml` 与 `logs/`。运行尚未结束时还会有一份 `plan_identity.in_progress.json`：
   把目录绑定到计划的中间记录；运行完成后它会被删掉，目录里只留 `manifest.json` 作为申报。
@@ -238,8 +237,7 @@ count = 5000
 | `[ontology]` | v4 本体路径（`ontology/anchor_ontology.v4.json`） |
 | `[output]` | `directory`（留空 = `outputs/ard_dataset_<timestamp>`）、`overwrite`（默认 `false`：已有锚点库是续跑，不是替换） |
 | `[images]` | `convert`（默认 **`true`**）：接受 RAW/BMP/TIFF/GIF/WebP 并把选中的图统一转成 JPEG（RAW 另需可选 `raw` extra）；设 `false` 则只接受已适合网络的格式并原样复制。`skip_missing_images`（默认 **`false`**）：某个域自己的目录里没有图时，会从整棵图片树复用一张；整棵树一张可用图都没有时，运行直接报错。设成 `true` 则改为丢弃这些锚点——每丢一条打一条 WARNING，条数与涉及的域在 `manifest.json` 里申报 |
-| `[coverage]` | `enabled`（默认 `true`）与 `target_set_path`——指标读数用的目标集；留空即只出结构读数 |
-| `[coverage.embedding]` | 指标读数用的 OpenAI 兼容 `/embeddings` 端点、模型、期望 `dimension`、批大小与超时 |
+| `[coverage]` | `enabled`（默认 `true`）：把零模型的结构读数写进 `results/`。设成 `false` 则整个相位跳过 |
 
 `configs/config.override.sample.toml` 就是第 1 步复制的那个注释模板；部署值（端点、模型名、凭证）
 放这里，绝不写进 `configs/config.toml` 本身。
@@ -263,7 +261,7 @@ outputs/<run_name>/          # 默认 ard_dataset_<YYYYmmdd_HHMMSS>；--smoke �
 ├── images/                  # 影像态锚点图片的落点：images/<visual_domain>/<图片文件>（转码或复制而来，同一源文件只落一份）；只有本次带影像态锚点时才创建
 ├── logs/                    # ard.log / ard_debug.log / ard_error.log
 ├── results/
-│   ├── coverage.json        # 机器可读的验收读数（report_schema ard-acceptance-3）
+│   ├── coverage.json        # 机器可读的结构读数（report_schema ard-acceptance-4）
 │   └── coverage.md          # 同一份读数的人读版
 └── manifest.json            # 库构成、运行健康、配置、plan_identity v2、plan 段、images 段、acceptance 指针（权威申报）
 ```
@@ -277,49 +275,11 @@ outputs/<run_name>/          # 默认 ard_dataset_<YYYYmmdd_HHMMSS>；--smoke �
 `--smoke` 产物会在目录名、日志与 `manifest.smoke` 三处自报身份。逐字段说明、计数器口径与续跑守卫见
 [docs/architecture.md](docs/architecture.md) 第 4 节。
 
-`results/coverage.{json,md}` 是**验收读数，不是训练数据**（`report_schema "ard-acceptance-3"`）：
-
-- **结构读数**（计划计数 vs 本次运行自己的 `N` 与轮分解，含 `coverage` / `density` / `full_rounds`）
-  恒产出，且零成本——不调用任何模型；
-- **指标读数**（`q95`、带 ε±5% 敏感带的 `Extent(ε)`、配对 bootstrap CI、噪声带）需要同时配置
-  `coverage.target_set_path` 与 `[coverage.embedding]`。
-
-两者缺一时，运行只写结构读数，并用 WARNING 明说缺口（`metric readout not measured …`），
-`acceptance.metric_readout: false`、`acceptance.q95: null`——绝不产出一份"看起来干净"的报告。
-尺子的定义、覆盖与密度之别、以及它的分辨力边界见 [docs/algorithm.md](docs/algorithm.md) §5–§9。
-
-指标空间**只含文本**：图像模态锚点以其最终 user 轮的**文本部分**参与，**图像像素不进该空间**。
-
-### 自己复跑指标读数
-
-指标读数由配置驱动，没有 CLI 开关：
-
-1. 在 `.local/config.override.toml`（被 gitignore 的本机覆写文件）里配 `[coverage.embedding]`。
-   下面只给**字段名与占位符**，绝不要把真实端点、模型名或密钥写进仓库：
-
-   ```toml
-   [coverage.embedding]
-   api_base = "<OpenAI 兼容的 /embeddings 基址，含 /v1>"
-   model = "<嵌入模型名>"
-   dimension = <该模型的向量维度>
-   # api_key = "<服务端需要时填>"
-   # normalize = true      # 必须为 true：尺子要求 L2 归一化行
-   ```
-2. 用 `coverage.target_set_path` 指向目标集。仓库自带一个小而确定的样例
-   `examples/target_set.sample.jsonl`（32 条；构造规则写在其文件头与
-   [docs/algorithm.md](docs/algorithm.md) §11），开箱可用：
-
-   ```toml
-   [coverage]
-   target_set_path = "examples/target_set.sample.jsonl"
-   ```
-3. 跑 `--smoke`（8 条锚点，几分钟）或完整运行。读数落在
-   `<output_dir>/results/coverage.{json,md}`。
-
-三种配置组合是**契约**，不是建议：**两者都未设** ⇒ 结构读数 + WARNING；**只设
-`target_set_path`、`[coverage.embedding]` 不全** ⇒ 加载配置时即被拒，报文列出缺失字段，
-且早于创建任何输出目录；**两者都设** ⇒ 产出指标读数。完整步骤见
-[docs/algorithm.md](docs/algorithm.md) §12。
+`results/coverage.{json,md}` 是**结构读数**，不是训练数据（`report_schema "ard-acceptance-4"`）：
+计划计数对照本次运行自己的采样空间与磁盘上真实落库的记录——`coverage`、`density`、轮分解、
+`within_rule` 与两个多样性计数。它**不调用模型、不访问端点**，只要 `[coverage] enabled = true` 就产出。
+库里少了某条计划坐标时读数会如实写出来——`within_rule: false`，并在 `warnings` 里点名缺失坐标——
+绝不产出一份看似干净的报告。定义见 [docs/algorithm.md](docs/algorithm.md) §5–§6。
 
 ## 添加一个知识领域
 
@@ -362,8 +322,7 @@ uv run mypy src/ard/
 新锚点；否则请换新的 `output.directory`，或设 `[output] overwrite = true` 清空已有锚点库重新开始。
 
 **端点缺失或连不上怎么办？**
-缺 `api_base` / `model_name`（或设了 `target_set_path` 却漏配 `[coverage.embedding]`）会在
-config 加载阶段被拒，报文点名缺失字段，且早于创建任何输出目录。端点连不上或调用失败会按
+缺 `api_base` / `model_name` 会在 config 加载阶段被拒，报文点名缺失字段，且早于创建任何输出目录。端点连不上或调用失败会按
 `max_retries`、`retry_on_timeout` 重试，连续失败达到背压阈值后按配置的冷却时间暂停。
 
 **缺图会怎样？**
@@ -387,17 +346,6 @@ extra，而不进默认依赖集：`uv sync --extra raw`（见 [不用 Docker �
 MPL-2.0、`tqdm` 是 `MPL-2.0 AND MIT`、`typing-extensions` 是 PSF-2.0，其余为
 MIT / BSD-3-Clause / MIT-CMU。完整清单与读取它的命令见 [`CONTRIBUTING.md`](CONTRIBUTING.md#third-party-licences)；
 本仓库只陈述这些事实，合规判断留给你。
-
-**为什么 q95 是主尺子而覆盖率只作参考？**
-`q95` 是每个目标点到其最近锚点距离的 95 分位（Hyndman–Fan type-7）——一个尾部统计量，读作
-"目标集里最难覆盖的那 5% 到底有多远"。`Extent(ε)` 只作次级读数，因为它随 ε 的取法而变，所以与
-自己的 ε±5% 敏感带并列发布，而不是当成一个过/不过的数字。定义见
-[docs/algorithm.md](docs/algorithm.md) §5。
-
-**噪声带是什么？**
-同一个坐标重复生成并不会得到同样的文本，同一坐标的两个回答之间因此存在一段距离。噪声带就是这些
-同坐标配对距离的分布 `[q50, max]`；落在这个带内的 `q95` 差值**无法**与生成随机性区分开。细节见
-[docs/algorithm.md](docs/algorithm.md) §6。
 
 **`MULTI_TURN_DEFAULT = 4` 是什么口径？**
 本体对两个 `conversation_type` 只写了 `turns: "multi"`，没有数值上界；实现把"multi"读作**本体

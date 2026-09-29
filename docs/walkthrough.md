@@ -3,8 +3,8 @@
 This page is the plain-language layer between the two READMEs and the technical docs. Its job is
 the half the READMEs keep short: **what the program does after you press Enter**, where the
 results land, and the questions that come next. For the exact construction rule see
-[docs/algorithm.md](algorithm.md) §2; for the acceptance ruler see
-[docs/algorithm.md](algorithm.md) §5–§9; for the module boundaries and data flow behind these
+[docs/algorithm.md](algorithm.md) §2; for the coverage / density readout and the structure check see
+[docs/algorithm.md](algorithm.md) §5–§6; for the module boundaries and data flow behind these
 steps see [docs/architecture.md](architecture.md) §1–§2.
 
 **What you have to do lives in exactly one place** — the
@@ -61,14 +61,13 @@ A few words used below:
    `anchor_bank.jsonl`, so an interrupted run keeps what it already produced. At the end the run
    writes `manifest.json`: the plan it used, what it covered, how the pictures were used, and the
    failure counters. The plan it used is named by a digest, not by the seed
-   (`docs/algorithm.md` §10).
+   (`docs/algorithm.md` §7).
 10. **Computes the readout.** *Coverage* asks how much of one round's grid the run touched (a ratio
     that saturates at 1.0). *Density* asks how many anchors there are per grid cell (`N / U`) and
-    keeps growing with N. *`q95`* is a distance readout — the 95th percentile of each target point's
-    distance to its nearest anchor — and smaller means the anchors land closer to the target set.
-    The structure readout needs no model call; `q95` needs an embeddings endpoint and a target set,
-    and without them the run announces the gap in a WARNING instead of pretending
-    (`docs/algorithm.md` §7 and `docs/architecture.md` §8).
+    keeps growing with N. Both are **structure only**: the check compares the plan against this
+    run's own sampling space and against the records actually on disk, needs **no model call and no
+    endpoint**, and flags a missing anchor with `within_rule: false` instead of a clean-looking
+    pass (`docs/algorithm.md` §5 and `docs/architecture.md` §8).
 11. **When something fails.** A network error, or a model that spends its whole budget on hidden
     thinking and returns no answer, drops **that anchor**: it is not written, and it is counted in
     the manifest's failure report. Nothing is faked. Re-running the same output directory resumes —
@@ -90,7 +89,7 @@ README's Output section.
 | `manifest.json` | the run's own declaration: plan, composition, health, image use | whether the run is complete, and what it was meant to be |
 | `config.toml` | the merged settings this run used (secret values masked) | which settings produced this output — it is itself a usable `--config` |
 | `images/<visual_domain>/<file>` | the pictures placed for this run | which image an image anchor uses |
-| `results/coverage.json`, `results/coverage.md` | coverage, density and `q95`, machine- and human-readable | how well the run covers the space |
+| `results/coverage.json`, `results/coverage.md` | coverage, density and the `within_rule` structure check, machine- and human-readable | how well the run covers the space, and whether the plan can be trusted |
 | `logs/` | the run's log files | the detail behind a warning or a failure |
 | `plan_identity.in_progress.json` | only while a run is unfinished: binds the directory to its plan | what plan an interrupted directory belongs to |
 

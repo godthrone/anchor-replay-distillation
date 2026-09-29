@@ -51,7 +51,7 @@ mkdir -p .local && cp configs/config.override.sample.toml .local/config.override
 ```
 
 Then fill in `api_base`, `model_name` and `api_key` for `[input_generator]` and
-`[target_model]` (and, only if you want the `q95` readout, `[coverage.embedding]`).
+`[target_model]`.
 
 The `mkdir -p` is not decoration: `.local/` is gitignored, so a fresh clone does not have it and
 `cp` would fail with `No such file or directory`. If `.local/config.override.toml` **already
@@ -114,10 +114,10 @@ The artifact lands in `outputs/<run_name>/` (default `ard_dataset_<YYYYmmdd_HHMM
 `[output] directory` in the config to pin the name). After a few minutes you should have:
 
 - `anchor_bank.jsonl` — the 8 anchors, `schema_version` `5.0.0`;
-- `results/coverage.json` + `results/coverage.md` — the acceptance readout
-  (`report_schema "ard-acceptance-3"`). The structure readout needs no model call and is always
-  written; with no target set configured, `metrics: null` and a WARNING say the metric readout
-  was not measured. The report never pretends 8 anchors are a full-round delivery;
+- `results/coverage.json` + `results/coverage.md` — the zero-model structure readout
+  (`report_schema "ard-acceptance-4"`): plan counts against the construction rule, with
+  `within_rule` and the diversity counts. No model call, no endpoint, always written. The report
+  never pretends 8 anchors are a full-round delivery;
 - `manifest.json` — composition, `plan_identity` (v2), the `plan` and `images` sections;
 - `config.toml` and `logs/`. While the run is still going there is also
   `plan_identity.in_progress.json`, the intermediate record that binds the directory to its plan;
@@ -267,8 +267,7 @@ input locations and run boundaries only: `--config` (required), `--override`, `-
 | `[ontology]` | Path to the v4 ontology (`ontology/anchor_ontology.v4.json`) |
 | `[output]` | `directory` (empty = `outputs/ard_dataset_<timestamp>`), `overwrite` (default `false`: an existing bank is resumed, not replaced) |
 | `[images]` | `convert` (default **`true`**): accept RAW/BMP/TIFF/GIF/WebP and normalise every selected picture to JPEG (RAW additionally needs the optional `raw` extra); `false` accepts only the already-web formats and copies them verbatim. `skip_missing_images` (default **`false`**): a domain whose own directory has no picture reuses one from the whole image tree; if the whole tree has no usable picture at all, the run is refused. Set it to `true` to drop those anchors instead — each drop is a WARNING, and the count and the affected domains are declared in `manifest.json` |
-| `[coverage]` | `enabled` (default `true`) and `target_set_path` — the target set for the metric readout; empty means structure readout only |
-| `[coverage.embedding]` | The OpenAI-compatible `/embeddings` endpoint, model, expected `dimension`, batch size and timeouts used by the metric readout |
+| `[coverage]` | `enabled` (default `true`): publish the zero-model structure readout to `results/`. Set it to `false` to skip the phase entirely |
 
 `configs/config.override.sample.toml` is the commented template step 1 copies; it is where
 deployment values (endpoints, model names, credentials) go, never `configs/config.toml` itself.
@@ -294,7 +293,7 @@ outputs/<run_name>/          # default ard_dataset_<YYYYmmdd_HHMMSS>; --smoke ap
 ├── images/                  # image-modality anchors' pictures: images/<visual_domain>/<file> (transcoded or copied, one placed copy per source file); created only when this run has image anchors
 ├── logs/                    # ard.log / ard_debug.log / ard_error.log
 ├── results/
-│   ├── coverage.json        # machine-readable acceptance readout (report_schema ard-acceptance-3)
+│   ├── coverage.json        # machine-readable structure readout (report_schema ard-acceptance-4)
 │   └── coverage.md          # the same readout, human-readable
 └── manifest.json            # composition, run health, config, plan_identity v2, plan, images, acceptance pointer (the authoritative one)
 ```
@@ -311,54 +310,13 @@ the finished `manifest.json`; a `--smoke` artifact declares itself in its direct
 and `manifest.smoke`. Field reference, counter semantics and the resume guard:
 [docs/architecture.md](docs/architecture.md) §4.
 
-`results/coverage.{json,md}` is the acceptance readout, not training data
-(`report_schema "ard-acceptance-3"`):
-
-- the **structure readout** (plan counts vs. this run's own `N` and round decomposition,
-  including `coverage` / `density` / `full_rounds`) is always produced and costs nothing — no
-  model call;
-- the **metric readout** (`q95`, `Extent(ε)` with the ε±5% band, paired bootstrap CI, noise
-  band) requires both `coverage.target_set_path` and `[coverage.embedding]`.
-
-Without them the run writes the structure readout only and announces the gap in a WARNING
-(`metric readout not measured …`), with `acceptance.metric_readout: false` and
-`acceptance.q95: null` — never a silently clean report. The definitions of the ruler, of coverage
-vs. density, and of its resolution limits are in [docs/algorithm.md](docs/algorithm.md) §5–§9.
-
-The metric space holds **text only**: an image-modality anchor takes part through the text
-parts of its final user turn, and its image pixels never enter the space.
-
-### Re-run the metric readout yourself
-
-The metric readout is config-driven — there is no CLI flag for it:
-
-1. Put an embeddings endpoint in `.local/config.override.toml` (the gitignored override).
-   Field names and placeholders only — never commit a real endpoint, model name or key:
-
-   ```toml
-   [coverage.embedding]
-   api_base = "<OpenAI-compatible base URL, including /v1>"
-   model = "<embedding model name>"
-   dimension = <vector length>
-   # api_key = "<only if the server needs one>"
-   # normalize = true        # must stay true: the ruler needs unit-norm rows
-   ```
-2. Point `coverage.target_set_path` at a target set. The small, deterministic sample
-   `examples/target_set.sample.jsonl` (32 entries; the construction rule is declared in its
-   file header and in [docs/algorithm.md](docs/algorithm.md) §11) works as is:
-
-   ```toml
-   [coverage]
-   target_set_path = "examples/target_set.sample.jsonl"
-   ```
-3. Run `--smoke` (8 anchors, minutes) or a full run. The readout lands in
-   `<output_dir>/results/coverage.{json,md}`.
-
-The three configuration combinations are a contract, not a suggestion: **neither** set →
-structure readout + a WARNING; `target_set_path` set but `[coverage.embedding]` incomplete →
-the run is refused at config load with the missing field(s) named, before any output
-directory exists; **both** set → the metric readout. Worked detail:
-[docs/algorithm.md](docs/algorithm.md) §12.
+`results/coverage.{json,md}` is the **structure readout**, not training data
+(`report_schema "ard-acceptance-4"`): plan counts against this run's own sampling space and the
+records actually on disk — `coverage`, `density`, the round decomposition, `within_rule` and the
+two diversity counts. It needs **no model call and no endpoint** and is produced whenever
+`[coverage] enabled = true`. When the bank is missing a planned coordinate the readout says so —
+`within_rule: false` plus the missing coordinates named in `warnings` — never a silently clean
+report. Definitions: [docs/algorithm.md](docs/algorithm.md) §5–§6.
 
 ## Adding a knowledge domain
 
@@ -409,9 +367,8 @@ same directory and the new anchors are appended; otherwise use a new `output.dir
 `[output] overwrite = true` to clear the existing bank and start fresh.
 
 **An endpoint is missing or unreachable.**
-A missing `api_base` / `model_name` (or an incomplete `[coverage.embedding]` when
-`target_set_path` is set) is refused at config load, with the field names in the message and
-before any output directory is created. Failing endpoint calls are retried (`max_retries`,
+A missing `api_base` / `model_name` is refused at config load, with the field names in the message
+and before any output directory is created. Failing endpoint calls are retried (`max_retries`,
 `retry_on_timeout`), and past the backpressure threshold the run pauses for the configured
 cooldown.
 
@@ -442,18 +399,6 @@ MIT/Apache: `certifi` is MPL-2.0, `tqdm` is `MPL-2.0 AND MIT`, `typing-extension
 and the rest are MIT / BSD-3-Clause / MIT-CMU. [`CONTRIBUTING.md`](CONTRIBUTING.md#third-party-licences) carries the
 full list and the command that reads it out of an installed environment; this repository states
 those facts only and leaves any compliance judgement to you.
-
-**Why is `q95` the main ruler while coverage is only a reference?**
-`q95` is the 95th percentile (Hyndman–Fan type 7) of each target point's distance to its nearest
-anchor — a tail statistic reading "how far is the worst-served 5% of the target set". `Extent(ε)`
-is secondary only, because it moves with the choice of ε, so it is published with its ε±5% band
-rather than as a pass/fail number. Definitions: [docs/algorithm.md](docs/algorithm.md) §5.
-
-**What is the noise band?**
-Regenerating the same coordinate does not reproduce the same text, so two answers for one
-coordinate sit some distance apart. The noise band is the distribution of those same-coordinate
-pairwise distances, `[q50, max]`; a `q95` difference inside it cannot be distinguished from
-generation randomness. Detail: [docs/algorithm.md](docs/algorithm.md) §6.
 
 **What does `MULTI_TURN_DEFAULT = 4` mean?**
 The ontology declares `turns: "multi"` for two `conversation_type` values without a numeric upper
