@@ -1,18 +1,22 @@
 # ARD 架构
 
-> 职责：说明 ARD 的模块边界、数据流、入口链路、输出目录布局与配置分层。本文件只写结构级的"为什么"与模块职责；
-> 实现细节、算法口径、验收尺子分别见 `docs/algorithm.md` 与 `docs/measurement.md`，代码级细节见各模块 docstring
+> 职责：说明 ARD 的**系统结构**——四层模块的职责与接口、数据流、入口链路与镜像运行、输出目录布局与
+> 产物申报、配置分层、图像寻址、措辞契约，以及验收读数的组装。
+>
+> **规则与尺子的定义不在本页**：构造规则、锚点 id、轮数口径、距离/分位/ε/噪声/覆盖口径、计划身份
+> 见 `docs/algorithm.md`；人话版流程见 `docs/walkthrough.md`。代码级细节见各模块 docstring
 > （宪法 §17.2 / §12.4）。
 >
 > 引用约定：本页一律使用**符号引用**（如 `ard.pipeline.run`、`ard.domain.bank.append_anchor`），
-> **不写 `文件:行`**——行号会随任何代码改动漂移，符号名不会。
+> **不写 `文件:行`**——行号会随任何代码改动漂移，符号名不会。规则原文见 `CONTRIBUTING.md` 的
+> "Referencing Code in New Text"；符号查找示例见本页 §10。
 
 ARD（Anchor Replay Distillation）从本体 v4 的坐标空间中构造锚点计划，调用输入生成模型产出用户轮、
 调用目标（teacher）模型产出回答，落成 JSONL 锚点库与 manifest，并在同一轮内给出验收读数
 （`q95` / 覆盖率 / 密度）。它不训练模型、不做数据蒸馏；产物是训练语料与验收报告。
 
 计划条数 N 由用户在 `configs/config.toml` 的 `[generation] count` 设置，**无上限**，缺省 = 一个完整轮 = 单元数 U；
-采样规则是**随机顺序轮转**（cycle-shuffle），详见 `docs/algorithm.md`。
+采样规则是**随机顺序轮转**（cycle-shuffle），定义见 `docs/algorithm.md` §2。
 
 ## 1. 模块边界
 
@@ -122,10 +126,11 @@ flowchart TD
   该目录没有可用图时退回整棵图片树的全局池（`list_pool_images`）并同样按轮次轮转，因此只给一张图也能
   跑完整轮。只有整棵树都没有可用图时域才算真的缺图，在**创建输出目录之前**被拒绝，除非显式配置
   `[images] skip_missing_images = true`。复用与否由 `DomainImageResolution.fallback` 记录并进入 manifest。
+  完整约定见本页 §6。
 - **验收读数不参与生成**：`q95` 等读数在生成完成后计算，读的是已落盘记录与用户提供的目标集，
-  不影响采样与生成（`ard.pipeline._run_acceptance`）。
+  不影响采样与生成（`ard.pipeline._run_acceptance`）；组装见本页 §8，尺子定义见 `docs/algorithm.md` §5–§7。
 
-## 3. 入口链路
+## 3. 入口链路与镜像运行
 
 ```mermaid
 flowchart LR
@@ -154,8 +159,9 @@ flowchart LR
   `[images] convert` 决定，不进 CLI；计划条数由 `[generation] count` 决定，**没有 `--count`**（宪法 §10.1）。
 - `ard.pipeline.run` 在**创建输出目录之前**先做端点边界校验与验收输入校验：缺 `api_base` / `model_name`、
   或目标集文件缺失/维度不符，都在零副作用的前提下拒绝（§2.3 边界校验即防呆）。
+- 镜像与依赖的固定方式（可复现的第一层）见本页 §9。
 
-## 4. 输出目录布局
+## 4. 输出目录布局与产物申报
 
 目录树（纯文本结构，非 ASCII 图；宪法 §17.2 明确豁免）：
 
@@ -182,10 +188,9 @@ outputs/<run_name>/            # 默认 ard_dataset_<YYYYmmdd_HHMMSS>；--smoke 
   `ard_progress_record: "plan_identity/v1"`，并且**故意不含** `generation` 计数器——那些数字在运行结束前
   根本不存在。它的作用只有一个：让一个没走完的运行目录**也能被绑定到某个计划**
   （大批量那条路几乎必然被中断/续跑，中间态是常态）。
-- **绑定与复算**：记录里的 `plan_identity` 与 manifest 是同一份定义（`ard.core.sampling.PlanIdentity.of`，
-  有序坐标列表的 sha256 + 条数 + 版本 + 本体哈希 + seed + count + U）。审计中断产物时可独立复算：
-  取出计划的有序坐标（或按 id 重建），跑 `PlanIdentity.of(...)`，与记录里的 `digest` 逐位比对
-  ——不是读一个无法验证的字符串。
+- **绑定与复算**：记录里的 `plan_identity` 与 manifest 是同一份定义（`ard.core.sampling.PlanIdentity.of`）。
+  审计中断产物时可独立复算：取出计划的有序坐标（或按 id 重建），跑 `PlanIdentity.of(...)`，
+  与记录里的 `digest` 逐位比对——不是读一个无法验证的字符串。摘要的定义见 `docs/algorithm.md` §10。
 - **计数器是计划口径，不得当进度或最终申报**：记录的 `counters`（`existing` / `new` / `written`）在
   **第一次端点调用之前**定稿，此后不再刷新——`existing` = 本次调用开始时库里已有的锚点数（实读：库被读回来算续跑差值），
   `new` = 本次向生成器索要的锚点数（`len(specs)`，影像域过滤后的待生成坐标），`written` = **与 `new` 同值**：
@@ -211,20 +216,20 @@ outputs/<run_name>/            # 默认 ard_dataset_<YYYYmmdd_HHMMSS>；--smoke 
   正确判据是**逐条比对已有记录在其 id 所指位置上的坐标是否与新计划一致**（`ard.pipeline._coordinate_matches`）：
   一致 ⇒ 追加（把 `[generation] count` 调大后重跑同一目录即走这条路）；不一致 ⇒ `ConfigError` 拒绝，
   并提示换目录或显式 `output.overwrite = true`。**守卫的读数来源有两个**：已有 manifest 的 `plan_identity`，
-  或（上一次没走完时）中间记录的 `plan_identity`——两个都比。
+  或（上一次没走完时）中间记录的 `plan_identity`——两个都比。判据规则见 `docs/algorithm.md` §10。
 - `manifest.json` 由 `ard.domain.bank.build_manifest_from_records` 组装库构成
   （`total_anchors` / `domains` / `languages` / `capabilities` / `system_prompt_modes` / `data_sources` / `output_dir`），
   再挂上运行健康、`plan_identity` v2（`ard.pipeline._declare_plan_identity`）、
   `plan` 段（`ard.pipeline._declare_plan_readout`）、`images` 段（`ard.pipeline._declare_images`）
   与 `acceptance` 指针；**只在本次真的重新生成**时落盘——空转调用若发现 manifest 已记录同一 `plan_identity`，
-  保持原文不动。
+  保持原文不动。各字段清单见本页 §8。
 - `plan` 段是"计划多大、覆盖多少、密度多少"的唯一机器可读出处：`count`（N 原样，`None` = 一轮）、
   `unit_total`（U）、`full_cycles` / `last_cycle_size`（轮分解）、`planned_anchors` / `written_anchors`、
-  `distinct_coordinates`、`coverage_ratio`（`min(distinct, U) / U`）、`density`（`N / U`）、`smoke`，
-  以及本体哈希与 seed。口径定义见 `docs/measurement.md`。
+  `distinct_coordinates`、`coverage_ratio`、`density`、`smoke`，以及本体哈希与 seed。
+  口径定义见 `docs/algorithm.md` §7。
 - `results/coverage.{json,md}` 是**验收读数**，不是训练数据：结构读数（计划计数 vs 构造规则，
   零模型调用）恒产出；指标读数（`q95` 等）只在配置了 `coverage.target_set_path` 与 `[coverage.embedding]`
-  时产出，否则显式 WARNING。字段与口径见 `docs/measurement.md`。
+  时产出，否则显式 WARNING。组装与字段见本页 §8。
 
 ## 5. 配置分层
 
@@ -251,7 +256,7 @@ flowchart TD
 - 合并与校验：`ard.config` 的深层合并 → 空串归一为 `None` → `ARDConfig.model_validate`
   （各段模型一律 `extra="forbid"`，拼错的字段名会报错而不是被忽略）。
 - 输出目录内的 `config.toml` 是**合并后**快照并已脱敏（`ard.pipeline._redact_secrets`）：密钥替换为占位符，
-  **端点与模型名保留**（§7.1 把端点归为环境字段，不是机密）。它与 manifest 的 `config` 段共用同一份脱敏字典
+  **端点与模型名保留**（宪法 §7.1 把端点归为环境字段，不是机密）。它与 manifest 的 `config` 段共用同一份脱敏字典
   （单一真相源），并且本身是合法的 `--config`，配合 `--override` 提供凭证即可重跑（§8.5）。
 
 ## 6. 图像按 `visual_domain` 寻址，缺图则从全局池轮转复用
@@ -302,13 +307,239 @@ flowchart TD
   且只考察**本轮放置/复用**的文件；记录集是**既有记录 ∪ 本轮写出记录**，所以同一张图被同域其它
   **已写出**锚点共享时**不删**（按记录引用判定，而非按锚点数），**断点续跑**时既有记录引用的图同样不删。
   删除失败只记 WARNING、不影响本轮运行。
-- **manifest 的 `images` 段**记录 `resolved_images`（每个 `(cycle, visual_domain, image, fallback)`
-  一行）、`domain_candidate_counts`（域名 → 该域目录下的可用文件数）、`pool_candidate_count`
-  （全局池大小）与 `fallback_visual_domains` / `fallback_anchor_count`（哪些域、多少条锚点用的是复用的
-  图），使"这一轮用哪张图、是自己的还是复用来的、每个域有多少备选"可审计——复用必须可见，
-  否则"复用的图够不够用"这个判断就无从谈起。
+- **manifest 的 `images` 段**记录本轮图片是怎么解析的：每张解析到的图一行、每个域自己的候选数、
+  全局池大小、复用的是哪些域与多少条锚点，以及（开启 `skip_missing_images` 时）跳过数与涉及域——
+  使"这一轮用哪张图、是自己的还是复用来的、每个域有多少备选"可审计，复用必须可见，
+  否则"复用的图够不够用"这个判断就无从谈起。字段清单见本页 §8。
 
-## 7. 引用约定
+## 7. 措辞契约：坐标与措辞分离
+
+本体只持坐标，措辞落成**数据文件**。本节是这两族数据的格式与加载边界；采样如何取到这些坐标见
+`docs/algorithm.md` §1–§2。
+
+本体自述 **"Coordinates only. No prompt wording, no sampling/weighting/experiment policy."**
+`wording_policy` 自述本体只持坐标、不得含 prompt 模板，并把措辞位置写成
+`configs/prompts/system_prompt/<system_prompt_mode>.md`。
+
+**该位置的效力**：`prompt_wording_location_recommendation.status` 逐字为
+"recommendation, implemented: one file per system_prompt_mode value exists at the target and is read by the production loader"，
+即**推荐，非硬性要求**（该字段是叙述该位置落地状态的说明，不是加载器读取的契约）；
+有约束力的是"坐标与措辞分离"本身。本工程按该推荐位置把措辞落地为数据文件，以下为**已实施的事实**。
+
+**数据位置**：`configs/prompts/system_prompt/` 下 5 个文件，文件名 = 本体轴 `system_prompt_mode` 的取值：
+`none.md`、`minimal_persona.md`、`detailed_persona.md`、`task_constraint.md`、`domain_style.md`。
+
+**文件格式**（唯一格式定义，另见 `configs/prompts/README.md`）：
+
+- 文件名恰为 `<system_prompt_mode>.md`，不读任何其他文件名；
+- 正文 = UTF-8 Markdown，无 front matter、无注释语法；**整份内容去掉首尾空白即模板**，不做任何解释；
+- 占位符**可选用且仅允许** `{language}` / `{capability}` / `{domain}`（`SYSTEM_PROMPT_TEMPLATE_FIELDS`），
+  按 `str.format` 从 `anchor_meta` 取 `language` / `knowledge_domain` / `capability`；其他占位符或不配对
+  花括号 = 加载错误；
+- `none.md` 是唯一例外：`none` 是"无 system message"的缺省态，没有生成措辞，该文件只**陈述**这一事实、
+  **永不被渲染**（`ard.core.system_prompt.require_present_mode` 对 `none` 显式报错）；每个文件（含它）都必须非空。
+
+**加载与报错语义**：措辞的契约与渲染是纯计算，落在 `ard.core.system_prompt`
+（目录常量 `SYSTEM_PROMPT_TEMPLATE_DIR`；模板路径校验 `system_prompt_template_path`、
+模板校验 `validate_system_prompt_template`、渲染 `render_system_prompt_prompt`），**不含任何内置措辞串**；
+**读文件**是设施动作，落在 `ard.backends.prompt_loader.load_system_prompt_template` 与组装入口
+`ard.backends.prompt_loader.build_system_prompt_prompt`——`core/` 内零文件访问（§1.3，
+由 `tests/core/test_core_is_pure.py` 守卫）。目录缺失、mode 无对应文件、文件为空、占位符非法**一律硬报错**，
+报文含**路径与期望**（§2.3），**不静默回退到硬编码**（那等于重建第二个真相源，§1.4）；
+报文只含路径与 mode 名，无机密（§15）。`system_prompt_mode = none` 时
+`ard.domain.text_anchor._generate_system_message` 直接返回 `None`，不发起任何请求。
+
+**模板目录来源单点**：system-prompt 模板目录只由 `SYSTEM_PROMPT_TEMPLATE_DIR` 一处声明
+（同一函数族里没有第二处可漂移的副本；读文件的设施层只接收该常量，不自行拼路径）；契约测试
+`test_template_dir_is_the_ontology_declared_location` 把它与本体声明的 `target`（`<system_prompt_mode>` 替换后）
+逐字对齐，任一侧漂移即在 CI 报错。**未新增 config 字段**：生成路径拿不到 config 对象，加字段就没有消费者（宪法 §7.2）。
+
+**行为不变**：5 个 mode 的最终渲染 prompt 与迁数据文件前**逐字节相同**，由契约测试
+`test_generation_prompt_is_byte_identical_to_the_old_in_code_wording` 以 sha256 固定
+（`tests/core/test_system_prompt.py`）。
+
+**`get_system_prompt_values` 与 `SYSTEM_PROMPT_GENERATION_INSTRUCTIONS` 已具名删除**（§18.1 不留死代码）：
+前者只是 `ontology.axis_values("system_prompt_mode")` 的 1:1 包装、生产路径 0 消费者；后者是被数据文件取代的
+内置措辞表。测试改用本体访问器（`tests/core/test_system_prompt.py`）。
+
+### 7.1 哪些轴会改变 prompt 文本
+
+- **有措辞的轴**（轴的取值会进入发给模型的 prompt 文本）：
+
+| 轴 | 措辞来源 | 实现符号 |
+|---|---|---|
+| `language` | 内联模板串（user 侧）+ 数据文件占位符 `{language}`（system-prompt 侧） | `ard.domain.text_anchor._build_user_prompt`、`_generate_system_message` |
+| `knowledge_domain` | 内联模板串 + 数据文件占位符 `{domain}` | 同上 |
+| `capability` | 内联模板串 + 数据文件占位符 `{capability}` | 同上 |
+| `conversation_type` | 内联模板串（作为 "conversation style" 回显；其 `turns` 另决定消息条数） | 同上 |
+| `system_prompt_mode` | **数据文件** `configs/prompts/system_prompt/<mode>.md`（5 个取值各一份） | `SYSTEM_PROMPT_TEMPLATE_DIR`、`load_system_prompt_template`、`render_system_prompt_prompt`；消费点 `_generate_system_message` |
+| `response_style` | **数据文件** `configs/prompts/axis_instruction/response_style.json`（7 取值各一句） | `ard.core.axis_instruction.AXIS_INSTRUCTION_DIR`、`render_axis_instructions`；组装 `ard.backends.axis_instruction_loader.build_axis_requirements` |
+| `output_format` | **数据文件** `configs/prompts/axis_instruction/output_format.json`（6 取值各一句） | 同上 |
+| `difficulty` | **数据文件** `configs/prompts/axis_instruction/difficulty.json`（3 取值各一句） | 同上 |
+| `context_length` | **数据文件** `configs/prompts/axis_instruction/context_length.json`（3 取值各一句） | 同上 |
+| `input_condition` | **数据文件** `configs/prompts/axis_instruction/input_condition.json`（6 取值各一句） | 同上 |
+| `answer_mode` | **数据文件** `configs/prompts/axis_instruction/answer_mode.json`（4 取值各一句） | 同上 |
+
+**6 条 instruction 轴的措辞数据**（"wording is data" 的第二个数据族，与 `system_prompt/` 平级，
+格式另见 `configs/prompts/README.md`）：`configs/prompts/axis_instruction/<axis>.json` 下 6 个文件，
+键 = 轴的取值，值 = 发给输入生成器的一句要求。纯契约在 `ard.core.axis_instruction`
+（`INSTRUCTION_AXES`、`AXIS_INSTRUCTION_DIR`、`validate_axis_instructions`、`render_axis_instructions`），
+读文件在 `ard.backends.axis_instruction_loader`（`load_axis_instructions` / `build_axis_requirements`）。
+取值缺指令 = **硬报错并点名轴、取值与文件**，无内置回退（§1.4、§2.3）；坐标不携带该轴（`None`）时该轴不加文本。
+
+**落点语义**：这 6 条轴约束的是**生成出的用户消息**，不是别的通道——`input_condition` 决定消息本身带何种缺陷，
+`context_length` 决定消息本身**携带多少上下文材料**（背景、设定、约束，或一长段可据以作答的材料），
+其余 4 条要求用户在提问里**索要**该风格 / 格式 / 难度 / 回答方式。`context_length` **不是"把提问写长"**：
+取值措辞要求 `long_context` 的答案**扎根于消息携带的材料**，而不是把同一个问题重述得更长；它也不是答案长度
+——锚点这一侧生成的就是用户消息，若改按答案长度落地，需要目标模型的 system 通道，会与
+`system_prompt_mode` 的语义冲突。本体只在 R7 的 rationale 里用 "input length" 指称该轴、**未定义其语义**；
+语义口径以生成侧措辞数据 `configs/prompts/axis_instruction/context_length.json` 为准。
+
+- **仅坐标的轴**（取值进入 `anchor_meta` / id / 统计，但**不改变 prompt 的文本措辞**）：
+
+| 轴 | 取值仍被谁使用（非措辞） | 实现符号 |
+|---|---|---|
+| `visual_domain` | **决定影像态图片目录** `<image_dir>/<visual_domain>/`；进 manifest 分组标签 | `ard.domain.image_store.domain_directory` / `resolve_domain_images`；调用点 `ard.pipeline._assign_images_by_domain`；分组标签 `ard.domain.bank.append_anchor` |
+
+> 上表中的 6 条 `layer = "instruction"` 轴（`response_style` / `difficulty` / `context_length` /
+> `output_format` / `input_condition` / `answer_mode`）同时仍是非措辞用途的输入：采样坐标
+> （`ard.core.sampling.Coordinate`）与受限块合法性判定（`ard.core.constraints`）。
+
+**边界声明**：12 轴中 **11 轴的取值改变发给模型的 prompt 文本**（4 条 base 轴 + `system_prompt_mode` + 6 条
+instruction 轴）；唯一例外是 `visual_domain`——它不进文本，而是经图片目录影响**输入图像的内容**，属内容而非措辞。
+**不允许"吉祥物轴"**：守卫测试 `tests/domain/test_axis_influence_guard.py` 对 12 轴逐轴取两个
+只差该轴的坐标，断言生成侧请求四元组 `(I, S, T, V)` 不同；负向对照在临时去掉 6 条 instruction 轴的措辞时**恰好点名这 6 条**。
+
+### 7.2 `layer` 词表（本体无定义，本工程定义）
+
+本体（`ontology/anchor_ontology.v4.json`）给每条轴一个 `layer` 字段，取值 `content` / `form` /
+`instruction` / `modality`，但**全文无 legend、0 代码消费者**（`git grep -n "\.layer" -- src` 0 命中），
+即该词表本身**只有名字没有定义**。此处按四值对 12 轴的实际划分**给出定义**——**这是我方拟定的定义，
+不是本体的声明**（本体与本体指纹均未改动）：
+
+| `layer` | 定义（我方拟定） | 该层的轴 |
+|---|---|---|
+| `content` | 取值决定**内容主题与语言** | `language`、`knowledge_domain`、`capability` |
+| `form` | 取值决定**对话形态**（system message 的存在与风格、轮数） | `system_prompt_mode`、`conversation_type` |
+| `instruction` | 取值是**对生成内容的要求/指令**，必须作为措辞进入 prompt | `response_style`、`output_format`、`difficulty`、`context_length`、`input_condition`、`answer_mode` |
+| `modality` | 取值是**模态条件轴**，经输入通道（图片）生效 | `visual_domain`（R5 逐字称其为 "modality-conditional axis"） |
+
+定义与代码的一致性由测试锁定：`instruction` 层 = `ard.core.axis_instruction.INSTRUCTION_AXES`
+（契约测试 `test_instruction_axes_are_the_ontology_instruction_layer`），且 12 轴逐轴守卫见
+`tests/domain/test_axis_influence_guard.py`。
+
+## 8. 验收读数的组装：空间声明、产物字段与退化行为
+
+尺子本身（距离、分位、ε 敏感带、配对 bootstrap、噪声带、覆盖/密度、有效多样性、分辨力上限）定义在
+`docs/algorithm.md` §5–§9。本节只讲**读数是怎么组装与落盘的**。
+
+**读数流水线**（`ard.pipeline._prepare_coverage` / `_run_acceptance`）：
+
+```mermaid
+flowchart TD
+    A["锚点库 anchor_bank.jsonl"] --> B["anchor_texts()<br/>取最后一个 user 轮的文本部分<br/>（image 像素不入空间）"]
+    T["覆盖目标集 target_set_path"] --> U["load_target_set()<br/>计数/维度/epsilon 头校验"]
+    B --> E["EmbeddingClient /embeddings<br/>backends/embedding_client.py"]
+    U --> E
+    E --> N["L2 归一化 VectorSet"]
+    N --> D["nearest_anchor_distances<br/>d = min(1 - cos)"]
+    D --> Q["q50/q90/q95/r_max + |T|"]
+    D --> X["Extent(ε) 与 ε±5% 敏感带"]
+    N --> W["同格重复生成对距离 → 噪声带 [q50,max]"]
+    Q --> R["results/coverage.json + coverage.md"]
+    X --> R
+    W --> R
+```
+
+**空间声明要求**：每次指标读数必须**声明它是在什么空间里测的**（`ard.core.acceptance.SpaceDeclaration`）：
+
+| 字段 | 要求 | 值/来源 |
+|---|---|---|
+| `anchors_source` | 锚点向量来自哪个产物 | 锚点库路径（如 `outputs/<run>/anchor_bank.jsonl`） |
+| `anchor_field` | 嵌入的是该产物的哪个字段 | `messages[last].content(text parts only)`（最后一个 user 轮的**文本部分**） |
+| `targets_source` | 目标集文件路径 | `coverage.target_set_path` |
+| `target_field` | 嵌入目标条目的哪个字段 | `text`（`ard.core.acceptance.TARGET_TEXT_FIELD`） |
+| `n_anchor` / `n_target` | `|A|` / `|T|` | 实测矩阵行数 |
+| `embedder` | **嵌入器身份 = model + dimension + normalize** | `ard.core.acceptance.EmbedderIdentity`；由 `[coverage.embedding]` 解析 |
+| `distance` / `quantile_method` | 距离与分位定义 | `"1 - cos"`、`"linear"`（type-7） |
+| `epsilon` / `epsilon_source` | ε 及其来源 | 头部声明或目标集自身尺度 |
+
+**指标空间只含文本；图像模态以其文本部分参与，图像像素不进该空间。** 图像模态锚点的最终 user 轮
+`content` 是多模态 part 列表（`{"type": "image", ...}` 与 `{"type": "text", "text": ...}` 并列），
+取文只取其中 `type == "text"` 的 `text`，故 `anchor_field` 写作 `messages[last].content(text parts only)`，
+而不是笼统的 `messages[last].content`——否则读数的空间声明会被误读成"图像也进了这个空间"。
+多个文本部分按声明分隔符连接（`ard.core.acceptance.TEXT_PART_SEPARATOR`）；非文本 part 一律忽略。
+
+**没有任何文本部分 ⇒ 报错，不静默跳过、不用空串占位。** 某条锚点的最终 user 轮若一个可用文本部分都没有
+（纯图像锚点、或文本部分全为空白），`ard.core.acceptance.user_turn_text` 与 `anchor_texts` 以
+`AcceptanceError` 终止，报文含**记录 id、part 数量与 part 类型**。静默跳过会让 `q95` 落在一个比运行产物
+更小的锚点集上，空串占位则是在空间里伪造一个点——两者都是伪读数。
+
+**不含密钥**：空间声明只写 model 与 dimension，不写 `api_base`、不写任何 key；输出目录里的配置快照另有脱敏
+（`ard.pipeline._redact_secrets`）。
+
+**三种配置组合的契约**（`ard.config.CoverageConfig.resolved_embedding`；`ard.pipeline._prepare_coverage`）：
+
+| `coverage.target_set_path` | `[coverage.embedding]` | 行为 |
+|---|---|---|
+| **两者都未设** | 任意 | **结构读数 + 明确 WARNING**：`metric readout not measured …`；报告 `metrics: null`、manifest `metric_readout: false` / `q95: null`。不静默、不崩溃 |
+| **已设** | **缺** `api_base` / `model` / `dimension`（或全空） | **fail-fast 报错**（`ConfigError`），报文逐项列出缺失字段并要求"补齐或清空 `target_set_path`"；在加载配置时即触发（`CoverageConfig.resolved_embedding`），**早于创建任何输出目录**。这是**刻意严格**的行为：目标集已声明要测指标，却没有可用嵌入器，属于配置错误而非可退化的缺省 |
+| **已设** | 完备，`normalize = true` | 产出**指标读数**（`q95` / `Extent(ε)` / ε 带 / 噪声带）；`normalize = false` 同样 fail-fast（尺子要求 L2 归一化） |
+
+其余退化行为（都**显式**、绝不静默，`ard.pipeline._run_acceptance`）：
+
+| 情形 | 行为 |
+|---|---|
+| 目标集缺失/不可解析/计数或维度与配置矛盾 | 在**创建输出目录之前**拒绝整个运行（`ard.pipeline._prepare_coverage`，`CoverageWiringError`），不产生半成品产物 |
+| 嵌入调用失败 | 结构性读数**先已落盘**，失败照常抛出，但不会抹掉零成本的结构报告 |
+| 无同格重复生成数据 | 噪声带写 `unavailable` 并附原因（`NOISE_UNAVAILABLE_REASON`；`ard.pipeline._run_acceptance` 把原因并入 warnings） |
+| 库比计划少一条计划坐标 | 结构读数仍描述计划，但读数被如实改为 `within_rule: false`，并在 warnings 里**列出缺失坐标**（`ard.pipeline._missing_plan_coordinates` / `_missing_coordinates_warning`；一条计划坐标没落库时，计划再合规也不算"产物合规"） |
+
+**产物字段**：
+
+- `results/coverage.json`：`AcceptanceReport` 的完整机器可读序列化
+  （`report_schema = "ard-acceptance-3"`，常量 `ard.core.acceptance.REPORT_SCHEMA`），
+  含 `structure` / `metrics`（`space` / `quantiles` / `extent` / `epsilon_band` / `noise`）/ `warnings`。
+- `results/coverage.md`：同一报告的人读版渲染（`ard.core.acceptance.render_markdown`），
+  结构读数表（含 coverage / density / 轮分解）、Diversity declaration（两个 distinct 读数的定义）、
+  Conventions（`MULTI_TURN_DEFAULT` 与轮数映射）、空间声明、分位/覆盖读数、噪声带、warnings。
+- `manifest.json` → `plan_identity`（**v2**）：**这份读数描述的是哪个计划**。字段与定义见
+  `docs/algorithm.md` §10。
+- `plan_identity.in_progress.json`（仅运行未结束时存在；`ard.pipeline._build_progress_record`）：中间态记录，
+  **不是申报**，也**不是计数真相源**。字段语义与生命周期见本页 §4。
+- `manifest.json` → `plan` 段（`ard.pipeline._declare_plan_readout`）：计划的形状与覆盖读数，
+  与报告的结构读数同口径：`ontology_sha256` / `seed` / `count` / `unit_total` / `full_cycles` /
+  `last_cycle_size` / `planned_anchors` / `written_anchors` / `distinct_coordinates` /
+  `coverage_ratio` / `density` / `smoke`。
+- `manifest.json` → `images` 段（`ard.pipeline._declare_images`）：`image_dir`、`addressing`（寻址约定，即 `ard.domain.image_store.VISUAL_DOMAIN_LAYOUT`）、`skip_missing_images`、`resolved_visual_domains`（本轮实际解析到图的域）、`resolved_images`（每个 `(cycle, visual_domain, image, fallback)` 一行）、`domain_candidate_counts`（域名 → 该域目录下的可用文件数）、`pool_candidate_count`（整棵树的退回复用池大小）、`fallback_visual_domains` / `fallback_anchor_count`（复用的域与锚点数）、`skipped_anchor_count` / `skipped_visual_domains`（`skip_missing_images = true` 时被丢弃的锚点数与涉及域）。
+- `structure` 的字段清单（`report_schema = "ard-acceptance-3"`）：`coverage` 段给出 `unit_total` /
+  `text_unit_total` / `image_unit_total` / `knowledge_leaf_total` / `visual_leaf_total` / `plan_count` /
+  `distinct_coordinates` / `coverage` / `density` / `full_rounds` / `last_round_size` / `rounds`，
+  以及 `expected_total` / `expected_distinct_coordinates` / `expected_*`（计划低于一轮时为 `None`）；
+  另有 `diversity` 的四个计数（定义见 `docs/algorithm.md` §8）。读任何报告前先看 `report_schema`，
+  字段语义随该值而变。
+
+## 9. 可复现与可审计的机制（结构侧）
+
+计划与尺子的定义见 `docs/algorithm.md`；本节只讲**系统在结构上如何保证"同一次运行可被重新得到、被中断的
+运行可被审计"**。三层，从外到内：
+
+1. **镜像与依赖固定**：基础镜像是 patch 级 `python:3.11.15-slim`（不随 minor 标签漂移，§14.3）；
+   包管理器固定 `uv==0.11.7`；依赖闭包由 `uv.lock` 锁定，镜像内以 `uv sync --frozen` 安装
+   （`docker/Dockerfile`）。`pyproject.toml` 的 `setuptools_scm` 让包版本从 git 标签推导，无 `.git` 的
+   源码归档回退到 `1.0.0`——与 `run.sh`、`docker/build.sh` 的取值一致。
+2. **配置快照**：每次运行把**合并后、已脱敏**的配置写进 `outputs/<run_name>/config.toml`
+   （`ard.pipeline._config_snapshot_toml`），它本身是合法的 `--config`。注意它**每次运行覆盖**，
+   记录的是**最后一次调用**（含空转续跑），因此它是"这次运行用了什么设置"的快照，**不是**计划身份。
+3. **计划身份**：计划由 `(本体, seed, N)` 唯一决定，其名字是 `plan_identity` 的 sha256 摘要
+   （`ard.core.sampling.PlanIdentity.of`），写进 `manifest.json`；未完成的运行由
+   `plan_identity.in_progress.json` 先把目录绑定到计划（见本页 §4）。续跑守卫逐条比对坐标，
+   摘要不同的计划绝不混进同一份 `anchor_bank.jsonl`。定义、绑定规则与判据见 `docs/algorithm.md` §10。
+
+本体指纹不手抄：本体内容的 sha256（`ard.core.sampling.ontology_sha256`）由运行时算出并写进
+`plan_identity` 与 `plan` 段，文档不维护任何指纹表。
+
+## 10. 引用约定
 
 本页只写符号引用。核对某符号是否仍在，用符号搜索而非行号：
 

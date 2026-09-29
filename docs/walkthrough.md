@@ -3,9 +3,9 @@
 This page is the plain-language layer between the two READMEs and the technical docs. Its job is
 the half the READMEs keep short: **what the program does after you press Enter**, where the
 results land, and the questions that come next. For the exact construction rule see
-[docs/algorithm.md](algorithm.md) §2; for the metric definitions see
-[docs/measurement.md](measurement.md); for the module boundaries behind these steps see
-[docs/architecture.md](architecture.md) §2.
+[docs/algorithm.md](algorithm.md) §2; for the acceptance ruler see
+[docs/algorithm.md](algorithm.md) §5–§9; for the module boundaries and data flow behind these
+steps see [docs/architecture.md](architecture.md) §1–§2.
 
 **What you have to do lives in exactly one place** — the
 [Quick Start](../README.md#quick-start) section of `README.md` (copy the credentials template and
@@ -19,7 +19,7 @@ A few words used below:
 - **ontology** — `ontology/anchor_ontology.v4.json`, the file that lists every axis and the values
   it may take. It says *what may be combined*, not how to word it.
 - **round** — one pass over every legal combination. How many anchors a round holds is counted
-  from the ontology at run time, never written down in the code; `docs/algorithm.md` §1 carries
+  from the ontology at run time, never written down in the code; `docs/algorithm.md` §1.1 carries
   the recompute command and the current count.
 - **manifest** — `manifest.json`, the run's own record of what it built and how it went.
 
@@ -33,7 +33,7 @@ A few words used below:
    hard-coded in the code, so editing the ontology changes the plan automatically.
 3. **Builds the list of legal combinations — that is one round.** One unit is a legal combination
    plus whether it carries an image; the number of units is the round size `U`
-   (`docs/algorithm.md` §1 recomputes it from your ontology).
+   (`docs/algorithm.md` §1.1 recomputes it from your ontology).
 4. **Draws the anchors you asked for.** A run of N anchors is a sequence over rounds: each round the
    whole unit list is shuffled and walked without replacement, then reshuffled for the next round.
    So within one round each unit appears exactly once, and across rounds a unit can return. Asking
@@ -61,14 +61,14 @@ A few words used below:
    `anchor_bank.jsonl`, so an interrupted run keeps what it already produced. At the end the run
    writes `manifest.json`: the plan it used, what it covered, how the pictures were used, and the
    failure counters. The plan it used is named by a digest, not by the seed
-   (`docs/algorithm.md` §6).
+   (`docs/algorithm.md` §10).
 10. **Computes the readout.** *Coverage* asks how much of one round's grid the run touched (a ratio
     that saturates at 1.0). *Density* asks how many anchors there are per grid cell (`N / U`) and
     keeps growing with N. *`q95`* is a distance readout — the 95th percentile of each target point's
     distance to its nearest anchor — and smaller means the anchors land closer to the target set.
     The structure readout needs no model call; `q95` needs an embeddings endpoint and a target set,
     and without them the run announces the gap in a WARNING instead of pretending
-    (`docs/measurement.md` §6 and §7).
+    (`docs/algorithm.md` §7 and `docs/architecture.md` §8).
 11. **When something fails.** A network error, or a model that spends its whole budget on hidden
     thinking and returns no answer, drops **that anchor**: it is not written, and it is counted in
     the manifest's failure report. Nothing is faked. Re-running the same output directory resumes —

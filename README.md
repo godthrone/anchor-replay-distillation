@@ -159,7 +159,7 @@ uv sync --extra raw
 
 Without it a RAW input is reported and skipped (a WARNING naming the file) rather than crashing
 the run. Why RAW is opt-in, and the dependency licences in full, are in
-[`docs/licenses.md`](docs/licenses.md).
+[`CONTRIBUTING.md`](CONTRIBUTING.md#third-party-licences).
 
 ## Choosing how many anchors (N)
 
@@ -188,7 +188,7 @@ count = 5000
   `1.0` once every unit has been visited (`min(distinct, U) / U`); *density* counts entries and
   keeps growing with `N` (`N / U`). Revisiting a coordinate in a later round is a legitimate new
   sample — the generator is stochastic, so the same labels yield a different question. Definitions:
-  [docs/measurement.md](docs/measurement.md) §6.
+  [docs/algorithm.md](docs/algorithm.md) §7.
 
 ## Data Format
 
@@ -323,7 +323,7 @@ and `manifest.smoke`. Field reference, counter semantics and the resume guard:
 Without them the run writes the structure readout only and announces the gap in a WARNING
 (`metric readout not measured …`), with `acceptance.metric_readout: false` and
 `acceptance.q95: null` — never a silently clean report. The definitions of the ruler, of coverage
-vs. density, and of its resolution limits are in [docs/measurement.md](docs/measurement.md).
+vs. density, and of its resolution limits are in [docs/algorithm.md](docs/algorithm.md) §5–§9.
 
 The metric space holds **text only**: an image-modality anchor takes part through the text
 parts of its final user turn, and its image pixels never enter the space.
@@ -345,7 +345,7 @@ The metric readout is config-driven — there is no CLI flag for it:
    ```
 2. Point `coverage.target_set_path` at a target set. The small, deterministic sample
    `examples/target_set.sample.jsonl` (32 entries; the construction rule is declared in its
-   file header and in [docs/measurement.md](docs/measurement.md) §12) works as is:
+   file header and in [docs/algorithm.md](docs/algorithm.md) §11) works as is:
 
    ```toml
    [coverage]
@@ -358,7 +358,7 @@ The three configuration combinations are a contract, not a suggestion: **neither
 structure readout + a WARNING; `target_set_path` set but `[coverage.embedding]` incomplete →
 the run is refused at config load with the missing field(s) named, before any output
 directory exists; **both** set → the metric readout. Worked detail:
-[docs/measurement.md](docs/measurement.md) §11.
+[docs/algorithm.md](docs/algorithm.md) §12.
 
 ## Adding a knowledge domain
 
@@ -439,7 +439,7 @@ CDDL-1.0), so it is an opt-in extra rather than part of the default set: `uv syn
 closure only and therefore contains no `rawpy` either — under Docker a RAW input is skipped with
 a WARNING naming the file, and the rest of the run proceeds. The default closure is not uniformly
 MIT/Apache: `certifi` is MPL-2.0, `tqdm` is `MPL-2.0 AND MIT`, `typing-extensions` is PSF-2.0,
-and the rest are MIT / BSD-3-Clause / MIT-CMU. [`docs/licenses.md`](docs/licenses.md) carries the
+and the rest are MIT / BSD-3-Clause / MIT-CMU. [`CONTRIBUTING.md`](CONTRIBUTING.md#third-party-licences) carries the
 full list and the command that reads it out of an installed environment; this repository states
 those facts only and leaves any compliance judgement to you.
 
@@ -447,13 +447,13 @@ those facts only and leaves any compliance judgement to you.
 `q95` is the 95th percentile (Hyndman–Fan type 7) of each target point's distance to its nearest
 anchor — a tail statistic reading "how far is the worst-served 5% of the target set". `Extent(ε)`
 is secondary only, because it moves with the choice of ε, so it is published with its ε±5% band
-rather than as a pass/fail number. Definitions: [docs/measurement.md](docs/measurement.md).
+rather than as a pass/fail number. Definitions: [docs/algorithm.md](docs/algorithm.md) §5.
 
 **What is the noise band?**
 Regenerating the same coordinate does not reproduce the same text, so two answers for one
 coordinate sit some distance apart. The noise band is the distribution of those same-coordinate
 pairwise distances, `[q50, max]`; a `q95` difference inside it cannot be distinguished from
-generation randomness. Detail: [docs/measurement.md](docs/measurement.md).
+generation randomness. Detail: [docs/algorithm.md](docs/algorithm.md) §6.
 
 **What does `MULTI_TURN_DEFAULT = 4` mean?**
 The ontology declares `turns: "multi"` for two `conversation_type` values without a numeric upper

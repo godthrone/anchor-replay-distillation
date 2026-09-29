@@ -142,7 +142,7 @@ uv sync --extra raw
 ```
 
 不装它时，RAW 输入会以一条点名该文件的 WARNING 被跳过，而不会让运行崩溃。为什么 RAW 做成可选，
-以及完整的依赖许可证清单，见 [`docs/licenses.md`](docs/licenses.md)。
+以及完整的依赖许可证清单，见 [`CONTRIBUTING.md`](CONTRIBUTING.md#third-party-licences)。
 
 ## 如何选择锚点条数（N）
 
@@ -167,7 +167,7 @@ count = 5000
 - **覆盖与密度必须分开读。** *覆盖率*数坐标，一旦每个单元都被访问过就饱和于 `1.0`
   （`min(distinct, U) / U`）；*密度*数条数，随 `N` 持续增长（`N / U`）。在后续轮次再次抽到同一坐标是
   **合法的**新样本——生成器是随机的，同一组标签会问出不同的问题。定义见
-  [docs/measurement.md](docs/measurement.md) §6。
+  [docs/algorithm.md](docs/algorithm.md) §7。
 
 ## 数据格式
 
@@ -286,7 +286,7 @@ outputs/<run_name>/          # 默认 ard_dataset_<YYYYmmdd_HHMMSS>；--smoke �
 
 两者缺一时，运行只写结构读数，并用 WARNING 明说缺口（`metric readout not measured …`），
 `acceptance.metric_readout: false`、`acceptance.q95: null`——绝不产出一份"看起来干净"的报告。
-尺子的定义、覆盖与密度之别、以及它的分辨力边界见 [docs/measurement.md](docs/measurement.md)。
+尺子的定义、覆盖与密度之别、以及它的分辨力边界见 [docs/algorithm.md](docs/algorithm.md) §5–§9。
 
 指标空间**只含文本**：图像模态锚点以其最终 user 轮的**文本部分**参与，**图像像素不进该空间**。
 
@@ -307,7 +307,7 @@ outputs/<run_name>/          # 默认 ard_dataset_<YYYYmmdd_HHMMSS>；--smoke �
    ```
 2. 用 `coverage.target_set_path` 指向目标集。仓库自带一个小而确定的样例
    `examples/target_set.sample.jsonl`（32 条；构造规则写在其文件头与
-   [docs/measurement.md](docs/measurement.md) §12），开箱可用：
+   [docs/algorithm.md](docs/algorithm.md) §11），开箱可用：
 
    ```toml
    [coverage]
@@ -319,7 +319,7 @@ outputs/<run_name>/          # 默认 ard_dataset_<YYYYmmdd_HHMMSS>；--smoke �
 三种配置组合是**契约**，不是建议：**两者都未设** ⇒ 结构读数 + WARNING；**只设
 `target_set_path`、`[coverage.embedding]` 不全** ⇒ 加载配置时即被拒，报文列出缺失字段，
 且早于创建任何输出目录；**两者都设** ⇒ 产出指标读数。完整步骤见
-[docs/measurement.md](docs/measurement.md) §11。
+[docs/algorithm.md](docs/algorithm.md) §12。
 
 ## 添加一个知识领域
 
@@ -385,19 +385,19 @@ extra，而不进默认依赖集：`uv sync --extra raw`（见 [不用 Docker �
 官方 Docker 镜像只装默认依赖闭包，因此其中**同样没有** `rawpy`——在 Docker 下，RAW 输入会以一条点名
 该文件的 WARNING 被跳过，其余运行照常继续。默认依赖闭包并非清一色 MIT/Apache：`certifi` 是
 MPL-2.0、`tqdm` 是 `MPL-2.0 AND MIT`、`typing-extensions` 是 PSF-2.0，其余为
-MIT / BSD-3-Clause / MIT-CMU。完整清单与读取它的命令见 [`docs/licenses.md`](docs/licenses.md)；
+MIT / BSD-3-Clause / MIT-CMU。完整清单与读取它的命令见 [`CONTRIBUTING.md`](CONTRIBUTING.md#third-party-licences)；
 本仓库只陈述这些事实，合规判断留给你。
 
 **为什么 q95 是主尺子而覆盖率只作参考？**
 `q95` 是每个目标点到其最近锚点距离的 95 分位（Hyndman–Fan type-7）——一个尾部统计量，读作
 "目标集里最难覆盖的那 5% 到底有多远"。`Extent(ε)` 只作次级读数，因为它随 ε 的取法而变，所以与
 自己的 ε±5% 敏感带并列发布，而不是当成一个过/不过的数字。定义见
-[docs/measurement.md](docs/measurement.md)。
+[docs/algorithm.md](docs/algorithm.md) §5。
 
 **噪声带是什么？**
 同一个坐标重复生成并不会得到同样的文本，同一坐标的两个回答之间因此存在一段距离。噪声带就是这些
 同坐标配对距离的分布 `[q50, max]`；落在这个带内的 `q95` 差值**无法**与生成随机性区分开。细节见
-[docs/measurement.md](docs/measurement.md)。
+[docs/algorithm.md](docs/algorithm.md) §6。
 
 **`MULTI_TURN_DEFAULT = 4` 是什么口径？**
 本体对两个 `conversation_type` 只写了 `turns: "multi"`，没有数值上界；实现把"multi"读作**本体
