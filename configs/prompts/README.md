@@ -10,7 +10,7 @@ Two families, one contract ("wording is data, coordinates are the ontology's"):
   system message** (one file per `system_prompt_mode` value).
 - `axis_instruction/` — the wording that tells the input generator what the
   **user message it writes must also satisfy**, for the six axes the ontology
-  labels `layer = "instruction"` (see `docs/algorithm.md` §5.1): one JSON file
+  labels `layer = "instruction"` (see `docs/architecture.md` §7.2): one JSON file
   per axis, keyed by that axis's value.
 
 ## Layout

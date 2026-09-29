@@ -72,7 +72,7 @@ REPORT_SCHEMA: Final[str] = "ard-acceptance-3"
 #: image-modality anchor's final user turn is a multimodal part list, and this
 #: ruler embeds **only its ``text`` parts**.  Image pixels never enter the
 #: metric space, so the declaration must say so wherever the space is read
-#: (``docs/measurement.md`` §5).
+#: (``docs/architecture.md`` §8).
 ANCHOR_TEXT_FIELD: Final[str] = "messages[last].content(text parts only)"
 
 #: The multimodal part type whose ``text`` field is the embeddable text.
@@ -225,7 +225,7 @@ class DiversityDeclaration(BaseModel):
 
     A number called "distinct" is meaningless without the tuple it is distinct
     over, so the readout carries the axes, the join rule and the population it
-    was counted on (``docs/measurement.md`` §10).
+    was counted on (``docs/algorithm.md`` §8).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -1049,7 +1049,7 @@ def render_markdown(report: AcceptanceReport) -> str:
         "these two counts say how many of them are different specifications. "
         "`MISMATCH` above means a planned cell does **not** produce its own "
         "prompt, so the block count must not be read as effective diversity "
-        "(`docs/measurement.md` §10).",
+        "(`docs/algorithm.md` §8).",
         "",
     ]
     metrics = report.metrics

@@ -7,7 +7,7 @@ instruction for the input generator is data: one JSON file per axis under
 
 Six axes describe what the generated conversation must look like — the six the
 ontology labels ``layer = "instruction"`` (vocabulary defined in
-``docs/algorithm.md`` §5.1):
+``docs/architecture.md`` §7.2):
 
 ``response_style`` / ``output_format`` / ``difficulty`` / ``context_length`` /
 ``input_condition`` / ``answer_mode``.
