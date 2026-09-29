@@ -69,7 +69,8 @@ the base configuration only. Field names are validated with `extra="forbid"`, so
 error rather than a silently ignored setting.
 
 With no credentials the run stops **before creating any output directory**, with a field-level
-message and exit code 1. Its first line (the message continues with a fix example) is:
+message and exit code 1. Its opening sentence (the message continues on the same line, then gives a
+fix example) is:
 
 ```
 ERROR: [input_generator] is missing `api_base`, `model_name`.

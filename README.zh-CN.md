@@ -60,7 +60,7 @@ mkdir -p .local && cp configs/config.override.sample.toml .local/config.override
 字段名按 `extra="forbid"` 校验，拼错的字段是报错，而不是被静默忽略。
 
 **缺凭证时**：运行会在**创建任何输出目录之前**停下，给出字段级报文并以退出码 1 结束。
-报文首行如下（后面还有修法示例）：
+报文首句如下（同一行还有后续说明，最后给出修法示例）：
 
 ```
 ERROR: [input_generator] is missing `api_base`, `model_name`.

@@ -52,7 +52,6 @@ graph TD
         "ontology.py"
         "constraints.py"
         "sampling.py"
-        "coverage.py"
         "acceptance.py"
         "quota.py"
         "system_prompt.py"
@@ -221,7 +220,9 @@ outputs/<run_name>/            # 默认 ard_dataset_<YYYYmmdd_HHMMSS>；--smoke 
   `plan` 段（`ard.pipeline._declare_plan_readout`）、`images` 段（`ard.pipeline._declare_images`）
   与 `acceptance` 指针；**只在本次真的重新生成**时落盘——空转调用若发现 manifest 已记录同一 `plan_identity`，
   保持原文不动。各字段清单见本页 §8。
-- `plan` 段是"计划多大、覆盖多少、密度多少"的唯一机器可读出处：`count`（N 原样，`None` = 一轮）、
+- `plan` 段是"计划多大、覆盖多少、密度多少"的唯一机器可读出处：`count`（**实际用于构造计划的条数**：
+  普通运行即 `[generation] count` 原样，`None` = 一轮；`--smoke` 由调用方传计划自身长度，
+  所以冒烟样例是 `plan.count = 8` 而同一次运行的 `config.generation.count` 为 `null`）、
   `unit_total`（U）、`full_cycles` / `last_cycle_size`（轮分解）、`planned_anchors` / `written_anchors`、
   `distinct_coordinates`、`coverage_ratio`、`density`、`smoke`，以及本体哈希与 seed。
   口径定义见 `docs/algorithm.md` §5。

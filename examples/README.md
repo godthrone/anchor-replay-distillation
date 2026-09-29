@@ -200,9 +200,11 @@ produce healthy data?":
   `sampling` / `ontology_sha256` / `seed` / `count` / `unit_total` / `plan_size` / `digest`); a
   resumed run compares it — and, more strictly, the coordinate at each existing id — before
   appending to an existing bank, so a record of it is what makes a bank auditable against a plan;
-- `plan` — the plan's shape and readouts: `count` (the requested `N`, or `null` for one full
-  round), `unit_total`, `full_cycles`, `last_cycle_size`, `planned_anchors`, `written_anchors`,
-  `distinct_coordinates`, `coverage_ratio`, `density`, `smoke`;
+- `plan` — the plan's shape and readouts: `count` (the count the plan was actually built with —
+  `[generation] count` verbatim for a normal run, `null` meaning one full round, but the plan's own
+  length for a `--smoke` plan; this sample therefore reads `plan.count = 8` while the same run's
+  `config.generation.count` is `null`), `unit_total`, `full_cycles`, `last_cycle_size`,
+  `planned_anchors`, `written_anchors`, `distinct_coordinates`, `coverage_ratio`, `density`, `smoke`;
 - `generation.counters` — what happened to every anchor *this invocation* requested (`requested` /
   `succeeded` / `written`, plus `abandoned_by_reason` when non-zero). It is an invocation-level
   counter, not a bank total: here it reads `requested 2 / written 2` because the finishing
@@ -244,7 +246,9 @@ else is verbatim. The endpoint, the credentials and the model names are **placeh
 | `config.input_generator.api_base`, `config.target_model.api_base` | `https://your-endpoint.example/v1` | The real endpoint is deployment-specific |
 | `config.input_generator.model_name`, `config.target_model.model_name`, and the per-record `input_generator_model` / `teacher_id` | `your-model-name` | The served generator/teacher model's name is deployment-specific |
 | `images.image_dir` (an absolute path on the machine that ran it) | `examples/images` | The run location |
-| `output_dir`, `config.output.directory`, `smoke_plan.run_name` (the pinned run directory) | `outputs/ard_dataset_<timestamp>` / `outputs/ard_dataset_<timestamp>_smoke` / `ard_dataset_<timestamp>_smoke` | The real value pinned the run directory on the machine that ran it |
+| `output_dir` (the directory the artifact was actually written to) | `outputs/ard_dataset_<YYYYmmdd_HHMMSS>_smoke` | The real value pinned the run directory on the machine that ran it |
+| `config.output.directory` (the configured `[output] directory`) | `outputs/ard_dataset_<YYYYmmdd_HHMMSS>` | Same reason; the configured value carries no `_smoke` — the suffix is appended to it |
+| `smoke_plan.run_name` (the smoke plan's declared name) | `ard_dataset_<YYYYmmdd_HHMMSS>_smoke` | Same reason; the bare directory name, without the `outputs/` prefix |
 
 Otherwise the sample is the run artifact **byte for byte**: the normalisation is a literal string
 substitution, and reversing the substitutions above reproduces the run's own `anchor_bank.jsonl`

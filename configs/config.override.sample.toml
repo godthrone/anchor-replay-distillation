@@ -12,7 +12,7 @@
 # model_name = "your-model"
 # API key (leave commented if not needed)
 # api_key = ""
-# Sampling temperature (default 0.8 — input/question-generator side, §R12)
+# Sampling temperature for the question generator (default 0.8)
 # temperature = 0.8
 # Maximum tokens per response
 # max_tokens = 32768
@@ -34,7 +34,7 @@
 # model_name = "your-model"
 # API key (leave commented if not needed)
 # api_key = ""
-# Sampling temperature for the target/teacher model (默认：目标作答模型=教师端)
+# Sampling temperature for the target/teacher model (default 0.1)
 # temperature = 0.1
 # Maximum tokens per response
 # max_tokens = 32768
