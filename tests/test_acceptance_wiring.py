@@ -167,7 +167,7 @@ def test_structure_only_run_writes_the_readout_without_any_model_call(
     # The readout's expectations now come from the plan's own ``count`` (= its
     # length on the injected seam): three planned entries against a count of
     # three is exactly the rule's shape, so it reads green.  The old fixed
-    # "= 1,826" expectation is what WP-5 removed.
+    # "= 1,826" expectation was removed.
     assert report["structure"]["within_rule"] is True
     assert "## Structure readout (zero model calls)" in markdown
     assert manifest["acceptance"]["coverage_json"] == "results/coverage.json"
@@ -231,7 +231,7 @@ def test_smoke_run_is_marked_in_all_three_places_and_costs_no_model_call(
     assert report["structure"]["plan_total"] == 8
     # A smoke plan is measured against its OWN count (8), not against one full
     # cycle: the old expectation of 1,826 turned a normal smoke artifact into a
-    # reported violation ("the fixed wrong", WP-5).
+    # reported violation.
     assert report["structure"]["expected_total"] == 8
     assert report["structure"]["within_rule"] is True
     assert (result_dir / "results" / "coverage.md").is_file()

@@ -25,7 +25,7 @@ Two rules are absolute here:
   yielding a meaningless number (§2.3 边界校验即防呆).
 
 Two readings exist so that a count of *planned blocks* cannot be mistaken for a
-count of *effective specifications* (WP-S14 audit, WP-S18):
+count of *effective specifications*:
 
 * :data:`PROMPT_SIGNATURE_AXES` names the ``anchor_meta`` fields the
   generator-side prompt assembly actually reads.  ``prompt_signature_distinct``
@@ -53,7 +53,7 @@ from ard.core.types import JsonObjectSequence, StringPairs
 #: declaration): the report is now the structure readout plus its warnings, so a
 #: reader of ``ard-acceptance-3`` must not look for ``metrics`` here.
 #:
-#: ``ard-acceptance-3`` (WP-5) replaced the v4 rule "every count equals the full
+#: ``ard-acceptance-3`` replaced the v4 rule "every count equals the full
 #: cycle's constant" with this run's own ``N`` and round decomposition, added
 #: ``structure.coverage`` (coverage by coordinate, density by entry), and
 #: **removed** ``structure.duplicate_coordinates``: under the v5 id rule a
@@ -535,7 +535,7 @@ def structure_checks(structure: StructureReadout) -> list[CountCheck]:
     nothing about that count at this ``N``, and an omitted check can never be
     reported as a mismatch.  The two projection checks are the inert-axis guard —
     every restricted axis must reach the prompt, so the projection count must
-    equal the block count (WP-S18).
+    equal the block count.
     """
     checks: list[CountCheck] = [
         ("plan entries", structure.plan_total, structure.expected_total, "=="),

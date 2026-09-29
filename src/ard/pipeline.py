@@ -103,8 +103,8 @@ logger = logging.getLogger(__name__)
 #
 # Endpoints (``api_base``) and model names are **not** masked: §7.1 classes
 # them as environment fields, not secrets, and they are part of what the
-# snapshot exists to record.  The accepted residual risk (sharing an output
-# directory also shares the endpoint) is documented in the R7 report.
+# snapshot exists to record.  The residual risk is accepted and stated here:
+# sharing an output directory also shares the endpoint it records.
 
 REDACTED_PLACEHOLDER = "***REDACTED***"
 """Stand-in written in place of any secret value in an output snapshot."""
@@ -136,7 +136,7 @@ Those fields are sizes/durations — masking them would destroy the snapshot's
 ability to reproduce the run (§2.3: redact secrets, do not corrupt the record).
 
 ``api_base`` is deliberately absent — an endpoint is a location, not a
-credential (see the R7 report for the accepted residual risk).
+credential; the residual risk of publishing it with the snapshot is accepted.
 """
 
 
@@ -324,7 +324,7 @@ def _log_target_model_reasoning_stats(
     before: dict[str, int],
     anchors_generated: int,
 ) -> dict[str, int]:
-    """Log the reasoning-vs-content accounting of the target model (WP-F3).
+    """Log the reasoning-vs-content accounting of the target model.
 
     Reasoning tokens (``delta.reasoning``) are dropped from the answer by
     design, but they consume ``max_tokens`` first.  When a response spends its
@@ -1399,7 +1399,7 @@ def _missing_plan_coordinates(
 
 
 def _missing_coordinates_warning(missing: list[AnchorSpec]) -> str:
-    """One WARNING naming the planned coordinates the bank does not hold (F1).
+    """One WARNING naming the planned coordinates the bank does not hold.
 
     The list is capped so a wholly failed run cannot paste 1,826 coordinates
     into the log; the count is always exact.
@@ -1468,7 +1468,7 @@ def _run_acceptance(
     )
     warnings: list[str] = []
     # The structure readout describes the *plan*; it must not claim the artifact
-    # is within the rule while the bank is short a planned coordinate (F1).  A
+    # is within the rule while the bank is short a planned coordinate.  A
     # plan can be perfectly rule-conformant and still have an anchor that never
     # reached the library (a failed generation the resume did not retry — the
     # bug this fixes — or one that failed again).  Reconcile the two by identity
@@ -1704,7 +1704,7 @@ def run(
     # 1,826 records, and the resume then asked for ``plan[1825:]`` — the plan's
     # last entry, already on disk — so the abandoned coordinate was never
     # retried while ``coverage.json`` still read ``within_rule=true`` against the
-    # full plan (F1: a green readout decoupled from the library).  Identity makes
+    # full plan — a green readout decoupled from the library.  Identity makes
     # every missing coordinate pending again, in plan order.
     pending_specs = [spec for spec in plan if spec.id not in existing_ids]
     # ``[images] convert`` decides both the accepted input set and the bytes
@@ -1938,7 +1938,7 @@ def run(
             retry_on_timeout=config.input_generator.retry_on_timeout,
             # Explicit, not inherited from ChatAPIConfig's default (§2.2 显式即防呆).
             #
-            # Since B3 the key is **always** emitted, so this line is the only
+            # The key is **always** emitted, so this line is the only
             # thing standing between the input generator and the server-side
             # template default ("``enable_thinking`` undefined" is read as *ON*).
             # Omitting it would silently flip question generation back into
@@ -2039,7 +2039,7 @@ def run(
 
     # Step 3: Generate all anchors via the unified generator
     #
-    # Reasoning observability (WP-F3): snapshot the API client's reasoning
+    # Reasoning observability: snapshot the API client's reasoning
     # counters before and after generation.  Reasoning tokens arrive as
     # ``delta.reasoning``, are persisted as ``targets[0].output.reasoning``, and
     # also consume ``max_tokens`` first — so a run whose budget was eaten by

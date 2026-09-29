@@ -1,4 +1,4 @@
-"""Run identity, prefix-compatible resume, and the no-coordinate-dedup rule (WP-4).
+"""Run identity, prefix-compatible resume, and the no-coordinate-dedup rule.
 
 User requirement under test, translated:
 
@@ -364,7 +364,7 @@ def test_interrupted_run_leaves_a_progress_record_with_the_plan_identity(
 def test_the_progress_record_declares_its_counters_are_not_live(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """★ WP-16: the counters are a plan snapshot, and the record says so.
+    """★ The counters are a plan snapshot, and the record says so.
 
     The record is written before the first endpoint call and nothing refreshes
     it as the bank grows (the write loop lives in the generator), so a reader

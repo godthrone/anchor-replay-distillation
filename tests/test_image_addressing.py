@@ -1,4 +1,4 @@
-"""Per-``visual_domain`` image addressing in ``pipeline.run`` (WP-S6d, WP-13).
+"""Per-``visual_domain`` image addressing in ``pipeline.run``.
 
 The behaviour frozen here is the user's ruling, translated into four contracts:
 
@@ -197,7 +197,7 @@ def _offline_image_readout(bank: Path, image_dir: Path) -> dict[str, Any]:
     zeros from an invocation that only touched a text anchor — fails the
     comparison.
 
-    Returns the four readouts the WP-16 pre-registration names:
+    Returns the four readouts this module pins:
     ``pool_candidate_count`` / ``fallback_visual_domains`` /
     ``fallback_anchor_count`` / ``domain_candidate_counts``.
     """
@@ -469,7 +469,7 @@ def test_a_three_domain_plan_runs_on_a_one_picture_tree(
 def test_a_segmented_run_declares_the_whole_directorys_image_readout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """★ WP-16: a segment that resolves no image must not zero the readout.
+    """★ A segment that resolves no image must not zero the readout.
 
     Segment 1 generates the two image anchors (``animals`` has its own picture,
     ``vehicles`` has none and reuses the pool); segment 2 appends a single
@@ -650,7 +650,7 @@ def _bank_image_reference(abs_path: str) -> str:
 def test_convert_false_resume_reuses_the_placed_image(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``convert = false`` resume reuses the placed image instead of copying `_1` (B3).
+    """``convert = false`` resume reuses the placed image instead of copying `_1`.
 
     ``copy_images_to_output`` had no ``force=False`` reuse branch, so a resume
     that still had one anchor to generate copied the domain image again as
@@ -827,7 +827,7 @@ def test_resuming_reuses_a_picture_that_stays_referenced_by_the_old_record(
     output_dir, _spy, _plan = _rig(tmp_path, monkeypatch, specs)
     config = load_config(tmp_path / "config.toml")
 
-    # Both runs hand the pipeline the *same* plan: since S22 the resume guard is
+    # Both runs hand the pipeline the *same* plan: the resume guard is
     # keyed on the plan identity, so a shorter run-1 plan would be a different
     # plan and would be refused before the pruning logic under test runs.  Run 1
     # abandons ``p1``, so only ``a1`` reaches the bank while the identity is the
@@ -896,7 +896,7 @@ def test_a_picture_shared_by_a_surviving_record_is_not_removed(
     output_dir, _spy, _plan = _rig(tmp_path, monkeypatch, specs)
     config = load_config(tmp_path / "config.toml")
 
-    # Same plan in both runs (the S22 identity guard forbids a plan change);
+    # Same plan in both runs (the identity guard forbids a plan change);
     # run 1 abandons both pending anchors, so only ``a1`` lands in the bank.
     monkeypatch.setattr(pipeline, "generate_text_anchors", _ImagePartGeneratorSpy({"p1", "p2"}))
     run(config, image_dir=str(images), generate_specs=lambda _config: copy.deepcopy(specs))
@@ -921,7 +921,7 @@ def test_a_picture_shared_by_a_surviving_record_is_not_removed(
 def test_a_text_only_resume_invocation_still_stamps_the_image_bookkeeping(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Every written record carries ``has_image`` / ``image_count`` (WP-29).
+    """Every written record carries ``has_image`` / ``image_count``.
 
     The defect: ``pipeline.run`` built ``selected_sources`` from the image
     anchors *this invocation* had pending, and the only stamping site

@@ -653,7 +653,7 @@ def _manifest_breakdown(
 
     The sampling dimensions that are most useful to see *after* a run, plus the
     routing key.  The system-prompt mode is included because it became a
-    sampling dimension in v3.0.0 (B3), and ``data_source`` because it decides
+    sampling dimension, and ``data_source`` because it decides
     which sub-corpus the training side routes the record to: a distribution
     quietly stuck on one value looks exactly like a healthy one (§3.2).
     """

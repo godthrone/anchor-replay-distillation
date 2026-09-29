@@ -1,4 +1,4 @@
-"""Output-snapshot secret redaction (R7).
+"""Output-snapshot secret redaction.
 
 The merged config carries API credentials, and the pipeline writes it into the
 output directory (``config.toml`` and the manifest's ``config`` section).
@@ -46,7 +46,7 @@ def _write_config(tmp_path: Path, output_dir: Path) -> Path:
 
     Built from the project's own ``configs/config.toml`` so the test exercises
     the same config shape the pipeline ships with.  There is no anchor count to
-    set any more (WP-S2a derives it from the ontology), so the tests below
+    set any more (the count is derived from the ontology), so the tests below
     finish in the pipeline's early-return branch by injecting an empty plan.
     """
     repo_root = Path(__file__).resolve().parents[1]

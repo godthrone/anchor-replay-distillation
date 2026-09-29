@@ -161,7 +161,7 @@ def test_generated_anchor_with_reasoning():
 
 
 def test_config_has_no_system_persona_field():
-    """`system_persona` is gone — the ontology samples the system prompt (B3).
+    """`system_persona` is gone — the ontology samples the system prompt.
 
     Kept as a test rather than as a comment because the field was reachable
     from three layers (config → generation config → generator) and any of them
@@ -200,7 +200,7 @@ def test_config_has_no_turn_knobs():
 
 
 def test_config_system_prompt_is_not_configurable():
-    """No system-prompt *config* key exists — it is a sampling dimension (B3).
+    """No system-prompt *config* key exists — it is a sampling dimension.
 
     The old ``system_persona`` switch only ever had four fixed values and
     reached nothing, so it was deleted rather than migrated (§18.1 不留负债).

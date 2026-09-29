@@ -14,9 +14,8 @@ ontology labels ``layer = "instruction"`` (vocabulary defined in
 
 Their values reached the sampler's coordinates but never the prompt, so two
 specs differing only on one of them asked the input generator for exactly the
-same message (WP-S14 audit: 935 blocks projected onto the prompt-effective
-restricted axes gave only 112, and 4282 block pairs differed only on these
-axes).
+same message (935 blocks projected onto the prompt-effective restricted axes
+gave only 112, and 4282 block pairs differed only on these axes).
 
 This module owns the **pure** half of the contract: where the files are, what a
 file may contain, and how the per-axis sentences are joined into one

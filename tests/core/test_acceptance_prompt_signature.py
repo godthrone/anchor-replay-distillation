@@ -1,14 +1,14 @@
 # test_acceptance_prompt_signature.py — Guard the honesty of the structure readout.
-# Responsibility: pin the two WP-S18 readings against the code they describe:
+# Responsibility: pin the two diversity readings against the code they describe:
 #   * `acceptance.PROMPT_SIGNATURE_AXES` is exactly the anchor_meta fields the
 #     generator-side assembly reads (no mascot, and no unlisted field matters) —
 #     probed in **both** modalities, with a real picture, so the image branch is
-#     rendered rather than merely named (WP-26's blind spot);
+#     rendered rather than merely named;
 #   * `prompt_signature_distinct` / `effective_projection_distinct` count
-#     *distinct values*, not plan entries (the negative control behind WP-S18 ④);
-#   * the real plan lands on the 935 / 891 WP-S14's audit measured;
+#     *distinct values*, not plan entries (the negative control below);
+#   * the real plan lands on 935 / 891;
 #   * two coordinates share a signature **iff** their rendered requests are
-#     byte-identical, over the materialised legal block set (WP-27).
+#     byte-identical, over the materialised legal block set.
 
 from __future__ import annotations
 
@@ -26,13 +26,13 @@ from ard.domain.text_anchor import _build_user_prompt
 if TYPE_CHECKING:
     from tests.conftest import DomainImages
 
-#: The anchor_meta fields that are plan bookkeeping, not prompt input.  WP-S18
-#: claims they never reach the generated request; this file renders both ways
-#: to keep that claim honest.
+#: The anchor_meta fields that are plan bookkeeping, not prompt input.  The
+#: claim is that they never reach the generated request; this file renders
+#: both ways to keep that claim honest.
 NON_PROMPT_FIELDS = ("modality", "has_image", "image_count")
 
-#: The modalities a coordinate is rendered under.  Both are probed: WP-26 found
-#: that ``_build_user_prompt`` chooses its instruction from ``image_data_url``
+#: The modalities a coordinate is rendered under.  Both are probed because
+#: ``_build_user_prompt`` chooses its instruction from ``image_data_url``
 #: rather than from ``modality``, so probing only the text branch left the whole
 #: image branch — and the ``knowledge_domain`` axis inside it — unrendered.
 MODALITIES = (sampling.MODALITY_TEXT, sampling.MODALITY_IMAGE)
@@ -76,7 +76,7 @@ def _image_data_url(meta: dict[str, Any], domain_images: DomainImages) -> str | 
 def _rendered_request(
     meta: dict[str, Any], turn_counts: dict[str, int], domain_images: DomainImages
 ) -> tuple[Any, ...]:
-    """The generator-side request tuple WP-S14 used as its signature witness.
+    """The generator-side request tuple used here as the signature witness.
 
     ``I`` = the input generator's system string; ``U`` = the user half of that call,
     carrying the picture's data URI when the coordinate has one; ``S`` = the
@@ -266,7 +266,7 @@ def test_effective_projection_is_the_restricted_axes_that_reach_the_prompt() -> 
         axis for axis in constraints.RESTRICTED_AXES if axis in acceptance.PROMPT_SIGNATURE_AXES
     )
     assert acceptance.EFFECTIVE_PROJECTION_AXES == derived
-    # The three restricted axes WP-S14 found inert (and WP-S17 rendered) must be
+    # The three restricted axes that were once inert (and are now rendered) must be
     # in the projection: dropping them is exactly the 112/102 collapse.
     assert set(constraints.RESTRICTED_AXES) <= set(acceptance.PROMPT_SIGNATURE_AXES)
     assert acceptance.EFFECTIVE_PROJECTION_AXES == constraints.RESTRICTED_AXES
@@ -302,7 +302,7 @@ def test_distinct_counts_fall_when_one_prompt_axis_is_shared(ontology: OntologyV
 
 
 def test_the_real_plan_lands_on_the_s14_numbers(ontology: OntologyV4) -> None:
-    """Regression pin: 935 / 891, the numbers WP-S14's audit script measured."""
+    """Regression pin: the real plan's 935 / 891 block counts."""
     plan = sample_anchors(ontology, AnchorGenerationConfig(seed=42))
     readout = acceptance.structure_readout([spec.anchor_meta for spec in plan], ontology=ontology)
 

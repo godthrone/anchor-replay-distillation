@@ -1,4 +1,4 @@
-"""Tests for anchor-generation backpressure and per-run failure accounting (WP-F5).
+"""Tests for anchor-generation backpressure and per-run failure accounting.
 
 Two defects are frozen here:
 

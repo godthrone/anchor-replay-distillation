@@ -5,7 +5,7 @@ Covers the vocabulary contract — the modes are the v4 ontology's
 contract (the directory the ontology declares, one non-empty file per axis
 value, no silent fallback), and the generation prompt handed to the input
 generator, which must stay byte-identical to the wording that used to be
-hardcoded (WP-S6c).
+hardcoded.
 
 Reading the wording files is facility work (§1.3), so
 ``build_system_prompt_prompt`` comes from :mod:`ard.backends.prompt_loader`; the
@@ -94,7 +94,7 @@ RENDER_META = {
 }
 
 #: sha256 of the prompt each present mode rendered **before** the wording moved
-#: into data files (the WP-S6c byte-identity evidence).  A change here means the
+#: into data files (byte-identity evidence).  A change here means the
 #: wording changed, not just its location.
 RENDERED_SHA256 = {
     "minimal_persona": "543cb1bc58576a326614dd00f6c333d623bdcbaf65855aa14a9cf7184af56ee4",

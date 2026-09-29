@@ -106,7 +106,7 @@ class ARDEmptyContentError(RuntimeError):
         self.stats = stats
 
 
-# ── Reasoning observability (WP-F3) ────────────────────────────────────────
+# ── Reasoning observability ─────────────────────────────────────────
 #
 # Reasoning tokens arrive in ``delta.reasoning`` (measured against the production
 # serving stack: vLLM 0.22 + the deployed chat model; ``delta.reasoning_content``
@@ -745,7 +745,7 @@ def _send_streaming_request(
     content_parts: list[str] = []
     reasoning_parts: list[str] = []
     finish_reason: str | None = None
-    # Reasoning accounting (WP-F3).  The text is accumulated into
+    # Reasoning accounting.  The text is accumulated into
     # ``reasoning_parts`` — never into ``content_parts`` (see _reasoning_text_of).
     reasoning_chars = 0
     reasoning_chunks = 0
@@ -817,7 +817,7 @@ def _send_streaming_request(
         finish_reason=finish_reason,
     )
 
-    # ── Observability: reasoning vs. content (WP-F3) ──────────────────────
+    # ── Observability: reasoning vs. content ───────────────────────
     # Public counters, so the pipeline can report "N responses lost their whole
     # budget to thinking" instead of leaving it to be inferred from logs.
     _record_reasoning_event("responses")

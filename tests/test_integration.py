@@ -865,8 +865,8 @@ def _scripted_generate_text_anchors(**kwargs: object) -> list[GeneratedAnchor]:
 def _three_specs() -> list[AnchorSpec]:
     """A tiny stand-in plan for ``run``'s ``generate_specs`` seam.
 
-    The anchor count is derived from the ontology since WP-S2a, so a test that
-    needs a three-anchor batch supplies the plan rather than a config field.  The
+    The anchor count is derived from the ontology, so a test that needs a
+    three-anchor batch supplies the plan rather than a config field.  The
     ids are simple and distinct; ``_scripted_generate_text_anchors`` ignores the
     spec contents and writes its own record.
     """
@@ -883,7 +883,7 @@ def _three_specs() -> list[AnchorSpec]:
 class TestManifestGenerationReport:
     """``pipeline.run()`` must fold the generation counters into ``manifest.json``.
 
-    The counters existed after WP-F2/F3 but nobody read them, so a run whose
+    The counters existed but nobody read them, so a run whose
     anchors were all dropped still produced a healthy-looking manifest.  These
     tests freeze the wiring, not the counter implementation.
     """
@@ -915,7 +915,7 @@ class TestManifestGenerationReport:
         monkeypatch.setattr("ard.pipeline.generate_text_anchors", _scripted_generate_text_anchors)
 
         # A three-anchor plan, injected through ``run``'s plan seam: the anchor
-        # count is rule-derived since WP-S2a, so a test that wants a small batch
+        # count is rule-derived, so a test that wants a small batch
         # supplies the plan instead of a config field.
         result_dir = run(load_config(config_path), generate_specs=lambda cfg: _three_specs())
         manifest = json.loads((result_dir / "manifest.json").read_text(encoding="utf-8"))
@@ -967,7 +967,7 @@ class TestManifestGenerationReport:
             )
         )
         base["output"]["directory"] = str(output_dir)
-        # The bank is complete with respect to the injected plan (WP-S2a: the
+        # The bank is complete with respect to the injected plan (the
         # plan, not a config count, is what "complete" is measured against), so
         # this is the resume/early-return path.
         #
@@ -982,7 +982,7 @@ class TestManifestGenerationReport:
             "ard.pipeline.generate_text_anchors",
             lambda **kwargs: pytest.fail("no generation must run on the resume path"),
         )
-        # The bank's coordinate must belong to this run's plan: since S22 the
+        # The bank's coordinate must belong to this run's plan: the
         # resume guard refuses a bank holding ids outside the plan, so an empty
         # plan double would (correctly) be a refusal rather than the early return
         # this test measures.

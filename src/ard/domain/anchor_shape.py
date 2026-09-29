@@ -3,8 +3,8 @@
 The anchor format has one structural contract, stated in
 :mod:`ard.core.types`: a conversation starts with ``user``, ends with
 ``user`` and alternates roles strictly — and, since v3.0.0, may be preceded
-by an *optional single* ``system`` message at position 0 (D1: the ``messages``
-array is the single source of truth for the system prompt).  ``AnchorSpec``
+by an *optional single* ``system`` message at position 0 — the ``messages``
+array is the single source of truth for the system prompt.  ``AnchorSpec``
 enforces the turn half of it on the way *in*, but the entry gate alone never
 protected the output — that is how ``UAUAU``-shaped anchors reached a
 published anchor bank.  This module holds the **single implementation** of
@@ -33,7 +33,7 @@ def expected_message_roles(spec: AnchorSpec) -> list[str]:
 
     The sequence deliberately contains **no** ``system``: an optional leading
     system message is an orthogonal, message-level concern handled by
-    :func:`message_shape_error` (D1), not part of the turn list.
+    :func:`message_shape_error`, not part of the turn list.
 
     Args:
         spec: Anchor specification.
@@ -48,7 +48,7 @@ def message_shape_error(messages: list[Any]) -> str | None:
     """Validate the structural shape of a message list.
 
     This is the **single implementation** of the anchor shape contract
-    (``src/ard/core/types.py`` + v3.0.0 D1):
+    (``src/ard/core/types.py``):
 
     * an *optional single* ``system`` message may open the conversation at
       position 0 — the OpenAI ``messages`` format, where the array is the
@@ -85,7 +85,7 @@ def message_shape_error(messages: list[Any]) -> str | None:
         index = next(i for i, r in enumerate(roles) if r not in ("user", "assistant", "system"))
         return f"message {index} has unknown role {roles[index]!r}"
 
-    # system: at most one, and only at position 0 (D1).  Checked *before* the
+    # system: at most one, and only at position 0.  Checked *before* the
     # conversation shape so a misplaced system is reported as such, not as a
     # garbled conversation shape.
     if roles.count("system") > 1:

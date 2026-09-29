@@ -1,8 +1,8 @@
 """Guard: no axis may be a mascot — every axis must change what generation sees.
 
-The WP-S14 audit found six of the twelve v4 axes (``response_style``,
-``output_format``, ``difficulty``, ``context_length``, ``input_condition``,
-``answer_mode``) reached the sampler's coordinates but never a prompt: two specs
+Six of the twelve v4 axes (``response_style``, ``output_format``,
+``difficulty``, ``context_length``, ``input_condition``, ``answer_mode``)
+reached the sampler's coordinates but never a prompt: two specs
 differing only on one of them issued the *same* generator-side request.  The
 block-level consequence was 935 blocks projecting onto only 112 prompt-effective
 restricted combinations.
@@ -19,7 +19,7 @@ The compared tuple is the one the audit pinned —
 * ``T`` — the spec turn count for the coordinate's ``conversation_type``;
 * ``V`` — the *resolved* picture address (``""`` for text-only).
 
-**Every axis is probed under both modalities.**  WP-26 showed why that matters:
+**Every axis is probed under both modalities.**  That matters:
 ``_build_user_prompt`` chooses its instruction from ``image_data_url``, not from
 ``modality``, so a probe that only flips the ``modality`` field while passing no
 picture never renders the image branch at all — the whole branch was untested, and
@@ -51,7 +51,7 @@ from ard.domain.text_anchor import _build_user_prompt
 if TYPE_CHECKING:
     from tests.conftest import DomainImages
 
-#: The axes that must reach the prompt as wording (WP-S17).  Imported, not
+#: The axes that must reach the prompt as wording.  Imported, not
 #: re-listed, so the guard cannot drift from the module it guards.
 WORDING_AXES = INSTRUCTION_AXES
 
@@ -174,7 +174,7 @@ def test_every_axis_changes_the_generated_requests(
     """No axis may be a mascot: two coordinates differing only on it must differ.
 
     The probe runs under ``text_only`` **and** ``image``; the image one renders a
-    real picture, so the image branch is genuinely exercised (WP-26's blind spot).
+    real picture, so the image branch is genuinely exercised, not merely named.
     """
     inert = _inert_probes(ontology, domain_images)
     assert inert == [], (
@@ -220,7 +220,7 @@ def test_each_wording_axis_changes_the_prompt_text(
 def test_legacy_coordinate_sentence_is_still_rendered_byte_for_byte(
     ontology: OntologyV4, domain_images: DomainImages
 ) -> None:
-    """WP-S17 adds the requirement clause; it does not rewrite the legacy words."""
+    """The requirement clause is added; the legacy words are not rewritten."""
     meta = _base_meta(ontology)
     expected = (
         f"Generate a realistic user message in {meta['language']} "

@@ -1,4 +1,4 @@
-"""Tests for the image-part rewrite in the text anchor pipeline (v3.0.0 B3).
+"""Tests for the image-part rewrite in the text anchor pipeline.
 
 Covers the defect where ``_convert_images_to_paths`` paired message *i* with
 ``spec.turns[i]`` and therefore skipped the rewrite whenever a message existed

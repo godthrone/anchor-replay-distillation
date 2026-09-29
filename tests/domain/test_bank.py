@@ -97,8 +97,8 @@ def test_anchor_to_dict_persists_top_level_fields():
     a = _make_anchor(
         "c",
         input_generator_model="input-model",
-        # B3 tightened this field into the controlled vocabulary: the routing key
-        # is a DataSource member now, not an arbitrary string (W-1).
+        # The field is part of the controlled vocabulary: the routing key is a
+        # DataSource member now, not an arbitrary string.
         data_source=DataSource.ARD_MULTI,
     )
     d = anchor_to_dict(a)
@@ -109,7 +109,7 @@ def test_anchor_to_dict_persists_top_level_fields():
 
 
 def test_generated_anchor_rejects_off_vocabulary_data_source():
-    """A raw string outside the vocabulary cannot build an anchor (W-1)."""
+    """A raw string outside the vocabulary cannot build an anchor."""
     with pytest.raises(ValueError, match="must be a DataSource"):
         _make_anchor("c2", data_source="ard_multi")
 
@@ -237,16 +237,16 @@ def test_message_shape_error_rejects_uauau_and_uauu():
     assert message_shape_error([{"role": "assistant", "content": "a"}]) is not None
 
 
-# ── v3.0.0 D1: optional single leading ``system`` ───────────────────────────
+# ── optional single leading ``system`` ──────────────────────────────────────
 
 
 def _with_system(messages, content="You are a helpful assistant."):
-    """Prepend a single leading ``system`` message (D1, position 0)."""
+    """Prepend a single leading ``system`` message (position 0)."""
     return [{"role": "system", "content": content}, *messages]
 
 
 def test_message_shape_error_accepts_optional_leading_system():
-    """A single leading ``system`` is allowed for U, UAU and UAUAU (D1)."""
+    """A single leading ``system`` is allowed for U, UAU and UAUAU."""
     assert message_shape_error(_with_system([{"role": "user", "content": "q"}])) is None
     assert message_shape_error(_with_system(_uau_messages())) is None
     assert (
@@ -286,7 +286,7 @@ def test_message_shape_error_rejects_system_not_in_first_position():
 
 
 def test_message_shape_error_rejects_multiple_system_messages():
-    """More than one ``system`` message is refused (D1: at most one)."""
+    """More than one ``system`` message is refused (at most one)."""
     dup = [
         {"role": "system", "content": "s1"},
         {"role": "system", "content": "s2"},
@@ -394,8 +394,8 @@ def test_write_anchor_bank_refuses_invalid_shape(tmp_path):
 
 # ── Output gates: image bookkeeping ─────────────────────────────────────────
 #
-# WP-29: ``has_image`` / ``image_count`` are a record's own declaration of its
-# image state, and the README promises both on *every* record.  The resume path
+# ``has_image`` / ``image_count`` are a record's own declaration of its image
+# state, and the README promises both on *every* record.  The resume path
 # once wrote a text-only finishing segment's records with both fields absent,
 # because the fields were decided by which image sources that invocation
 # happened to select.  This gate makes that class of defect a refusal at the

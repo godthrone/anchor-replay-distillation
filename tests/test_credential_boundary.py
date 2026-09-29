@@ -57,7 +57,7 @@ def _write_config(
                 "",
                 "[generation]",
                 # No ``target_count``: the anchor count is derived from the
-                # ontology by the v4 construction rule (WP-S2a).
+                # ontology by the v4 construction rule.
                 "",
                 "[output]",
                 f'directory = "{out.as_posix()}"',
@@ -121,7 +121,7 @@ def test_cli_reports_the_missing_field_without_a_traceback(
     config_path = _write_config(tmp_path, input_api_base="")
     monkeypatch.setattr(sys, "argv", ["ard", "--config", str(config_path)])
     # Hermetic: auto-detection must not reach a real developer
-    # .local/config.override.toml inside this checkout (WP-S4).
+    # .local/config.override.toml inside this checkout.
     monkeypatch.setattr("ard.cli._find_project_root", lambda _start: None)
 
     with caplog.at_level(logging.ERROR, logger="ard.cli"):

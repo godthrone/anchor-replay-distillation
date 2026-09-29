@@ -84,7 +84,7 @@ def test_structure_readout_expectations_follow_the_run_count(ontology: OntologyV
 
 
 def test_smoke_plan_raises_no_mismatch_warning(ontology: OntologyV4) -> None:
-    """Regression (WP-5): a normal 8-entry smoke artifact used to print MISMATCH rows."""
+    """Regression: a normal 8-entry smoke artifact used to print MISMATCH rows."""
     plan = _rules(ontology, per_modality=(4, 4))
     readout = acceptance.structure_readout(plan, ontology=ontology, count=len(plan))
 

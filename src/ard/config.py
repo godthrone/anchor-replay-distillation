@@ -146,8 +146,8 @@ class TargetModelConfig(_LLMConfig):
 
     The target model emits the anchor's target answer
     (``targets[0].output``) — the supervision signal downstream SFT/OPD call
-    the "teacher".  Temperature defaults to 0.1 (user ruling, R12: was 0.0 —
-    deterministic — which under-sampled answer diversity; 0.1 keeps answers
+    the "teacher".  Temperature defaults to 0.1 (versus 0.0 — deterministic,
+    which under-sampled answer diversity; 0.1 keeps answers
     near-greedy while letting the teacher vary phrasing between anchors).
     """
 

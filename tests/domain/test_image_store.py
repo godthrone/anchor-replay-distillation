@@ -1,4 +1,4 @@
-"""Direct tests for :mod:`ard.domain.image_store` (T-4).
+"""Direct tests for :mod:`ard.domain.image_store`.
 
 These are *direct* unit tests mirroring ``src/ard/domain/image_store.py`` —
 the module currently has zero direct test coverage.  The copy / conversion
@@ -7,9 +7,9 @@ legs are exercised on **real** image files (Pillow-synthesised, saved to
 byte-identical; BMP/TIFF/GIF are really re-encoded to JPEG by Pillow.
 
 The only mocked boundary is the camera-RAW decoder (:mod:`rawpy`) — a genuine
-``.CR2`` capture cannot be synthesised in a test suite.  Per T-4's boundary
-rule, ``rawpy.imread`` is replaced with a fake that yields a **real** RGB
-numpy array, and the array→JPEG leg (Pillow real encode) runs unmocked: the
+``.CR2`` capture cannot be synthesised in a test suite.  ``rawpy.imread`` is
+replaced with a fake that yields a **real** RGB numpy array, and the
+array→JPEG leg (Pillow real encode) runs unmocked: the
 fake covers only the decoder — the one boundary that cannot be exercised for
 real — and never stands in for the code under test.
 """

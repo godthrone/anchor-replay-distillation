@@ -110,7 +110,7 @@ def test_chat_client_creation():
     assert client._config == config
 
 
-# ── _build_payload — enable_thinking regression (B3) ────────────────────────
+# ── _build_payload — enable_thinking regression ─────────────────────────────
 
 
 def test_build_payload_enable_thinking_true():
@@ -127,7 +127,7 @@ def test_build_payload_enable_thinking_true():
 
 
 def test_build_payload_enable_thinking_false():
-    """_build_payload sends chat_template_kwargs when enable_thinking=False (B3 regression)."""
+    """_build_payload sends chat_template_kwargs when enable_thinking=False."""
     config = ChatAPIConfig(
         api_base="https://api.example.com",
         model_name="m",
@@ -280,7 +280,7 @@ def inject_sse_transport(monkeypatch):
     return _inject
 
 
-# ── Timeout policy: no httpx read deadline, first-token wait wins (D2) ──────
+# ── Timeout policy: no httpx read deadline, first-token wait wins ───────────
 #
 # MockTransport cannot model a slow first byte: the mock handler is invoked
 # synchronously by ``client.stream()`` and its whole body is drained before
@@ -381,7 +381,7 @@ def test_httpx_timeout_has_no_read_deadline(monkeypatch):
     monkeypatch.setattr(api_module.httpx, "Client", recording_client)
 
     # The probe server returns a valid HTTP 200 with an empty choice list, i.e.
-    # a response with no assistant content.  Since WP-F3 that is a typed
+    # a response with no assistant content.  That is a typed
     # model-output failure rather than an empty string, so the call is expected
     # to raise — the point of this test is the timeout object, not the content.
     with pytest.raises(ARDEmptyContentError) as excinfo:
@@ -562,7 +562,7 @@ def test_encode_image_to_base64_unsupported_format(tmp_path):
         encode_image_to_base64(bad)
 
 
-# ── Reasoning handling (WP-F3 regression) ───────────────────────────────────
+# ── Reasoning handling (regression) ─────────────────────────────────────────
 #
 # Real-server shape (vLLM 0.22.0 + the deployed chat model): the reasoning field is
 # ``delta.reasoning`` (NOT ``reasoning_content``), and while the model thinks
@@ -644,7 +644,7 @@ def test_reasoning_text_is_captured_and_kept_out_of_content(inject_sse_transport
 
 
 def test_reasoning_only_truncated_raises_and_warns(inject_sse_transport, caplog):
-    """F3 core bug: reasoning ate the budget → no content, must not be silent.
+    """Reasoning ate the budget → no content, must not be silent.
 
     Asserts the three required properties: the failure is *announced*
     (WARNING), *counted*, and *typed* (:exc:`ARDEmptyContentError`, distinct
@@ -802,7 +802,7 @@ def test_stats_dataclass_reports_reasoning_only():
     )
 
 
-# ── enable_thinking type contract (WP-F3, §2.1/§2.2) ────────────────────────
+# ── enable_thinking type contract (§2.1/§2.2) ───────────────────────────────
 
 
 @pytest.mark.parametrize("value", [None, 1, 0, "true", "yes", 1.0, [], {}])

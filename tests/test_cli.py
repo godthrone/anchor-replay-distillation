@@ -1,4 +1,4 @@
-"""Direct CLI tests for ``src/ard/cli.py`` and ``src/ard/__main__.py`` (T-4).
+"""Direct CLI tests for ``src/ard/cli.py`` and ``src/ard/__main__.py``.
 
 Covers the argument contract: ``--help`` exits 0, a missing ``--config`` is a
 usage error, the removed image-conversion flag is rejected, ``--smoke`` is

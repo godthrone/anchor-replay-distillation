@@ -24,7 +24,7 @@ def get_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
     if not logger.handlers:
         handler = logging.StreamHandler(sys.stdout)
-        handler.setLevel(logging.INFO)  # explicit — §2.2, Y1 fix
+        handler.setLevel(logging.INFO)  # explicit — §2.2
         handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
         logger.addHandler(handler)
         logger.setLevel(logging.INFO)
@@ -39,7 +39,7 @@ def configure_file_logging(run_dir: Path) -> None:
     explicit, no-magic entry point — it does not guess paths from
     environment variables or module-level globals (§2.2).
 
-    **Idempotent:** repeated calls are no-ops (§2.1 契约即防呆, Y2 fix).
+    **Idempotent:** repeated calls are no-ops (§2.1 契约即防呆).
 
     Three log files are created per §13.3 (one log domain = one pipeline):
 
@@ -53,7 +53,7 @@ def configure_file_logging(run_dir: Path) -> None:
 
     Handlers are attached to the ``ard`` namespace logger (not root),
     so third-party library logs (httpx, urllib3, etc.) are excluded
-    from the project's log files (W1 fix).
+    from the project's log files.
 
     **Existing stdout behaviour is preserved:** the ``StreamHandler``
     created by :func:`get_logger` has an explicit INFO level and is

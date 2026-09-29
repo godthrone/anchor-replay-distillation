@@ -1,6 +1,6 @@
-"""R12 regression tests — temperature is a single source of truth config → payload.
+"""Regression tests — temperature is a single source of truth config → payload.
 
-Before R12, every LLM call site in :mod:`ard.domain.text_anchor` passed a
+Before this was centralised, every LLM call site in :mod:`ard.domain.text_anchor` passed a
 hardcoded per-request ``temperature`` (``0.7`` for the input side, ``0.0`` for
 the target side), so the configured values (``[input_generator].temperature``,
 ``[target_model].temperature``) never reached the wire.  These tests freeze the
@@ -83,7 +83,7 @@ def _make_spec(include_system_prompt: bool = False) -> AnchorSpec:
 
     With ``include_system_prompt=True`` the anchor's first input-generator
     request is the system-prompt generation (:func:`_generate_system_message`),
-    which is the third of the four hardcoded call sites fixed in R12.
+    which is the third of the four hardcoded call sites that were fixed.
     """
     meta = {
         "language": "English",
@@ -203,7 +203,7 @@ def test_code_defaults_agree_with_toml_defaults():
 def test_config_temperature_reaches_input_and_target_payloads(recording_clients):
     """With the new defaults, the wire payload carries 0.8 (input) / 0.1 (target).
 
-    The anchor generator passes **no** per-request temperature (R12 fix), so the
+    The anchor generator passes **no** per-request temperature, so the
     payload temperature must come from the client config — the chain that made
     ``config.toml`` authoritative again.
     """

@@ -1,4 +1,4 @@
-"""Checkpoint/resume contract of ``pipeline.run`` and the bank it resumes from (R5).
+"""Checkpoint/resume contract of ``pipeline.run`` and the bank it resumes from.
 
 User requirement under test, verbatim:
 
@@ -15,7 +15,7 @@ Translated into the three behaviours frozen here:
 2. an output directory that already satisfies the plan generates nothing at all
    and returns without touching the bank (idempotent re-run) — unless it holds
    anchor ids outside the plan, which is a different dataset and is refused
-   (section 2, S22);
+   (section 2);
 3. ``output.overwrite`` is the explicit opt-in that clears the bank (§3.3
    预授权退路) — without it, a second run never destroys the first one's records.
 
@@ -23,7 +23,7 @@ Plus the failure mode that made (1) untrustworthy: an append interrupted mid-lin
 left a fragment without its trailing newline, after which the record *count* and
 the record *reader* disagreed and every following record was concatenated onto the
 fragment.  Sections 5–7 pin that down at the bank level; section 7 is keyed on the
-**plan identity** recorded in ``manifest.json`` (S22), never on ``[generation]
+**plan identity** recorded in ``manifest.json``, never on ``[generation]
 seed`` — a seed is a process-level config value that does not name a plan.
 
 Scope note: the pipeline half is deliberately *not* a second sampler test.  ``run``
@@ -31,7 +31,7 @@ is exercised with the spec plan replaced by a small deterministic double (the
 ``generate_specs`` seam of ``pipeline.run``), so what the assertions read is the
 resume arithmetic and the bank on disk — not the v4 construction rule (covered by
 ``tests/core/test_sampling.py``) and not the turn generator (covered by
-``tests/domain/test_text_anchor_backpressure.py``).  Since WP-S2a the target is
+``tests/domain/test_text_anchor_backpressure.py``).  The target is
 ``len(plan)`` — derived from the ontology — so the double *is* the plan, and the
 pipeline decides the shortfall by comparing the plan's ids against the bank's.  No
 network call is reachable: the generator double never touches the API clients the
@@ -57,7 +57,7 @@ from ard.domain.text_anchor import AnchorGenerationStats
 
 #: Plan size used by the "incomplete bank" cases: small enough to read at a
 #: glance, large enough that "2 existing + 3 missing" is not a coincidence of
-#: the bank.  The production plan is 1,826 entries (WP-S2a contract test), so a
+#: the bank.  The production plan is 1,826 entries (contract test), so a
 #: five-entry plan is also the guard that resume never assumes a hard-coded size.
 _PLAN_SIZE = 5
 
@@ -412,7 +412,7 @@ def test_complete_bank_is_left_untouched(tmp_path: Path, monkeypatch: pytest.Mon
 def test_overfilled_bank_with_foreign_records_is_refused_untouched(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An over-filled bank is unverifiable, not "nothing to do" (S22).
+    """An over-filled bank is unverifiable, not "nothing to do".
 
     More records than the plan means the bank necessarily holds anchor ids that
     are *not* in this run's plan.  Rewriting this run's plan identity over such
@@ -547,7 +547,7 @@ def test_failed_resume_grows_the_bank_without_rewriting_it(
     assert len(_records(bank)) == existing + 1
 
 
-# ── 6. resume is keyed by coordinate identity, not by record count (F1) ─────
+# ── 6. resume is keyed by coordinate identity, not by record count ─────────
 
 
 def _rule_plan() -> list[AnchorSpec]:
@@ -572,7 +572,7 @@ def _rule_plan() -> list[AnchorSpec]:
 def test_resume_asks_for_a_middle_anchor_the_previous_run_abandoned(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """F1: the shortfall is ``plan - bank`` by id, not ``plan[record_count:]``.
+    """The shortfall is ``plan - bank`` by id, not ``plan[record_count:]``.
 
     Run 1 abandons the plan's *middle* entry.  A count-based resume sees 4
     records and asks for ``plan[4:]`` — the last entry, already on disk — so the
@@ -616,7 +616,7 @@ def test_resume_asks_for_a_middle_anchor_the_previous_run_abandoned(
 def test_readout_reconciles_with_the_bank_and_names_the_missing_coordinate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """F1: ``coverage.json`` must never read green while the bank is short.
+    """``coverage.json`` must never read green while the bank is short.
 
     The plan is the rule's own first ``_PLAN_SIZE`` coordinates, measured against
     ``count = _PLAN_SIZE``, so the readout would read green if the bank were
@@ -660,7 +660,7 @@ def test_readout_reconciles_with_the_bank_and_names_the_missing_coordinate(
 
 # ── 7. a resume that changes the *plan* is refused, not merged ──────────────
 #
-# B5 originally guarded on ``[generation] seed``.  S22 showed that key is wrong:
+# The guard used to compare ``[generation] seed``, which is the wrong key:
 # a run directory's recorded seed is rewritten by every later invocation (even
 # ones that generate nothing), so the recorded seed does not name the banked
 # plan; and two runs can share a seed while sampling different plans.  The guard

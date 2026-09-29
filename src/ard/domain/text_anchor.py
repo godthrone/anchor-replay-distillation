@@ -347,7 +347,7 @@ def _convert_images_to_paths(
 
     One *conversation* message per :class:`TurnSpec`, in order, so the
     conversation message at position *n* belongs to ``spec.turns[n]`` — the
-    optional leading ``system`` message (v3.0.0 D1) is not a turn and therefore
+    optional leading ``system`` message is not a turn and therefore
     shifts every conversation message by one.  The offset is derived from the
     message list itself rather than assumed, because assuming a 1:1
     ``messages``/``turns`` alignment is precisely what made every anchor with a
@@ -529,7 +529,7 @@ def _generate_system_message(
             # §1.4 单一真相源: no per-request temperature here.  The sampling
             # temperature for the input side comes from the *client* config,
             # which the pipeline builds from ``[input_generator].temperature``
-            # (default 0.8) — a per-request override used to defeat it (§R12).
+            # (default 0.8) — a per-request override here would be a second source.
         ).content.strip()
     except ARDTimeoutError:
         logger.exception(
@@ -589,8 +589,8 @@ def _generate_one_anchor(
     ``targets[0].output.reasoning``.
 
     When the anchor's sampled ``system_prompt_mode`` is not ``none``, the
-    system message is generated first and placed at ``messages[0]`` (v3.0.0 D1:
-    the ``messages`` array is the single source of truth for the system prompt).
+    system message is generated first and placed at ``messages[0]`` (the
+    ``messages`` array is the single source of truth for the system prompt).
     The input generator's own prompts for user turns do **not** carry it: those
     requests ask the model to impersonate a user, and the system message there
     is tooling instruction, not conversation content.  The target model does
@@ -665,7 +665,7 @@ def _generate_one_anchor(
                     ),
                     # No per-request temperature: input-side sampling follows
                     # the client config (pipeline ← ``[input_generator]
-                    # .temperature``) — the single source of truth (§1.4, §R12).
+                    # .temperature``) — the single source of truth (§1.4).
                 ).content.strip()
             except ARDTimeoutError:
                 # Timeout mid-conversation: abandon the whole anchor.  Retrying
@@ -705,7 +705,7 @@ def _generate_one_anchor(
             try:
                 # No per-request temperature: target-side sampling follows the
                 # client config (pipeline ← ``[target_model].temperature``) —
-                # the single source of truth (§1.4, §R12).
+                # the single source of truth (§1.4).
                 assist_msg = target_client.chat(messages).content.strip()
             except ARDTimeoutError:
                 logger.exception(
@@ -771,7 +771,7 @@ def _generate_one_anchor(
         # spending the request: the answer is only meaningful for the intended
         # turn.
         #
-        # v3.0.0 D1: an optional *single leading* ``system`` message is allowed
+        # An optional *single leading* ``system`` message is allowed
         # and is validated by the shared contract (:func:`message_shape_error`),
         # which rejects a misplaced or repeated system.  The turn-derived
         # ``expected_roles`` never contains a system, so before comparing them
@@ -789,7 +789,7 @@ def _generate_one_anchor(
             return None
         # No per-request temperature: the teacher's sampling temperature comes
         # from the client config (pipeline ← ``[target_model].temperature``,
-        # default 0.1) — the single source of truth (§1.4, §R12).
+        # default 0.1) — the single source of truth (§1.4).
         try:
             response = target_client.chat(messages)
         except ARDTimeoutError:

@@ -117,8 +117,8 @@ def test_config_load_minimal(tmp_path):
     assert isinstance(config, ARDConfig)
     assert config.input_generator.api_base == "https://api.example.com/v1"
     assert config.target_model.model_name == "target-model"
-    # Defaults.  There is no ``target_count`` any more: WP-S2a derives the anchor
-    # count from the ontology's construction rule, so asserting a default count
+    # Defaults.  There is no ``target_count`` any more: the anchor count is
+    # derived from the ontology's construction rule, so asserting a default count
     # would assert a number the config no longer owns.
     assert config.ontology.path == "ontology/anchor_ontology.v4.json"
     # `seed` is unset here → the config layer resolves it to a concrete int
