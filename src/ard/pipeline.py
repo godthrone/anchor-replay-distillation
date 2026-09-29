@@ -88,7 +88,7 @@ from ard.domain.image_store import (
     select_domain_image,
 )
 from ard.domain.text_anchor import AnchorGenerationStats, generate_text_anchors
-from ard.logging import configure_file_logging
+from ard.logging import configure_file_logging, operator_warning
 
 logger = logging.getLogger(__name__)
 
@@ -1416,6 +1416,55 @@ def _missing_coordinates_warning(missing: list[AnchorSpec]) -> str:
     )
 
 
+def _warn_if_run_is_short(manifest: dict[str, Any], output_dir: Path) -> None:
+    """Announce an incomplete run where the operator is looking, once (§3.2).
+
+    A run can end with fewer anchors on disk than its plan asked for: a
+    generation abandoned mid-run, or a planned coordinate that never reached the
+    bank.  Those events are logged as they happen, but the *result* is a short
+    dataset, and a run that finishes with a calm ``Done!`` reads as complete to
+    anyone who is watching the terminal rather than ``logs/ard.log``.
+
+    The judgement reads the manifest this run just built, so it does **not**
+    depend on the acceptance phase: ``[coverage] enabled = false`` must not
+    silence a warning about the dataset itself.  A complete run says nothing —
+    a warning that also fires on healthy runs stops being read.
+
+    Args:
+        manifest: The manifest of the run that is ending.
+        output_dir: The run directory, used to point at ``results/coverage.json``
+            when the acceptance phase wrote one.
+    """
+    plan = manifest.get("plan") or {}
+    planned = plan.get("planned_anchors")
+    written = plan.get("written_anchors")
+    if not isinstance(planned, int) or not isinstance(written, int):
+        return
+    counters = (manifest.get("generation") or {}).get("counters") or {}
+    abandoned = counters.get("abandoned_total") or 0
+    missing = planned - written
+    if missing <= 0 and not abandoned:
+        return
+
+    message = f"INCOMPLETE RUN: {written}/{planned} planned anchor(s) written"
+    if abandoned:
+        breakdown = ", ".join(
+            f"{reason}={count}"
+            for reason, count in sorted((counters.get("abandoned_by_reason") or {}).items())
+        )
+        message += f"; abandoned {abandoned}"
+        if breakdown:
+            message += f" ({breakdown})"
+    message += f"; {missing} planned coordinate(s) missing."
+    if (output_dir / "results" / "coverage.json").is_file():
+        message += " The full list is in results/coverage.json (warnings)."
+    message += (
+        " Re-run the same command to fill only the missing coordinates — a resume "
+        "asks only for the coordinates the bank lacks."
+    )
+    operator_warning("%s", message)
+
+
 def _run_acceptance(
     config: ARDConfig,
     plan: list[AnchorSpec],
@@ -1914,6 +1963,7 @@ def run(
         _clear_progress_record(output_dir)
         logger.info("Done! Output: %s", output_dir)
         logger.info("  Total anchors: %d", len(all_records))
+        _warn_if_run_is_short(manifest, output_dir)
         return output_dir
 
     logger.info(
@@ -2126,6 +2176,7 @@ def run(
         existing_count,
         total - existing_count,
     )
+    _warn_if_run_is_short(manifest, output_dir)
     return output_dir
 
 

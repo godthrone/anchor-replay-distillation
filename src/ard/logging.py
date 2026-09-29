@@ -31,6 +31,33 @@ def get_logger(name: str) -> logging.Logger:
     return logger
 
 
+#: The channel :func:`operator_warning` logs through.  It owns a console handler
+#: (created by :func:`get_logger`) **and** propagates to the ``ard`` namespace
+#: handlers, so a single record reaches the terminal and the run's log files.
+_OPERATOR_LOGGER_NAME = "ard.operator"
+
+
+def operator_warning(message: str, *args: object) -> None:
+    """Log a WARNING the operator must see on the terminal as well as in the logs.
+
+    The console handler created by :func:`get_logger` belongs to the CLI's own
+    logger and the file handlers belong to the ``ard`` namespace logger, so an
+    ordinary ``logger.warning`` from deep in the pipeline is written to ``logs/``
+    and never reaches the terminal.  That is fine for per-request chatter, but a
+    *degraded result* — a dataset shorter than the plan — has to be announced
+    where the operator is looking (§3.2 透明退路), so the end-of-run accounting
+    goes through this channel instead.
+
+    The terminal keeps its existing ``LEVEL: message`` shape: only this channel's
+    records are added to it, never the ordinary INFO/WARNING chatter.
+
+    Args:
+        message: A ``%``-style format string.
+        *args: Arguments for *message*.
+    """
+    get_logger(_OPERATOR_LOGGER_NAME).warning(message, *args)
+
+
 def configure_file_logging(run_dir: Path) -> None:
     """Add file-based log handlers writing into *run_dir*/logs/.
 
