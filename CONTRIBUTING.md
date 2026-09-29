@@ -84,20 +84,21 @@ their own obligations.
 
 ### Facts that bear on such a judgement
 
-- **A default install contains no `rawpy` and no LibRaw.** A plain `uv sync` installs the
-  project's runtime closure only. Support for RAW camera formats lives in the optional `raw`
-  extra (`uv sync --extra raw`). Only then does `rawpy` enter the environment, and only then
-  does its bundled LibRaw decoder (**LGPL-2.1 / CDDL-1.0**) enter with it.
+- **A default install contains no `rawpy`, no LibRaw and no `numpy`.** A plain `uv sync` installs
+  the project's runtime closure only. Support for RAW camera formats — and the `numpy` array the
+  decoder hands to Pillow — lives in the optional `raw` extra (`uv sync --extra raw`). Only then
+  do `numpy` and `rawpy` enter the environment, and only then does rawpy's bundled LibRaw decoder
+  (**LGPL-2.1 / CDDL-1.0**) enter with it.
 - **The default closure is not uniformly MIT/Apache.** Most of it is permissive
   (MIT, BSD-3-Clause, MIT-CMU, PSF-2.0). The entries that are *not* MIT/Apache are:
   - `certifi` — **MPL-2.0**, pulled in transitively by `httpx` (which depends on it directly, as
     does `httpcore`);
   - `tqdm` — **`MPL-2.0 AND MIT`** (a dual licence: the MIT option is available);
-  - `typing-extensions` — **PSF-2.0**, pulled in transitively through the pydantic stack;
-  - `numpy` — `BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0`.
+  - `typing-extensions` — **PSF-2.0**, pulled in transitively through the pydantic stack.
 - Read from those metadata fields, the default closure contains **no Apache-2.0 package** and
-  **no GPL/AGPL package**. The `raw` extra adds `rawpy` (MIT) and, inside its wheel, LibRaw
-  (LGPL-2.1 / CDDL-1.0) — no further distribution.
+  **no GPL/AGPL package**. The `raw` extra adds `numpy` (`BSD-3-Clause AND 0BSD AND MIT AND Zlib
+  AND CC0-1.0`), `rawpy` (MIT) and, inside the rawpy wheel, LibRaw (LGPL-2.1 / CDDL-1.0) — no
+  further distribution.
 
 ### Reproducing the complete list
 
@@ -130,8 +131,8 @@ PY
 ```
 
 For the environment **with the `raw` extra**, run the same block after `uv sync --extra raw`:
-`rawpy` is the only package it adds, and LibRaw is not a separate distribution — it is declared
-by rawpy's own `METADATA` (`License-File: LICENSE.LibRaw`) and ships as a shared library inside
+it adds `numpy` and `rawpy`, and LibRaw is not a separate distribution — it is declared by
+rawpy's own `METADATA` (`License-File: LICENSE.LibRaw`) and ships as a shared library inside
 rawpy's wheel.
 
 The root package may show up twice in a raw `importlib.metadata` walk (an editable install plus
@@ -161,7 +162,6 @@ version is derived from git tags by `setuptools_scm`.
 | `httpcore` | 1.0.9 | BSD-3-Clause | `License-Expression` |
 | `httpx` | 0.28.1 | BSD-3-Clause | `License` |
 | `idna` | 3.16 | BSD-3-Clause | `License-Expression` |
-| `numpy` | 2.4.6 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 | `License-Expression` |
 | `Pillow` | 12.3.0 | MIT-CMU | `License-Expression` |
 | `pydantic` | 2.13.5 | MIT | `License-Expression` |
 | `pydantic-core` | 2.46.5 | MIT | `License-Expression` |
@@ -170,8 +170,9 @@ version is derived from git tags by `setuptools_scm`.
 | `typing-extensions` | 4.15.0 | **PSF-2.0** | `License-Expression` |
 | `typing-inspection` | 0.4.4 | MIT | `License-Expression` |
 
-The `raw` extra snapshot is not repeated here: it adds `rawpy` (MIT) only, and the LibRaw
-licence text travels inside that wheel as described above.
+The `raw` extra snapshot is not repeated here: it adds `numpy` (`BSD-3-Clause AND 0BSD AND MIT
+AND Zlib AND CC0-1.0`) and `rawpy` (MIT), and the LibRaw licence text travels inside the rawpy
+wheel as described above. The `dev` extra carries `numpy` too, for the test suite.
 
 ## License
 

@@ -12,7 +12,6 @@ license = { text = "MIT" }
 authors = [{ name = "godthrone" }]
 dependencies = [
   "httpx>=0.27",
-  "numpy>=1.26.0",
   "Pillow>=10.0",
   "pydantic>=2.0",
   "tomli-w>=1.2",
@@ -22,11 +21,18 @@ dependencies = [
 [project.optional-dependencies]
 # RAW camera formats (.cr2/.nef/.arw/.dng, ...) only.  The rawpy wheel bundles
 # LibRaw (LGPL-2.1 / CDDL-1.0), so it is opt-in rather than a default dependency.
+# numpy comes with it: the RAW decode path hands a rawpy array to
+# Image.fromarray, so only that path needs it.  `rawpy` already depends on
+# numpy, so listing it here costs nothing extra and documents the requirement.
 raw = [
+  "numpy>=1.26.0",
   "rawpy>=0.24",
 ]
 dev = [
   "mypy>=1.11.0",
+  # numpy is a dev dependency because tests/domain/test_image_store.py imports
+  # it directly to check the RAW decode path.
+  "numpy>=1.26.0",
   "pytest>=8.0.0",
   "ruff>=0.6.0",
 ]
