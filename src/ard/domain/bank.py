@@ -1,4 +1,4 @@
-"""Anchor bank storage — unified format aligned with graspo.
+"""Anchor bank storage — unified format aligned with the downstream training pipeline.
 
 This module owns the *exit boundary* of anchor production.  Everything that
 reaches the anchor bank has passed four gates here:
@@ -10,7 +10,7 @@ reaches the anchor bank has passed four gates here:
    regresses (that is exactly how ``UAUAU``-shaped anchors once reached a
    bank: entry gate without exit gate).
 2. **Data source vocabulary** (:func:`data_source_error`) — ``data_source`` is
-   the OPD routing key, and a value outside
+   the routing key the training side reads, and a value outside
    :class:`~ard.core.types.DataSource` is a record no consumer routes.  It used
    to be an unconstrained string, so a typo was persisted silently.
 3. **Image bookkeeping** (:func:`image_bookkeeping_error`) — ``anchor_meta``
@@ -334,7 +334,7 @@ def _known_ids(path: Path) -> set[str]:
 def data_source_error(anchor: GeneratedAnchor) -> str | None:
     """Validate an anchor's ``data_source`` against the controlled vocabulary.
 
-    ``data_source`` is the OPD routing key: the training side routes records by
+    ``data_source`` is the routing key: the training side routes records by
     it, so a value outside the vocabulary is not "an unusual label", it is a
     record no consumer will ever pick up.  The contract is enforced by the
     :class:`~ard.core.types.DataSource` enum at construction; this gate exists
@@ -504,8 +504,8 @@ def count_unique_anchor_ids(path: Path | str) -> int:
 def anchor_to_dict(anchor: GeneratedAnchor) -> dict[str, Any]:
     """Convert a :class:`GeneratedAnchor` to a dict in the unified JSONL format.
 
-    Output format (graspo-compatible; the extra top-level fields below are the
-    field-level lineage of the OPD v3.0.0 additions):
+    Output format (compatible with the downstream training pipeline; the extra
+    top-level fields below are the field-level lineage of the v3.0.0 additions):
     ```json
     {
       "id": "<run_key>-c<cycle:05d>p<position:05d>",
@@ -531,7 +531,7 @@ def anchor_to_dict(anchor: GeneratedAnchor) -> dict[str, Any]:
     wants the reasoning.  ``reasoning`` is ``null`` when the teacher did not
     think (``enable_thinking = false``) — never ``""``.
 
-    ``data_source`` (per-record OPD routing key, set at anchor construction),
+    ``data_source`` (per-record routing key, set at anchor construction),
     ``schema_version`` (the single format version, §1.4) and
     ``input_generator_model`` are top-level fields so downstream can route and
     version records without re-deriving them.
@@ -667,7 +667,7 @@ def _manifest_breakdown(
 
 
 #: One record's manifest breakdown: domain, language, capability, prompt mode,
-#: and OPD routing key.
+#: and the routing key.
 AnchorBreakdown: TypeAlias = tuple[str, str, str, str, str]
 
 #: The number of records behind one value of a breakdown position.

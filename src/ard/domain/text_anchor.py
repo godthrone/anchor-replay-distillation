@@ -343,7 +343,8 @@ def _convert_images_to_paths(
     """Convert base64 image_url to image type with relative path for output.
 
     API calls need base64-encoded images, but the output JSONL should use
-    ``{"type": "image", "image": "images/xxx.jpg"}`` format (Graspo-compatible).
+    ``{"type": "image", "image": "images/xxx.jpg"}`` format (compatible with the
+    downstream training pipeline).
 
     One *conversation* message per :class:`TurnSpec`, in order, so the
     conversation message at position *n* belongs to ``spec.turns[n]`` — the
@@ -416,7 +417,7 @@ IMAGE_PART_TYPES: frozenset[str] = frozenset({"image", "image_url"})
 
 
 def anchor_data_source(messages: ChatMessageList) -> DataSource:
-    """Derive the OPD routing key from the anchor's own message content.
+    """Derive the record's ``data_source`` routing key from its own message content.
 
     ``data_source`` splits the ARD corpus into the sub-corpora the training side
     routes on, and the split that exists in practice is **text-only** vs

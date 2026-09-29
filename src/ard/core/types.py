@@ -12,7 +12,8 @@ from typing import Any, TypeAlias
 
 
 class DataSource(StrEnum):
-    """Controlled vocabulary for the per-record OPD routing key (§2.1 契约即防呆).
+    """Controlled vocabulary for the per-record routing key the training side reads
+    (§2.1 契约即防呆).
 
     ``data_source`` tells the training side (verl / slime route by this key)
     which ARD sub-corpus a record came from.  It is an enum rather than a free
@@ -112,7 +113,7 @@ class GeneratedAnchor:
     reasoning at all.  Serialized as ``targets[0].output.reasoning``.
     """
     data_source: DataSource = DataSource.ARD_TEXT
-    """OPD multi-teacher routing key for the record (controlled vocabulary).
+    """Multi-teacher routing key the training side reads (controlled vocabulary).
 
     Identifies which ARD source sub-corpus a record belongs to.  The value is
     checked in :meth:`__post_init__` **and** at the write gate

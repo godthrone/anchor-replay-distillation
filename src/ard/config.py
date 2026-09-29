@@ -145,7 +145,7 @@ class TargetModelConfig(_LLMConfig):
     """Configuration for the target answering model (= teacher side) LLM API.
 
     The target model emits the anchor's target answer
-    (``targets[0].output``) — the supervision signal downstream SFT/OPD call
+    (``targets[0].output``) — the supervision signal downstream training calls
     the "teacher".  Temperature defaults to 0.1 (versus 0.0 — deterministic,
     which under-sampled answer diversity; 0.1 keeps answers
     near-greedy while letting the teacher vary phrasing between anchors).
