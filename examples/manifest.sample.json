@@ -79,19 +79,7 @@
       "convert": true
     },
     "coverage": {
-      "enabled": true,
-      "target_set_path": "examples/target_set.sample.jsonl",
-      "embedding": {
-        "api_base": "https://your-endpoint.example/v1",
-        "api_key": "***REDACTED***",
-        "model": "your-embedding-model-name",
-        "dimension": 4096,
-        "batch_size": 32,
-        "connect_timeout": 10.0,
-        "read_timeout": 60.0,
-        "max_retries": 2,
-        "normalize": true
-      }
+      "enabled": true
     }
   },
   "plan_identity": {
@@ -133,9 +121,7 @@
   },
   "acceptance": {
     "coverage_json": "results/coverage.json",
-    "coverage_md": "results/coverage.md",
-    "metric_readout": true,
-    "q95": 0.7794399016216007
+    "coverage_md": "results/coverage.md"
   },
   "smoke": true,
   "smoke_plan": {

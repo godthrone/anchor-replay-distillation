@@ -58,8 +58,8 @@ rewriting the ones already there.
 Both sample files are the artifacts of one `--smoke` run of this repository's v5 working tree
 (cycle-shuffle sampling, position-serial anchor ids, `schema_version 5.0.0`), made on 2026-09-28
 against a real deployment endpoint (credentials taken from the gitignored local override). The
-metric readout was wired to the bundled wiring sample `examples/target_set.sample.jsonl`, so its
-`acceptance.metric_readout` is `true` and `q95` is a real number.
+acceptance phase produced its zero-model **structure readout** only (plan counts vs. the
+construction rule); no embedding endpoint was involved.
 
 The run's manifest records the identity of the plan it drew:
 
@@ -109,8 +109,7 @@ Each line of `anchor_bank.sample.jsonl` is one anchor:
 ```
 
 Both model fields name the **deployed** models in a real run. In this sample they are the
-placeholder `your-model-name` (and `your-embedding-model-name` for the embedder) — see the
-normalised-fields table below.
+placeholder `your-model-name` — see the normalised-fields table below.
 
 ### `id` is a plan position, not a coordinate fingerprint
 
@@ -208,8 +207,8 @@ produce healthy data?":
   `succeeded` / `written`, plus `abandoned_by_reason` when non-zero). It is an invocation-level
   counter, not a bank total: here it reads `requested 2 / written 2` because the finishing
   invocation only had to fill the last gaps, while `total_anchors` is 8;
-- `acceptance` — pointers to `results/coverage.{json,md}` (the acceptance report schema is
-  `ard-acceptance-3`), plus `metric_readout` and `q95`;
+- `acceptance` — pointers to the run's structure readout, `results/coverage.json` and
+  `results/coverage.md` (the acceptance report schema is `ard-acceptance-4`);
 - `config` — the merged configuration the run actually used, with credential fields already
   redacted (`api_key = "***REDACTED***"`); `config.images.convert` is part of it;
 - `images` — the addressing convention, the domains the bank references, and which of them were
@@ -236,15 +235,14 @@ produce healthy data?":
 This mixture is simply what the smoke plan drew; nothing was steered. The language / domain /
 capability mix of a full run is much broader.
 
-**Normalised fields.** Five literal strings that identify the machine, the endpoint, the deployed
+**Normalised fields.** Four literal strings that identify the machine, the endpoint, the deployed
 model or the run location were replaced so the sample carries no deployment details; everything
 else is verbatim. The endpoint, the credentials and the model names are **placeholders**:
 
 | What was replaced | Sample value | Why |
 |-------|--------------|-----|
-| `config.input_generator.api_base`, `config.target_model.api_base`, `config.coverage.embedding.api_base` | `https://your-endpoint.example/v1` | The real endpoint is deployment-specific |
+| `config.input_generator.api_base`, `config.target_model.api_base` | `https://your-endpoint.example/v1` | The real endpoint is deployment-specific |
 | `config.input_generator.model_name`, `config.target_model.model_name`, and the per-record `input_generator_model` / `teacher_id` | `your-model-name` | The served generator/teacher model's name is deployment-specific |
-| `config.coverage.embedding.model` | `your-embedding-model-name` | Same (the embedder that measured `q95`) |
 | `images.image_dir` (an absolute path on the machine that ran it) | `examples/images` | The run location |
 | `output_dir`, `config.output.directory`, `smoke_plan.run_name` (the pinned run directory) | `outputs/ard_dataset_<timestamp>` / `outputs/ard_dataset_<timestamp>_smoke` / `ard_dataset_<timestamp>_smoke` | The real value pinned the run directory on the machine that ran it |
 
@@ -254,11 +252,7 @@ and `manifest.json` exactly. The two model placeholders are distinct on purpose,
 stays unambiguous.
 
 `plan_identity` and `config.generation.seed` are kept verbatim: they identify the plan (and the
-sampling order it was drawn in), not the deployment. `config.coverage.target_set_path` is also
-kept verbatim because the run was pointed at the repository's own wiring sample
-(`examples/target_set.sample.jsonl`), which is portable — hence `metric_readout: true` with a real
-`q95`. A run with no target set configured reports `metric_readout: false` / `q95: null` and says
-so in a WARNING.
+sampling order it was drawn in), not the deployment.
 
 `config.*.api_key` already reads `***REDACTED***`: the pipeline redacts credentials before
 writing any manifest or `config.toml`, so no key has ever been written to an output
