@@ -480,7 +480,7 @@ def _generate_system_message(
     the concrete text is generated here, per anchor, because "generalisation"
     is the point: a fixed sentence reused for every anchor would make the
     dimension no more than a flag.  The prompt asks for text that fits the
-    anchor's own ``knowledge_domain`` / ``capability`` (scheme §5.4).
+    anchor's own ``knowledge_domain`` / ``capability`` (``docs/architecture.md`` §7.1).
 
     The message is returned, not appended: the caller keeps the ordering of
     ``messages`` in one place, so a leaked system message can never end up
@@ -593,9 +593,9 @@ def _generate_one_anchor(
     the ``messages`` array is the single source of truth for the system prompt).
     The input generator's own prompts for user turns do **not** carry it: those
     requests ask the model to impersonate a user, and the system message there
-    is tooling instruction (scheme §3.1 A), not conversation content.  The
-    target model does see it, because the system prompt is part of the prefix a
-    student is later trained on (scheme §3.3 ①).
+    is tooling instruction, not conversation content.  The target model does
+    see it, because the system prompt is part of the prefix a student is later
+    trained on.
 
     Any turn that fails (timeout, empty content, unknown role) abandons the
     whole anchor: the conversation is dropped and logged rather than left in

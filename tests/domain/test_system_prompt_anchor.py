@@ -137,7 +137,7 @@ def test_system_prompt_is_generated_from_the_anchor_metadata() -> None:
 
 
 def test_target_model_sees_the_system_message() -> None:
-    """The teacher answers with the system prompt in its prefix (scheme §3.3)."""
+    """The teacher answers with the system prompt in its prefix."""
     target_client = _target_client()
     _generate(_spec("minimal_persona"), _input_client(), target_client)
 

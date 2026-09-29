@@ -194,9 +194,8 @@ def render_system_prompt_prompt(
 
     The text has to fit the conversation it will be attached to, so the
     template's ``{language}`` / ``{capability}`` / ``{domain}`` placeholders are
-    filled from the anchor's own metadata — a system prompt that contradicts the
-    dialogue it precedes produces a low-quality anchor (the failure mode scheme
-    §5.4 warns about).
+    filled from the anchor's own metadata: a system prompt that contradicts the
+    dialogue it precedes produces a low-quality anchor.
 
     Args:
         anchor_meta: Anchor metadata (``language`` / ``knowledge_domain`` /
